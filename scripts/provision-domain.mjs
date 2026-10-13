@@ -7,22 +7,23 @@
  *
  * 【厳格運用原則】
  * 1. デフォルト Dry Run (--execute 明示時のみ外部書込許可)
- * 2. 実行順序: GitHub Pages 先行 ➔ XServer DNS CNAME 後続 (DNS先行禁止)
- * 3. Dual-Stage 状態遷移機械:
- *    - DNS_PENDING / CERT_PENDING: 正常Pending (Exit 0, downstreamAllowed: false)
- *    - WRONG_TARGET: 異Target検出時 🛑 即時 HARD STOP (Exit 1)
- *    - NETWORK_ERROR: 接続拒否・ネットワーク到達不能の分離
- *    - HTTP_ERROR: HTTP 4xx/5xx エラーの分離
- *    - PASS: DNS正常 + HTTPS 200 OK (downstreamAllowed: true)
+ * 2. 実行順序: CDP/XServer Preflight ➔ GitHub Pages 先行 ➔ XServer DNS CNAME 後続 (DNS先行禁止)
+ * 3. Exact Match Confirmation Gate: 文字列 includes() 禁止、各フィールド・Zone の完全一致判定
+ * 4. Dual-Stage 状態遷移機械 & 終了コード規程:
+ *    - Exit 0: PASS (HTTP 200完全一致), DNS_PENDING, CERT_PENDING のみ
+ *    - Exit 1: WRONG_TARGET, HTTP_ERROR, NETWORK_ERROR, DNS_ERROR, FETCH_ERROR
+ *    - PENDING 状態時は downstreamAllowed: false (後続工程への遷移禁止)
  */
 
 import dns from 'node:dns/promises';
 import { execSync } from 'node:child_process';
+import { chromium } from 'playwright';
 
 export const DEFAULT_CONFIG = {
   domain: 'mie-03.postingmap.jp',
   target: 'k-iwasa-mk.github.io',
   ttl: 3600,
+  zone: 'postingmap.jp',
   timeoutMs: 180000,
   intervalMs: 10000,
   cdpUrl: 'http://[::1]:9222',
@@ -37,6 +38,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
     domain: DEFAULT_CONFIG.domain,
     target: DEFAULT_CONFIG.target,
     ttl: DEFAULT_CONFIG.ttl,
+    zone: DEFAULT_CONFIG.zone,
     timeoutMs: DEFAULT_CONFIG.timeoutMs,
     intervalMs: DEFAULT_CONFIG.intervalMs,
     execute: false,
@@ -70,6 +72,16 @@ export function parseArgs(argv = process.argv.slice(2)) {
   }
 
   return options;
+}
+
+/**
+ * 終了コード解決関数 (MASTER Specification)
+ * Exit 0 を許すのは PASS, DNS_PENDING, CERT_PENDING のみ。
+ * その他 (WRONG_TARGET, HTTP_ERROR, NETWORK_ERROR, DNS_ERROR, FETCH_ERROR 等) は Exit 1。
+ */
+export function resolveExitCode(status) {
+  const ALLOWED_EXIT_ZERO = new Set(['PASS', 'DNS_PENDING', 'CERT_PENDING']);
+  return ALLOWED_EXIT_ZERO.has(status) ? 0 : 1;
 }
 
 /**
@@ -121,13 +133,13 @@ export async function checkDns(domain, expectedTarget, resolver = dns.resolveCna
 }
 
 /**
- * 単一 HTTPS / TLS 判定
+ * 単一 HTTPS / TLS 判定 (HTTP 200 完全一致契約)
  */
 export async function checkHttps(domain, fetcher = fetch) {
   const url = `https://${domain}/`;
   try {
     const res = await fetcher(url, { redirect: 'manual' });
-    if (res.status >= 200 && res.status < 400) {
+    if (res.status === 200) {
       return { status: 'PASS', httpStatus: res.status };
     }
     return { status: 'HTTP_ERROR', httpStatus: res.status, error: `HTTP status ${res.status}` };
@@ -151,6 +163,86 @@ export async function checkHttps(domain, fetcher = fetch) {
 
     return { status: 'FETCH_ERROR', code, error: msg };
   }
+}
+
+/**
+ * XServer ゾーン完全一致検証
+ */
+export async function verifyXserverZone(page, expectedZone = 'postingmap.jp', logger = console.log) {
+  if (!page) {
+    throw new Error('🛑 [verifyXserverZone] Page reference is missing.');
+  }
+
+  const zoneFound = await page.evaluate(() => {
+    // 1. <dl><dt>ドメイン</dt><dd>postingmap.jp</dd></dl>
+    const dls = Array.from(document.querySelectorAll('dl'));
+    for (const dl of dls) {
+      const dtText = dl.querySelector('dt')?.innerText.trim() || '';
+      const ddText = dl.querySelector('dd')?.innerText.trim() || '';
+      if (dtText.includes('ドメイン') || dtText.toLowerCase().includes('domain')) {
+        return ddText.toLowerCase();
+      }
+    }
+
+    // 2. <dd> または .domain-name
+    const dds = Array.from(document.querySelectorAll('dd, .domain-name, [data-domain]'));
+    for (const dd of dds) {
+      const t = dd.innerText.trim().toLowerCase();
+      if (t.includes('.')) return t;
+    }
+
+    return '';
+  });
+
+  const normalizedExpected = expectedZone.toLowerCase();
+  if (zoneFound !== normalizedExpected) {
+    throw new Error(`🛑 [HARD STOP] XServer Zone verification failed! Expected zone [${normalizedExpected}], found [${zoneFound}].`);
+  }
+  return true;
+}
+
+/**
+ * 確認画面各フィールドの Exact Match Gate
+ * 文字列 includes() は完全禁止。
+ */
+export function verifyConfirmationFields(fields, { domain, target, ttl = 3600, zone = 'postingmap.jp' }) {
+  const subdomain = domain.split('.')[0].toLowerCase();
+  const normalizedDomain = domain.toLowerCase();
+  const normalizedTarget = target.replace(/\.$/, '').toLowerCase();
+
+  // Zone exact check
+  const actualZone = (fields.zone || '').trim().toLowerCase();
+  if (!actualZone || actualZone !== zone.toLowerCase()) {
+    throw new Error(`🛑 [HARD STOP] Confirmation Gate FAIL: Zone mismatch! Expected exact [${zone}], Got [${fields.zone}].`);
+  }
+
+  // Host exact check (subdomain または FQDN の完全一致)
+  const actualHost = (fields.host || '').trim().toLowerCase();
+  if (actualHost !== normalizedDomain && actualHost !== subdomain) {
+    throw new Error(`🛑 [HARD STOP] Confirmation Gate FAIL: Host mismatch! Expected exact [${normalizedDomain}] or [${subdomain}], Got [${fields.host}].`);
+  }
+
+  // Type exact check
+  const actualType = (fields.type || '').trim().toUpperCase();
+  if (actualType !== 'CNAME') {
+    throw new Error(`🛑 [HARD STOP] Confirmation Gate FAIL: Type mismatch! Expected exact [CNAME], Got [${fields.type}].`);
+  }
+
+  // Content exact check
+  const actualContent = (fields.content || '').trim().replace(/\.$/, '').toLowerCase();
+  if (actualContent !== normalizedTarget) {
+    throw new Error(`🛑 [HARD STOP] Confirmation Gate FAIL: Content mismatch! Expected exact [${normalizedTarget}], Got [${fields.content}].`);
+  }
+
+  // TTL exact check (設定値が存在する場合)
+  if (fields.ttl !== undefined && fields.ttl !== null && String(fields.ttl).trim() !== '') {
+    const actualTtl = Number(String(fields.ttl).trim());
+    if (actualTtl !== Number(ttl)) {
+      throw new Error(`🛑 [HARD STOP] Confirmation Gate FAIL: TTL mismatch! Expected exact [${ttl}], Got [${fields.ttl}].`);
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -194,6 +286,7 @@ export async function runVerificationStateMachine({
     }
 
     if (dnsResult.status !== 'DNS_OK') {
+      currentState = dnsResult.status;
       logger(`⚠️ [DNS_ERROR] ${dnsResult.error || dnsResult.code}. Retrying...`);
       await new Promise(r => setTimeout(r, intervalMs));
       continue;
@@ -245,7 +338,7 @@ export async function runVerificationStateMachine({
   logger(`\n⏳ [TIMEOUT] State machine reached ${timeoutMs / 1000}s timeout while in state: ${currentState}`);
   return {
     status: currentState === 'START' ? 'DNS_PENDING' : currentState,
-    downstreamAllowed: false, // PENDING時は後続実行禁止
+    downstreamAllowed: false, // PENDING または エラー時は後続実行禁止
     timeout: true,
     detail: lastDetail,
     elapsedMs: Date.now() - startTime
@@ -268,20 +361,21 @@ export async function syncXserverDnsRecord({
 
   logger(`📋 [XServer DNS Check] Inspecting existing records for ${domain}...`);
 
-  // 1. 既存レコード全スキャン
+  // 1. 既存レコード全スキャン (Exact Column Matching)
   const existingRecords = await page.evaluate(() => {
     const rows = Array.from(document.querySelectorAll('table tr'));
     return rows.map(tr => Array.from(tr.querySelectorAll('th, td')).map(td => td.innerText.trim()));
   });
 
   const matchingRecord = existingRecords.find(r => {
-    const host = (r[0] || '').toLowerCase();
-    const type = (r[1] || '').toUpperCase();
-    return (host === domain.toLowerCase() || host === `${subdomain}.postingmap.jp`.toLowerCase()) && type === 'CNAME';
+    const host = (r[0] || '').trim().toLowerCase();
+    const type = (r[1] || '').trim().toUpperCase();
+    const isHostMatch = (host === domain.toLowerCase() || host === `${subdomain}.postingmap.jp`.toLowerCase());
+    return isHostMatch && type === 'CNAME';
   });
 
   if (matchingRecord) {
-    const existingContent = (matchingRecord[2] || '').replace(/\.$/, '').toLowerCase();
+    const existingContent = (matchingRecord[2] || '').trim().replace(/\.$/, '').toLowerCase();
     if (existingContent === normalizedTarget) {
       logger(`✅ [No-op] Identical CNAME record already exists (${domain} -> ${target}). External write = 0.`);
       return { action: 'NO_OP', existing: matchingRecord, writeCount: 0 };
@@ -336,20 +430,56 @@ export async function syncXserverDnsRecord({
   await confirmBtn.click();
   await page.waitForLoadState('networkidle').catch(() => {});
 
-  // 5. 🛑【機械照合ゲート】確認画面での厳格検証
-  const confirmationData = await page.evaluate(() => {
-    const cells = Array.from(document.querySelectorAll('table th, table td')).map(el => el.innerText.trim());
-    return cells.join(' | ');
+  // 5. 🛑【機械照合ゲート】確認画面での厳格検証 (Exact Match Gate)
+  logger('🔍 [Confirmation Gate] Extracting fields for exact verification...');
+  const confirmationFields = await page.evaluate(() => {
+    const fields = { zone: '', host: '', type: '', content: '', ttl: '' };
+
+    // 1. Extract zone from dl
+    const dls = Array.from(document.querySelectorAll('dl'));
+    for (const dl of dls) {
+      const dtText = dl.querySelector('dt')?.innerText.trim() || '';
+      const ddText = dl.querySelector('dd')?.innerText.trim() || '';
+      if (dtText.includes('ドメイン') || dtText.toLowerCase().includes('domain')) {
+        fields.zone = ddText;
+      }
+    }
+
+    // 2. Extract key-value rows from confirmation table
+    const rows = Array.from(document.querySelectorAll('table tr'));
+    for (const tr of rows) {
+      const th = tr.querySelector('th')?.innerText.trim() || '';
+      const td = tr.querySelector('td')?.innerText.trim() || '';
+      if (!th && !td) continue;
+
+      if (th.includes('ドメイン')) fields.zone = td || fields.zone;
+      if (th.includes('ホスト名') || th.toLowerCase().includes('host')) fields.host = td;
+      if (th.includes('種別') || th.toLowerCase().includes('type')) fields.type = td;
+      if (th.includes('内容') || th.toLowerCase().includes('content') || th.includes('値')) fields.content = td;
+      if (th.includes('TTL') || th.toLowerCase().includes('ttl')) fields.ttl = td;
+    }
+
+    // If confirmation is a row in a table (e.g. Host | Type | Content | TTL)
+    if (!fields.host || !fields.type || !fields.content) {
+      for (const tr of rows) {
+        const tds = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim());
+        if (tds.length >= 3) {
+          if (['CNAME', 'A', 'TXT', 'MX', 'NS'].includes(tds[1]?.toUpperCase())) {
+            fields.host = fields.host || tds[0];
+            fields.type = fields.type || tds[1];
+            fields.content = fields.content || tds[2];
+            if (tds[3]) fields.ttl = fields.ttl || tds[3];
+          }
+        }
+      }
+    }
+
+    return fields;
   });
 
-  const hasHost = confirmationData.includes(domain) || confirmationData.includes(subdomain);
-  const hasType = confirmationData.includes('CNAME');
-  const hasValue = confirmationData.includes(target);
-
-  if (!hasHost || !hasType || !hasValue) {
-    throw new Error(`🛑 [HARD STOP] Confirmation check failed! Found: "${confirmationData}". Expected Host:[${domain}], Type:[CNAME], Value:[${target}]`);
-  }
-  logger(`✅ [Confirmation Gate PASS] Verified Host=[${domain}], Type=[CNAME], Value=[${target}].`);
+  // Run exact match gate
+  verifyConfirmationFields(confirmationFields, { domain, target, ttl, zone: 'postingmap.jp' });
+  logger(`✅ [Confirmation Gate PASS] Exact match verified: Zone=[${confirmationFields.zone}], Host=[${confirmationFields.host}], Type=[${confirmationFields.type}], Content=[${confirmationFields.content}], TTL=[${confirmationFields.ttl || ttl}].`);
 
   // 6. 設定を追加する (確定)
   logger('💾 Submitting DNS record addition...');
@@ -376,24 +506,64 @@ export async function executeDomainProvisioning(options = {}, deps = {}) {
   logger('====================================================');
 
   let writeCount = 0;
+  let page = deps.page || null;
+  let browser = null;
+
+  // ── Preflight Gate: CDP & XServer Tab Validation (MUST PASS BEFORE GITHUB PAGES) ──
+  // In execute mode, we MUST acquire and validate the XServer tab BEFORE any mutation to GitHub Pages.
+  if (opts.execute) {
+    logger('\n🛡️ [Preflight Gate] Connecting to Chrome CDP & Validating XServer DNS Context...');
+    if (!page) {
+      const cdpUrl = opts.cdpUrl || DEFAULT_CONFIG.cdpUrl;
+      logger(`   Connecting to CDP endpoint: ${cdpUrl}...`);
+      try {
+        const chromiumModule = deps.chromium || chromium;
+        browser = await chromiumModule.connectOverCDP(cdpUrl);
+      } catch (err) {
+        throw new Error(`🛑 [Preflight FAIL] Cannot connect to Chrome over CDP (${cdpUrl}): ${err.message}. Aborting before GitHub Pages mutation.`);
+      }
+
+      const contexts = browser.contexts ? browser.contexts() : [];
+      if (!contexts || contexts.length === 0) {
+        throw new Error(`🛑 [Preflight FAIL] No browser contexts found in connected Chrome. Aborting before GitHub Pages mutation.`);
+      }
+
+      const allPages = contexts.flatMap(c => c.pages ? c.pages() : []);
+      // Locate XServer tab: secure.xserver.ne.jp with /dns/index
+      page = allPages.find(p => {
+        const u = p.url ? p.url() : '';
+        return u.includes('secure.xserver.ne.jp') && (u.includes('/dns/index') || u.includes('id_domain=22788581'));
+      });
+
+      if (!page) {
+        throw new Error(`🛑 [Preflight FAIL] XServer DNS settings tab not found in Chrome. Expected URL containing secure.xserver.ne.jp/.../dns/index. Aborting before GitHub Pages mutation.`);
+      }
+    }
+
+    // Verify Zone = postingmap.jp on page
+    logger(`   Validating XServer Zone context (expected apex: postingmap.jp)...`);
+    await verifyXserverZone(page, opts.zone || 'postingmap.jp', logger);
+    logger(`   ✅ Preflight Gate PASS: Chrome CDP & XServer postingmap.jp tab verified. GitHub Pages modification permitted.`);
+  }
 
   // ── Phase 1: GitHub Pages Custom Domain (先行・DNS先行禁止) ──
   if (!opts.verifyOnly) {
     logger('\n▶ [Phase 1] GitHub Pages Custom Domain Configuration (Prior to DNS)');
     if (opts.execute) {
+      const ghRunner = deps.execSync || execSync;
       // 1. 更新前 GET
       logger('   Fetching current GitHub Pages configuration...');
-      const beforeJson = execSync(`gh api repos/${opts.repo}/pages`, { encoding: 'utf8' });
+      const beforeJson = ghRunner(`gh api repos/${opts.repo}/pages`, { encoding: 'utf8' });
       const beforeConfig = JSON.parse(beforeJson);
 
       // 2. PUT 更新 (source 保持)
       logger(`   Setting custom domain to ${opts.domain}...`);
-      execSync(`gh api repos/${opts.repo}/pages -X PUT -F cname="${opts.domain}"`, { encoding: 'utf8' });
+      ghRunner(`gh api repos/${opts.repo}/pages -X PUT -F cname="${opts.domain}"`, { encoding: 'utf8' });
       writeCount++;
 
       // 3. 更新後 GET 検証
       logger('   Verifying updated GitHub Pages configuration...');
-      const afterJson = execSync(`gh api repos/${opts.repo}/pages`, { encoding: 'utf8' });
+      const afterJson = ghRunner(`gh api repos/${opts.repo}/pages`, { encoding: 'utf8' });
       const afterConfig = JSON.parse(afterJson);
 
       verifyPagesSourcePreservation(beforeConfig, afterConfig);
@@ -407,17 +577,21 @@ export async function executeDomainProvisioning(options = {}, deps = {}) {
   }
 
   // ── Phase 2: XServer DNS CNAME Addition (後続) ──
-  if (!opts.verifyOnly && deps.page) {
+  if (!opts.verifyOnly) {
     logger('\n▶ [Phase 2] XServer DNS CNAME Record Addition (Secondary to Pages)');
-    const dnsResult = await syncXserverDnsRecord({
-      domain: opts.domain,
-      target: opts.target,
-      ttl: opts.ttl,
-      page: deps.page,
-      execute: opts.execute,
-      logger
-    });
-    writeCount += dnsResult.writeCount;
+    if (opts.execute || page) {
+      const dnsResult = await syncXserverDnsRecord({
+        domain: opts.domain,
+        target: opts.target,
+        ttl: opts.ttl,
+        page,
+        execute: opts.execute,
+        logger
+      });
+      writeCount += dnsResult.writeCount;
+    } else {
+      logger('   ℹ️ [Dry Run] No page attached; XServer DNS CNAME simulated (writeCount = 0).');
+    }
   }
 
   // ── Phase 3: Dual-Stage 状態遷移機械検証 ──
@@ -445,11 +619,8 @@ if (process.argv[1] && process.argv[1].endsWith('provision-domain.mjs')) {
   executeDomainProvisioning(options)
     .then(res => {
       console.log('\n📊 [Execution Summary]:', JSON.stringify(res, null, 2));
-      if (res.status === 'WRONG_TARGET' || res.status === 'HTTP_ERROR') {
-        process.exit(1);
-      }
-      // PENDING または PASS は正常終了
-      process.exit(0);
+      const code = resolveExitCode(res.status);
+      process.exit(code);
     })
     .catch(err => {
       console.error('\n🛑 [Fatal Error]:', err.message);

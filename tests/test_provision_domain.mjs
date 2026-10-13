@@ -3,7 +3,10 @@ import {
   parseArgs,
   checkDns,
   checkHttps,
+  resolveExitCode,
   verifyPagesSourcePreservation,
+  verifyXserverZone,
+  verifyConfirmationFields,
   runVerificationStateMachine,
   syncXserverDnsRecord,
   executeDomainProvisioning
@@ -54,15 +57,32 @@ await test('3. --execute enables execute and disables dryRun', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// 2. GitHub Pages Source 保持検証
+// 2. 終了コード仕様 (resolveExitCode)
 // ─────────────────────────────────────────────────────────────
-await test('4. verifyPagesSourcePreservation passes when branch and path match', () => {
+await test('4. resolveExitCode permits Exit 0 ONLY for PASS, DNS_PENDING, CERT_PENDING', () => {
+  assert.strictEqual(resolveExitCode('PASS'), 0, 'PASS must exit 0');
+  assert.strictEqual(resolveExitCode('DNS_PENDING'), 0, 'DNS_PENDING must exit 0');
+  assert.strictEqual(resolveExitCode('CERT_PENDING'), 0, 'CERT_PENDING must exit 0');
+
+  // Any other status MUST exit 1
+  assert.strictEqual(resolveExitCode('WRONG_TARGET'), 1, 'WRONG_TARGET must exit 1');
+  assert.strictEqual(resolveExitCode('HTTP_ERROR'), 1, 'HTTP_ERROR must exit 1');
+  assert.strictEqual(resolveExitCode('NETWORK_ERROR'), 1, 'NETWORK_ERROR must exit 1');
+  assert.strictEqual(resolveExitCode('DNS_ERROR'), 1, 'DNS_ERROR must exit 1');
+  assert.strictEqual(resolveExitCode('FETCH_ERROR'), 1, 'FETCH_ERROR must exit 1');
+  assert.strictEqual(resolveExitCode('UNKNOWN_STATUS'), 1, 'UNKNOWN must exit 1');
+});
+
+// ─────────────────────────────────────────────────────────────
+// 3. GitHub Pages Source 保持検証
+// ─────────────────────────────────────────────────────────────
+await test('5. verifyPagesSourcePreservation passes when branch and path match', () => {
   const before = { source: { branch: 'main', path: '/' }, cname: 'kuwana.postingmap.jp' };
   const after = { source: { branch: 'main', path: '/' }, cname: 'mie-03.postingmap.jp' };
   assert.strictEqual(verifyPagesSourcePreservation(before, after), true);
 });
 
-await test('5. verifyPagesSourcePreservation throws when source branch/path mutated', () => {
+await test('6. verifyPagesSourcePreservation throws when source branch/path mutated', () => {
   const before = { source: { branch: 'main', path: '/' } };
   const after = { source: { branch: 'gh-pages', path: '/' } };
   assert.throws(
@@ -72,22 +92,22 @@ await test('5. verifyPagesSourcePreservation throws when source branch/path muta
 });
 
 // ─────────────────────────────────────────────────────────────
-// 3. DNS 解決ロジック
+// 4. DNS 解決ロジック
 // ─────────────────────────────────────────────────────────────
-await test('6. checkDns returns DNS_OK when target matches', async () => {
+await test('7. checkDns returns DNS_OK when target matches', async () => {
   const mockResolver = async () => ['k-iwasa-mk.github.io.'];
   const res = await checkDns('mie-03.postingmap.jp', 'k-iwasa-mk.github.io', mockResolver);
   assert.strictEqual(res.status, 'DNS_OK');
 });
 
-await test('7. checkDns returns WRONG_TARGET and HARD STOP when target differs', async () => {
+await test('8. checkDns returns WRONG_TARGET and HARD STOP when target differs', async () => {
   const mockResolver = async () => ['malicious-target.com'];
   const res = await checkDns('mie-03.postingmap.jp', 'k-iwasa-mk.github.io', mockResolver);
   assert.strictEqual(res.status, 'WRONG_TARGET');
   assert.ok(res.error.includes('malicious-target.com'));
 });
 
-await test('8. checkDns returns DNS_PENDING on ENOTFOUND or NODATA', async () => {
+await test('9. checkDns returns DNS_PENDING on ENOTFOUND or NODATA', async () => {
   const mockResolver = async () => {
     const err = new Error('Query ENOTFOUND');
     err.code = 'ENOTFOUND';
@@ -99,16 +119,28 @@ await test('8. checkDns returns DNS_PENDING on ENOTFOUND or NODATA', async () =>
 });
 
 // ─────────────────────────────────────────────────────────────
-// 4. HTTPS & TLS / Network エラー分類
+// 5. HTTPS & TLS / Network エラー分類 (HTTP 200 完全一致契約)
 // ─────────────────────────────────────────────────────────────
-await test('9. checkHttps returns PASS on HTTP 200', async () => {
+await test('10. checkHttps returns PASS strictly on HTTP 200', async () => {
   const mockFetcher = async () => ({ status: 200, ok: true });
   const res = await checkHttps('mie-03.postingmap.jp', mockFetcher);
   assert.strictEqual(res.status, 'PASS');
   assert.strictEqual(res.httpStatus, 200);
 });
 
-await test('10. checkHttps returns CERT_PENDING on TLS/certificate error', async () => {
+await test('11. checkHttps returns HTTP_ERROR on HTTP 301/302 redirects (NOT PASS)', async () => {
+  const mockFetcher301 = async () => ({ status: 301, ok: false });
+  const res301 = await checkHttps('mie-03.postingmap.jp', mockFetcher301);
+  assert.strictEqual(res301.status, 'HTTP_ERROR', '301 must NOT be PASS');
+  assert.strictEqual(res301.httpStatus, 301);
+
+  const mockFetcher302 = async () => ({ status: 302, ok: false });
+  const res302 = await checkHttps('mie-03.postingmap.jp', mockFetcher302);
+  assert.strictEqual(res302.status, 'HTTP_ERROR', '302 must NOT be PASS');
+  assert.strictEqual(res302.httpStatus, 302);
+});
+
+await test('12. checkHttps returns CERT_PENDING on TLS/certificate error', async () => {
   const mockFetcher = async () => {
     const err = new Error('Hostname/IP does not match certificate altnames');
     err.code = 'ERR_TLS_CERT_ALTNAME_INVALID';
@@ -119,7 +151,7 @@ await test('10. checkHttps returns CERT_PENDING on TLS/certificate error', async
   assert.strictEqual(res.code, 'ERR_TLS_CERT_ALTNAME_INVALID');
 });
 
-await test('11. checkHttps returns NETWORK_ERROR on ECONNREFUSED/timeout (separated from CERT)', async () => {
+await test('13. checkHttps returns NETWORK_ERROR on ECONNREFUSED/timeout (separated from CERT)', async () => {
   const mockFetcher = async () => {
     const err = new Error('connect ECONNREFUSED');
     err.cause = { code: 'ECONNREFUSED' };
@@ -130,7 +162,7 @@ await test('11. checkHttps returns NETWORK_ERROR on ECONNREFUSED/timeout (separa
   assert.strictEqual(res.code, 'ECONNREFUSED');
 });
 
-await test('12. checkHttps returns HTTP_ERROR on 404/502 (separated from CERT)', async () => {
+await test('14. checkHttps returns HTTP_ERROR on 404/502 (separated from CERT)', async () => {
   const mockFetcher = async () => ({ status: 404, ok: false });
   const res = await checkHttps('mie-03.postingmap.jp', mockFetcher);
   assert.strictEqual(res.status, 'HTTP_ERROR');
@@ -138,9 +170,114 @@ await test('12. checkHttps returns HTTP_ERROR on 404/502 (separated from CERT)',
 });
 
 // ─────────────────────────────────────────────────────────────
-// 5. Dual-Stage 状態遷移機械 & 下流実行ガード (downstreamAllowed)
+// 6. XServer Zone 検証 & Exact Match Confirmation Gate
 // ─────────────────────────────────────────────────────────────
-await test('13. State machine timeout with DNS_PENDING returns downstreamAllowed=false', async () => {
+await test('15. verifyXserverZone succeeds when dl/dt/dd zone matches postingmap.jp', async () => {
+  const mockPage = {
+    evaluate: async () => 'postingmap.jp'
+  };
+  const ok = await verifyXserverZone(mockPage, 'postingmap.jp');
+  assert.strictEqual(ok, true);
+});
+
+await test('16. verifyXserverZone throws HARD STOP when zone mismatches', async () => {
+  const mockPage = {
+    evaluate: async () => 'wrong-zone.com'
+  };
+  await assert.rejects(
+    async () => verifyXserverZone(mockPage, 'postingmap.jp'),
+    /XServer Zone verification failed/
+  );
+});
+
+await test('17. verifyConfirmationFields passes on exact match of all fields (subdomain host)', () => {
+  const fields = {
+    zone: 'postingmap.jp',
+    host: 'mie-03',
+    type: 'CNAME',
+    content: 'k-iwasa-mk.github.io',
+    ttl: '3600'
+  };
+  const ok = verifyConfirmationFields(fields, {
+    domain: 'mie-03.postingmap.jp',
+    target: 'k-iwasa-mk.github.io',
+    ttl: 3600,
+    zone: 'postingmap.jp'
+  });
+  assert.strictEqual(ok, true);
+});
+
+await test('18. verifyConfirmationFields passes on exact match of all fields (FQDN host)', () => {
+  const fields = {
+    zone: 'postingmap.jp',
+    host: 'mie-03.postingmap.jp',
+    type: 'CNAME',
+    content: 'k-iwasa-mk.github.io',
+    ttl: 3600
+  };
+  const ok = verifyConfirmationFields(fields, {
+    domain: 'mie-03.postingmap.jp',
+    target: 'k-iwasa-mk.github.io',
+    ttl: 3600,
+    zone: 'postingmap.jp'
+  });
+  assert.strictEqual(ok, true);
+});
+
+await test('19. verifyConfirmationFields rejects partial/substring trick in host or content', () => {
+  // Substring trick: mie-03.postingmap.jp.evil.com
+  const evilHost = {
+    zone: 'postingmap.jp',
+    host: 'mie-03.postingmap.jp.evil.com',
+    type: 'CNAME',
+    content: 'k-iwasa-mk.github.io'
+  };
+  assert.throws(
+    () => verifyConfirmationFields(evilHost, { domain: 'mie-03.postingmap.jp', target: 'k-iwasa-mk.github.io' }),
+    /Host mismatch/
+  );
+
+  // Substring trick: k-iwasa-mk.github.io.fake.org
+  const evilContent = {
+    zone: 'postingmap.jp',
+    host: 'mie-03',
+    type: 'CNAME',
+    content: 'k-iwasa-mk.github.io.fake.org'
+  };
+  assert.throws(
+    () => verifyConfirmationFields(evilContent, { domain: 'mie-03.postingmap.jp', target: 'k-iwasa-mk.github.io' }),
+    /Content mismatch/
+  );
+
+  // Wrong type: A instead of CNAME
+  const wrongType = {
+    zone: 'postingmap.jp',
+    host: 'mie-03',
+    type: 'A',
+    content: 'k-iwasa-mk.github.io'
+  };
+  assert.throws(
+    () => verifyConfirmationFields(wrongType, { domain: 'mie-03.postingmap.jp', target: 'k-iwasa-mk.github.io' }),
+    /Type mismatch/
+  );
+
+  // Wrong Zone
+  const wrongZone = {
+    zone: 'otherdomain.com',
+    host: 'mie-03',
+    type: 'CNAME',
+    content: 'k-iwasa-mk.github.io'
+  };
+  assert.throws(
+    () => verifyConfirmationFields(wrongZone, { domain: 'mie-03.postingmap.jp', target: 'k-iwasa-mk.github.io' }),
+    /Zone mismatch/
+  );
+});
+
+// ─────────────────────────────────────────────────────────────
+// 7. Dual-Stage 状態遷移機械 & 下流実行ガード (downstreamAllowed)
+// ─────────────────────────────────────────────────────────────
+await test('20. State machine timeout with DNS_PENDING returns downstreamAllowed=false', async () => {
   const mockResolver = async () => {
     const err = new Error('ENOTFOUND');
     err.code = 'ENOTFOUND';
@@ -161,7 +298,7 @@ await test('13. State machine timeout with DNS_PENDING returns downstreamAllowed
   assert.strictEqual(res.timeout, true);
 });
 
-await test('14. State machine timeout with CERT_PENDING returns downstreamAllowed=false', async () => {
+await test('21. State machine timeout with CERT_PENDING returns downstreamAllowed=false', async () => {
   const mockResolver = async () => ['k-iwasa-mk.github.io'];
   const mockFetcher = async () => {
     const err = new Error('Cert not ready');
@@ -184,7 +321,7 @@ await test('14. State machine timeout with CERT_PENDING returns downstreamAllowe
   assert.strictEqual(res.timeout, true);
 });
 
-await test('15. State machine immediately triggers HARD STOP on WRONG_TARGET', async () => {
+await test('22. State machine immediately triggers HARD STOP on WRONG_TARGET', async () => {
   const mockResolver = async () => ['wrong-server.org'];
   const res = await runVerificationStateMachine({
     domain: 'mie-03.postingmap.jp',
@@ -200,7 +337,7 @@ await test('15. State machine immediately triggers HARD STOP on WRONG_TARGET', a
   assert.strictEqual(res.downstreamAllowed, false);
 });
 
-await test('16. State machine succeeds with PASS and downstreamAllowed=true on valid HTTPS 200', async () => {
+await test('23. State machine succeeds with PASS and downstreamAllowed=true on valid HTTPS 200', async () => {
   const mockResolver = async () => ['k-iwasa-mk.github.io'];
   const mockFetcher = async () => ({ status: 200, ok: true });
 
@@ -219,9 +356,9 @@ await test('16. State machine succeeds with PASS and downstreamAllowed=true on v
 });
 
 // ─────────────────────────────────────────────────────────────
-// 6. XServer DNS テーブル照合 & 冪等性 / KUWANA 保護
+// 8. XServer DNS テーブル照合 & 冪等性 / KUWANA 保護
 // ─────────────────────────────────────────────────────────────
-await test('17. syncXserverDnsRecord detects identical existing CNAME as No-op (writeCount=0)', async () => {
+await test('24. syncXserverDnsRecord detects identical existing CNAME as No-op (writeCount=0)', async () => {
   const mockPage = {
     evaluate: async () => [
       ['postingmap.jp', 'A', '185.199.108.153'],
@@ -242,7 +379,7 @@ await test('17. syncXserverDnsRecord detects identical existing CNAME as No-op (
   assert.strictEqual(res.writeCount, 0);
 });
 
-await test('18. syncXserverDnsRecord throws HARD STOP if existing record points to wrong target', async () => {
+await test('25. syncXserverDnsRecord throws HARD STOP if existing record points to wrong target', async () => {
   const mockPage = {
     evaluate: async () => [
       ['mie-03.postingmap.jp', 'CNAME', 'hijacked-target.com']
@@ -261,7 +398,7 @@ await test('18. syncXserverDnsRecord throws HARD STOP if existing record points 
   );
 });
 
-await test('19. KUWANA existing records are unmutated (read-only verification)', async () => {
+await test('26. KUWANA existing records are unmutated (read-only verification)', async () => {
   const mockPage = {
     evaluate: async () => [
       ['kuwana.postingmap.jp', 'CNAME', 'k-iwasa-mk.github.io']
@@ -281,9 +418,93 @@ await test('19. KUWANA existing records are unmutated (read-only verification)',
 });
 
 // ─────────────────────────────────────────────────────────────
-// 7. executeDomainProvisioning 総合フロー
+// 9. Preflight Gate 執行順序 & GitHub Pages 不可侵検証
 // ─────────────────────────────────────────────────────────────
-await test('20. executeDomainProvisioning in default dry-run executes 0 external writes', async () => {
+await test('27. executeDomainProvisioning aborts on CDP connect failure BEFORE calling GitHub Pages API', async () => {
+  let ghApiCalled = false;
+  const mockGhRunner = (cmd) => {
+    if (cmd.includes('gh api')) {
+      ghApiCalled = true;
+    }
+    return JSON.stringify({});
+  };
+
+  const mockFailingChromium = {
+    connectOverCDP: async () => {
+      throw new Error('ECONNREFUSED: Chrome not running');
+    }
+  };
+
+  await assert.rejects(
+    async () => executeDomainProvisioning({ execute: true }, {
+      chromium: mockFailingChromium,
+      execSync: mockGhRunner,
+      logger: () => {}
+    }),
+    /Cannot connect to Chrome over CDP/
+  );
+
+  assert.strictEqual(ghApiCalled, false, 'GitHub Pages API MUST NOT be invoked when CDP fails!');
+});
+
+await test('28. executeDomainProvisioning aborts on missing XServer tab BEFORE calling GitHub Pages API', async () => {
+  let ghApiCalled = false;
+  const mockGhRunner = () => {
+    ghApiCalled = true;
+    return JSON.stringify({});
+  };
+
+  const mockEmptyBrowser = {
+    connectOverCDP: async () => ({
+      contexts: () => [{
+        pages: () => [{ url: () => 'https://github.com' }] // no xserver tab
+      }]
+    })
+  };
+
+  await assert.rejects(
+    async () => executeDomainProvisioning({ execute: true }, {
+      chromium: mockEmptyBrowser,
+      execSync: mockGhRunner,
+      logger: () => {}
+    }),
+    /XServer DNS settings tab not found in Chrome/
+  );
+
+  assert.strictEqual(ghApiCalled, false, 'GitHub Pages API MUST NOT be invoked when XServer tab missing!');
+});
+
+await test('29. executeDomainProvisioning aborts on XServer Zone mismatch BEFORE calling GitHub Pages API', async () => {
+  let ghApiCalled = false;
+  const mockGhRunner = () => {
+    ghApiCalled = true;
+    return JSON.stringify({});
+  };
+
+  const mockWrongZoneBrowser = {
+    connectOverCDP: async () => ({
+      contexts: () => [{
+        pages: () => [{
+          url: () => 'https://secure.xserver.ne.jp/xapanel/xdomain/domain/dns/index?id_domain=99999',
+          evaluate: async () => 'wrong-other-domain.jp' // zone is wrong
+        }]
+      }]
+    })
+  };
+
+  await assert.rejects(
+    async () => executeDomainProvisioning({ execute: true }, {
+      chromium: mockWrongZoneBrowser,
+      execSync: mockGhRunner,
+      logger: () => {}
+    }),
+    /XServer Zone verification failed/
+  );
+
+  assert.strictEqual(ghApiCalled, false, 'GitHub Pages API MUST NOT be invoked when Zone mismatches!');
+});
+
+await test('30. executeDomainProvisioning in default dry-run executes 0 external writes', async () => {
   const res = await executeDomainProvisioning({ dryRun: true, execute: false }, {
     resolver: async () => ['k-iwasa-mk.github.io'],
     fetcher: async () => ({ status: 200, ok: true }),
