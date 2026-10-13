@@ -1,8 +1,5 @@
 [
   ".agents/current-scope.json",
-  "scripts/provision-domain.mjs",
-  "tests/test_provision_domain.mjs",
-  ".agents/agents/deployer/agent.md",
-  "CNAME",
-  "tests/test_contract_expiry.mjs"
+  "scripts/provision-line-assets.mjs",
+  "tests/test_provision_line_assets.mjs"
 ]
