@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   OA_CATEGORY_CONTRACT,
+  LOGIN_CREATE_CONTRACT,
   DEFAULT_CONFIG,
   parseArgs,
   resolveExitCode,
@@ -30,6 +31,8 @@ import {
   verifyPagesAndCnamePrecondition,
   verifyOfficialAccountManagerLogin,
   verifyOaCreateRouteUrl,
+  verifyLoginCreateRouteUrl,
+  verifyLoginPreSubmitState,
   createLoginChannelViaDom,
   createMessagingChannelViaDom,
   linkMessagingBotViaDom,
@@ -693,32 +696,457 @@ await asyncTest('50. Zero fake/default fallback IDs: uncreated assets result in 
   assert.notEqual(res.messagingChannelId, '2010941440');
 });
 
-// 51. CLI wiring: built-in real adapters selected by default when no deps adapter provided
-await asyncTest('51. CLI wiring: built-in real adapters selected by default when no deps adapter provided', async () => {
-  let devPageCalled = false;
-  const mockDevPage = {
-    evaluate: async () => 'Civic Tech Inc.',
+/**
+ * Current UI Contract A〜K を忠実に再現する LINE Login 新規作成 DOM Mock 生成ヘルパー
+ */
+function createCurrentUiLoginDomMock(overrides = {}) {
+  const state = {
+    visitedUrls: [],
+    queriedSelectors: [],
+    currentUrl: overrides.initialUrl || 'https://developers.line.biz/console/provider/2005181930',
+    postClickFormUrl: overrides.postClickFormUrl || 'https://developers.line.biz/console/channel/new?provider=2005181930&type=line-login',
+    postSubmitUrl: overrides.postSubmitUrl || 'https://developers.line.biz/console/channel/2026101301',
+    providerHeaderName: overrides.providerHeaderName || 'Civic Tech Inc.',
+    createCard: {
+      visible: overrides.createCardVisible ?? true,
+      tagName: overrides.createCardTagName || 'DIV',
+      className: overrides.createCardClassName || 'channel-card-list-create',
+      textContent: overrides.createCardText ?? '新規チャネル作成',
+      clickCount: 0,
+      classList: {
+        contains(cls) {
+          return (overrides.createCardClassName || 'channel-card-list-create').split(/\s+/).includes(cls);
+        }
+      }
+    },
+    modalLoginLink: {
+      visible: overrides.modalLoginLinkVisible ?? true,
+      tagName: overrides.modalLoginLinkTagName || 'A',
+      className: overrides.modalLoginLinkClassName || 'item-link',
+      href: overrides.modalLoginLinkHref ?? '/console/channel/new?provider=2005181930&type=line-login',
+      clickCount: 0,
+      classList: {
+        contains(cls) {
+          return (overrides.modalLoginLinkClassName || 'item-link').split(/\s+/).includes(cls);
+        }
+      },
+      getAttribute(attr) {
+        return attr === 'href' ? this.href : null;
+      }
+    },
+    providerSelect: {
+      value: overrides.providerIdValue ?? '2005181930',
+      get selectedOptions() {
+        return [{ text: overrides.providerOptionText ?? 'Civic Tech Inc.' }];
+      }
+    },
+    serviceRegionRadios: [
+      {
+        checked: overrides.serviceRegionJapanInitialChecked ?? true,
+        clickCount: 0,
+        changeCount: 0,
+        labelText: '日本',
+        click() {
+          this.clickCount++;
+          this.checked = true;
+        },
+        dispatchEvent() {
+          this.changeCount++;
+        },
+        closest() {
+          return { textContent: this.labelText };
+        }
+      },
+      {
+        checked: false,
+        clickCount: 0,
+        changeCount: 0,
+        labelText: 'タイ',
+        click() {
+          this.clickCount++;
+          this.checked = true;
+        },
+        dispatchEvent() {
+          this.changeCount++;
+        },
+        closest() {
+          return { textContent: this.labelText };
+        }
+      }
+    ],
+    companyCountrySelect: {
+      value: overrides.companyCountryInitialValue ?? '-1',
+      changeCount: 0,
+      options: overrides.companyCountryOptions || [
+        { value: '-1', text: '未設定' },
+        { value: '0', text: '日本' },
+        { value: '1', text: '台湾' }
+      ],
+      get selectedOptions() {
+        if (overrides.companyCountrySelectedTextOverride !== undefined) {
+          return [{ text: overrides.companyCountrySelectedTextOverride }];
+        }
+        const found = this.options.find(o => o.value === this.value);
+        return found ? [found] : [];
+      },
+      dispatchEvent() {
+        this.changeCount++;
+      }
+    },
+    channelNameTextarea: {
+      visible: overrides.channelNameVisible ?? true,
+      tagName: overrides.channelNameTagName || 'TEXTAREA',
+      value: overrides.channelNameInitialValue ?? '',
+      fillCount: 0
+    },
+    descriptionTextarea: {
+      visible: overrides.descriptionVisible ?? true,
+      tagName: overrides.descriptionTagName || 'TEXTAREA',
+      value: overrides.descriptionInitialValue ?? '',
+      fillCount: 0
+    },
+    webAppCheckbox: {
+      checked: overrides.webAppInitialChecked ?? false,
+      clickCount: 0,
+      changeCount: 0,
+      click() {
+        this.clickCount++;
+        this.checked = true;
+      },
+      dispatchEvent() {
+        this.changeCount++;
+      }
+    },
+    nativeAppCheckbox: {
+      checked: false,
+      clickCount: 0,
+      changeCount: 0,
+      click() {
+        this.clickCount++;
+        this.checked = true;
+      },
+      dispatchEvent() {
+        this.changeCount++;
+      }
+    },
+    force2faCheckbox: {
+      name: 'force2fa',
+      checked: true,
+      clickCount: 0,
+      changeCount: 0,
+      click() {
+        this.clickCount++;
+        this.checked = !this.checked;
+      },
+      dispatchEvent() {
+        this.changeCount++;
+      }
+    },
+    emailTextarea: {
+      visible: overrides.emailVisible ?? true,
+      tagName: overrides.emailTagName || 'TEXTAREA',
+      value: overrides.emailInitialValue ?? 'postingareamap@gmail.com',
+      fillCount: 0
+    },
+    channelIconInput: {
+      type: 'file',
+      value: '',
+      touched: false
+    },
+    privacyPolicyTextarea: {
+      tagName: 'TEXTAREA',
+      value: '',
+      fillCount: 0,
+      touched: false
+    },
+    termsOfServiceTextarea: {
+      tagName: 'TEXTAREA',
+      value: '',
+      fillCount: 0,
+      touched: false
+    },
+    termsCheckbox: {
+      checked: overrides.termsInitialChecked ?? false,
+      clickCount: 0,
+      changeCount: 0,
+      click() {
+        this.clickCount++;
+        this.checked = true;
+      },
+      dispatchEvent() {
+        this.changeCount++;
+      }
+    },
+    forceLaTimesCount: overrides.forceLaTimesCount ?? null,
+    getLaTimesCount() {
+      if (this.forceLaTimesCount !== null) return this.forceLaTimesCount;
+      let errs = 0;
+      const ccOpt = this.companyCountrySelect.selectedOptions[0];
+      if (!ccOpt || ccOpt.text.trim() !== '日本') errs++;
+      if (!this.channelNameTextarea.value.trim()) errs++;
+      if (!this.descriptionTextarea.value.trim()) errs++;
+      if (!this.webAppCheckbox.checked) errs++;
+      if (!this.emailTextarea.value.trim()) errs++;
+      if (!this.termsCheckbox.checked) errs++;
+      return errs;
+    },
+    submitButton: null,
+    existingChannelDomItems: overrides.existingChannelDomItems || [
+      {
+        tagName: 'A',
+        className: 'channel-item',
+        innerText: 'Admin\nPOSTING MAP KUWANA\nLINEログイン\n公開',
+        textContent: 'Admin\nPOSTING MAP KUWANA\nLINEログイン\n公開',
+        getAttribute(attr) {
+          return attr === 'href' ? '/console/channel/2010941735' : null;
+        }
+      }
+    ],
+    formTagQueriedCount: 0
+  };
+
+  state.submitButton = {
+    visible: overrides.submitVisible ?? true,
+    textContent: overrides.submitText ?? '作成',
+    clickCount: 0,
+    forceDisabled: overrides.forceSubmitDisabled ?? null,
+    get disabled() {
+      if (this.forceDisabled !== null) return this.forceDisabled;
+      return state.getLaTimesCount() > 0;
+    },
+    hasAttribute(attr) {
+      return attr === 'disabled' ? this.disabled : false;
+    }
+  };
+
+  const formItems = [
+    {
+      label: 'プロバイダー',
+      querySelector(sel) {
+        if (sel.includes('h4') || sel.includes('label')) return { textContent: 'プロバイダー' };
+        if (sel === 'select') return state.providerSelect;
+        return null;
+      }
+    },
+    {
+      label: 'サービスを提供する地域',
+      querySelector(sel) {
+        if (sel.includes('h4') || sel.includes('label')) return { textContent: 'サービスを提供する地域' };
+        return null;
+      },
+      querySelectorAll(sel) {
+        if (sel === 'input[type="radio"]') return state.serviceRegionRadios;
+        return [];
+      }
+    },
+    {
+      label: '会社・事業者の所在国・地域',
+      querySelector(sel) {
+        if (sel.includes('h4') || sel.includes('label')) return { textContent: '会社・事業者の所在国・地域' };
+        if (sel === 'select') return overrides.companyCountrySelectMissing ? null : state.companyCountrySelect;
+        return null;
+      }
+    }
+  ];
+
+  const kvChoices = [
+    {
+      label: 'ウェブアプリ',
+      querySelector(sel) {
+        if (sel === 'label') return { textContent: 'ウェブアプリ' };
+        if (sel === 'input[type="checkbox"]') return state.webAppCheckbox;
+        return null;
+      }
+    },
+    {
+      label: 'ネイティブアプリ',
+      querySelector(sel) {
+        if (sel === 'label') return { textContent: 'ネイティブアプリ' };
+        if (sel === 'input[type="checkbox"]') return state.nativeAppCheckbox;
+        return null;
+      }
+    },
+    {
+      label: 'LINE開発者契約に同意します。',
+      querySelector(sel) {
+        if (sel === 'label') return { textContent: 'LINE開発者契約に同意します。' };
+        if (sel === 'input[type="checkbox"]') return state.termsCheckbox;
+        return null;
+      }
+    }
+  ];
+
+  const mockDocument = {
+    querySelector(sel) {
+      if (sel === 'form') {
+        state.formTagQueriedCount++;
+        return null; // Current UI has NO <form> tag on LINE Login creation screen!
+      }
+      if (sel.includes('provider-name')) {
+        return { innerText: state.providerHeaderName };
+      }
+      if (sel === '.new-channel') {
+        return {
+          querySelectorAll(s) {
+            if (s === 'input[type="radio"]') return state.serviceRegionRadios;
+            return [];
+          }
+        };
+      }
+      if (sel === '.new-channel select[readonly]') {
+        return state.providerSelect;
+      }
+      if (sel === LOGIN_CREATE_CONTRACT.channelNameSelector) {
+        return state.channelNameTextarea;
+      }
+      if (sel === LOGIN_CREATE_CONTRACT.descriptionSelector) {
+        return state.descriptionTextarea;
+      }
+      if (sel === LOGIN_CREATE_CONTRACT.emailSelector) {
+        return state.emailTextarea;
+      }
+      if (sel === LOGIN_CREATE_CONTRACT.submitButtonSelector) {
+        return state.submitButton;
+      }
+      return null;
+    },
+    querySelectorAll(sel) {
+      if (sel === '.new-channel .form-item') {
+        return formItems;
+      }
+      if (sel === '.new-channel .kv-choice') {
+        return kvChoices;
+      }
+      if (sel === LOGIN_CREATE_CONTRACT.formErrorTimesSelector) {
+        return Array.from({ length: state.getLaTimesCount() }, () => ({}));
+      }
+      if (sel.includes('a.channel-item')) {
+        return state.existingChannelDomItems;
+      }
+      return [];
+    }
+  };
+
+  class MockEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.bubbles = !!init.bubbles;
+    }
+  }
+
+  const devPage = {
     goto: async (url) => {
-      if (url.includes('provider/') || url.includes('channel/new')) devPageCalled = true;
+      state.visitedUrls.push(url);
+      state.currentUrl = url;
     },
     waitForLoadState: async () => {},
-    locator: () => ({
-      filter: () => ({
-        first: () => ({
-          click: async () => {},
-          isVisible: async () => true
-        })
-      }),
-      first: () => ({
-        fill: async () => {},
-        click: async () => {},
-        isVisible: async () => true,
-        check: async () => {}
-      })
-    }),
     waitForNavigation: async () => {},
-    url: () => 'https://developers.line.biz/console/channel/2026101301'
+    url: () => state.currentUrl,
+    evaluate: async (fn, arg) => {
+      const prevDoc = globalThis.document;
+      const prevWin = globalThis.window;
+      const prevEvent = globalThis.Event;
+      try {
+        globalThis.document = mockDocument;
+        globalThis.window = { location: { href: state.currentUrl } };
+        globalThis.Event = MockEvent;
+        return await fn(arg);
+      } finally {
+        globalThis.document = prevDoc;
+        globalThis.window = prevWin;
+        globalThis.Event = prevEvent;
+      }
+    },
+    locator: (sel) => {
+      state.queriedSelectors.push(sel);
+      if (sel === LOGIN_CREATE_CONTRACT.createCardSelector) {
+        return {
+          first: () => ({
+            isVisible: async () => state.createCard.visible,
+            evaluate: async (fn) => fn(state.createCard),
+            click: async () => {
+              state.createCard.clickCount++;
+            }
+          })
+        };
+      }
+      if (sel === LOGIN_CREATE_CONTRACT.modalLoginLinkSelector) {
+        return {
+          first: () => ({
+            isVisible: async () => state.modalLoginLink.visible,
+            evaluate: async (fn) => fn(state.modalLoginLink),
+            click: async () => {
+              state.modalLoginLink.clickCount++;
+              state.currentUrl = state.postClickFormUrl;
+            }
+          })
+        };
+      }
+      if (sel === LOGIN_CREATE_CONTRACT.channelNameSelector) {
+        return {
+          first: () => ({
+            isVisible: async () => state.channelNameTextarea.visible,
+            fill: async (val) => {
+              state.channelNameTextarea.fillCount++;
+              state.channelNameTextarea.value = overrides.channelNameAfterFill ?? val;
+            },
+            evaluate: async (fn) => fn(state.channelNameTextarea)
+          })
+        };
+      }
+      if (sel === LOGIN_CREATE_CONTRACT.descriptionSelector) {
+        return {
+          first: () => ({
+            isVisible: async () => state.descriptionTextarea.visible,
+            fill: async (val) => {
+              state.descriptionTextarea.fillCount++;
+              state.descriptionTextarea.value = overrides.descriptionAfterFill ?? val;
+            },
+            evaluate: async (fn) => fn(state.descriptionTextarea)
+          })
+        };
+      }
+      if (sel === LOGIN_CREATE_CONTRACT.emailSelector) {
+        return {
+          first: () => ({
+            isVisible: async () => state.emailTextarea.visible,
+            fill: async (val) => {
+              state.emailTextarea.fillCount++;
+              state.emailTextarea.value = overrides.emailAfterFill ?? val;
+            },
+            evaluate: async (fn) => fn(state.emailTextarea)
+          })
+        };
+      }
+      if (sel === LOGIN_CREATE_CONTRACT.submitButtonSelector) {
+        return {
+          first: () => ({
+            isVisible: async () => state.submitButton.visible,
+            evaluate: async (fn) => fn(state.submitButton),
+            click: async () => {
+              state.submitButton.clickCount++;
+              state.currentUrl = state.postSubmitUrl;
+            }
+          })
+        };
+      }
+      return {
+        first: () => ({
+          isVisible: async () => false,
+          click: async () => {},
+          fill: async () => {},
+          evaluate: async () => null
+        })
+      };
+    }
   };
+
+  return { devPage, state };
+}
+
+// 51. CLI wiring: built-in real adapters selected by default when no deps adapter provided
+await asyncTest('51. CLI wiring: built-in real adapters selected by default when no deps adapter provided', async () => {
+  const { devPage: mockDevPage, state } = createCurrentUiLoginDomMock();
   const mockManagerPage = { evaluate: async () => false };
 
   // Call with execute=true and NO custom adapters -> built-in createLoginChannelViaDom will be called
@@ -751,7 +1179,8 @@ await asyncTest('51. CLI wiring: built-in real adapters selected by default when
     }
   );
 
-  assert.equal(devPageCalled, true, 'Built-in createLoginChannelViaDom must be invoked when no deps adapter is provided');
+  assert.equal(state.createCard.clickCount, 1, 'Built-in createLoginChannelViaDom must click div.channel-card-list-create');
+  assert.equal(state.submitButton.clickCount, 1, 'Built-in createLoginChannelViaDom must click submit once');
   assert.equal(res.loginChannelId, '2026101301');
 });
 
@@ -1399,6 +1828,349 @@ await asyncTest('68. Form Validity Gate: form.checkValidity() === false halts wi
   assert.equal(submitCount, 0, 'Submit must NEVER be clicked when form.checkValidity() is false');
 });
 
+// 69. Create Channel DIV exact selector & pre-click tagName/class/text verification
+await asyncTest('69. Create Channel uses exact div.channel-card-list-create and verifies DIV/class/text before click', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock();
+  await createLoginChannelViaDom({ devPage, logger: () => {} });
+  assert.ok(state.queriedSelectors.includes('div.channel-card-list-create'));
+  assert.equal(state.createCard.clickCount, 1);
+
+  // Wrong tagName -> CREATE_CHANNEL_CARD_MISMATCH
+  const { devPage: badTagPage, state: badTagState } = createCurrentUiLoginDomMock({ createCardTagName: 'SPAN' });
+  await assert.rejects(async () => {
+    await createLoginChannelViaDom({ devPage: badTagPage, logger: () => {} });
+  }, /CREATE_CHANNEL_CARD_MISMATCH/);
+  assert.equal(badTagState.createCard.clickCount, 0);
+
+  // Wrong textContent -> CREATE_CHANNEL_CARD_MISMATCH
+  const { devPage: badTextPage, state: badTextState } = createCurrentUiLoginDomMock({ createCardText: '別のカード' });
+  await assert.rejects(async () => {
+    await createLoginChannelViaDom({ devPage: badTextPage, logger: () => {} });
+  }, /CREATE_CHANNEL_CARD_MISMATCH/);
+  assert.equal(badTextState.createCard.clickCount, 0);
+});
+
+// 70. Old a/button selector & legacy input selectors are completely abolished in createLoginChannelViaDom
+await asyncTest('70. Old a/button Create Channel selector and legacy input selectors are abolished', async () => {
+  const fnSource = createLoginChannelViaDom.toString();
+  assert.equal(fnSource.includes("locator('a, button')"), false, 'Old a, button locator must not be used in createLoginChannelViaDom');
+  assert.equal(fnSource.includes('.channel-type-card'), false, 'Old .channel-type-card selector must not be used');
+  assert.equal(fnSource.includes('input#channelName'), false, 'Old input#channelName selector must not be used');
+  assert.equal(fnSource.includes('input#email'), false, 'Old input#email selector must not be used');
+  assert.equal(fnSource.includes('.modal button:has-text("作成")'), false, 'Old confirmation modal assumption must be removed');
+});
+
+// 71. Fallback direct navigation to /console/channel/new is strictly prohibited
+await asyncTest('71. Fallback direct navigation to /console/channel/new is prohibited when card is missing', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock({ createCardVisible: false });
+  await assert.rejects(async () => {
+    await createLoginChannelViaDom({ devPage, logger: () => {} });
+  }, /CREATE_CHANNEL_CARD_MISMATCH/);
+
+  assert.deepEqual(
+    state.visitedUrls,
+    ['https://developers.line.biz/console/provider/2005181930'],
+    'Must NEVER navigate to fallback https://developers.line.biz/console/channel/new'
+  );
+  assert.equal(state.submitButton.clickCount, 0);
+});
+
+// 72. Modal LINE Login href exact gate (pathname, provider=2005181930, type=line-login)
+await asyncTest('72. Modal LINE Login href exact gate verifies pathname, provider=2005181930, and type=line-login', async () => {
+  const validUrl = verifyLoginCreateRouteUrl('/console/channel/new?provider=2005181930&type=line-login', '2005181930');
+  assert.equal(validUrl, 'https://developers.line.biz/console/channel/new?provider=2005181930&type=line-login');
+
+  await assert.rejects(async () => {
+    verifyLoginCreateRouteUrl('/console/channel/new?provider=9999999999&type=line-login', '2005181930');
+  }, /LINE_LOGIN_CREATE_ROUTE_MISMATCH/);
+
+  await assert.rejects(async () => {
+    verifyLoginCreateRouteUrl('/console/channel/new?provider=2005181930&type=messaging-api', '2005181930');
+  }, /LINE_LOGIN_CREATE_ROUTE_MISMATCH/);
+
+  await assert.rejects(async () => {
+    verifyLoginCreateRouteUrl('/console/channel/new', '2005181930');
+  }, /LINE_LOGIN_CREATE_ROUTE_MISMATCH/);
+});
+
+// 73. Existing a.channel-item[href="/console/channel/<numeric-id>"] is never matched and rejected
+await asyncTest('73. Existing channel-item (/console/channel/2010941735) is rejected by route & class gates', async () => {
+  await assert.rejects(async () => {
+    verifyLoginCreateRouteUrl('/console/channel/2010941735', '2005181930');
+  }, /LINE_LOGIN_CREATE_ROUTE_MISMATCH/);
+
+  const { devPage, state } = createCurrentUiLoginDomMock({
+    modalLoginLinkClassName: 'channel-item',
+    modalLoginLinkHref: '/console/channel/2010941735'
+  });
+  await assert.rejects(async () => {
+    await createLoginChannelViaDom({ devPage, logger: () => {} });
+  }, /LINE_LOGIN_CREATE_ROUTE_MISMATCH/);
+  assert.equal(state.modalLoginLink.clickCount, 0, 'Must never click an existing channel-item');
+  assert.equal(state.submitButton.clickCount, 0);
+});
+
+// 74. Post-navigation route gate halts before filling any field if landed URL mismatches
+await asyncTest('74. Post-navigation URL gate halts before filling any field on unexpected landed URL', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock({
+    postClickFormUrl: 'https://developers.line.biz/console/channel/2010941735'
+  });
+  await assert.rejects(async () => {
+    await createLoginChannelViaDom({ devPage, logger: () => {} });
+  }, /LINE_LOGIN_CREATE_ROUTE_MISMATCH/);
+  assert.equal(state.channelNameTextarea.fillCount, 0, 'Must not fill Channel Name when post-navigation URL mismatches');
+  assert.equal(state.descriptionTextarea.fillCount, 0, 'Must not fill Description when post-navigation URL mismatches');
+  assert.equal(state.submitButton.clickCount, 0);
+});
+
+// 75. Channel Name uses TEXTAREA selector and verifies value re-read
+await asyncTest('75. Channel Name uses TEXTAREA selector and verifies exact re-read value', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock();
+  await createLoginChannelViaDom({
+    appName: 'POSTING MAP MIE-03',
+    devPage,
+    logger: () => {}
+  });
+  assert.ok(state.queriedSelectors.includes('.new-channel textarea.user-input[placeholder="チャネル名を入力してください"]'));
+  assert.equal(state.channelNameTextarea.fillCount, 1);
+  assert.equal(state.channelNameTextarea.value, 'POSTING MAP MIE-03');
+
+  // If element is not TEXTAREA or re-read mismatches -> LINE_LOGIN_FIELD_MISMATCH
+  const { devPage: badNamePage, state: badNameState } = createCurrentUiLoginDomMock({
+    channelNameAfterFill: 'WRONG NAME'
+  });
+  await assert.rejects(async () => {
+    await createLoginChannelViaDom({ appName: 'POSTING MAP MIE-03', devPage: badNamePage, logger: () => {} });
+  }, /LINE_LOGIN_FIELD_MISMATCH/);
+  assert.equal(badNameState.submitButton.clickCount, 0);
+});
+
+// 76. Channel Description uses TEXTAREA selector and verifies approved description re-read
+await asyncTest('76. Channel Description uses TEXTAREA selector and verifies exact re-read value', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock();
+  await createLoginChannelViaDom({
+    description: 'POSTING MAP MIE-03 配布員認証アプリ',
+    devPage,
+    logger: () => {}
+  });
+  assert.ok(state.queriedSelectors.includes('.new-channel textarea.user-input[placeholder="チャネル説明を入力してください"]'));
+  assert.equal(state.descriptionTextarea.fillCount, 1);
+  assert.equal(state.descriptionTextarea.value, 'POSTING MAP MIE-03 配布員認証アプリ');
+});
+
+// 77. Company Country ("会社・事業者の所在国・地域") selects option text "日本" and verifies selectedOptions[0].text
+await asyncTest('77. Company Country ("会社・事業者の所在国・地域") selects "日本" by option text and verifies re-read', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock();
+  assert.equal(state.companyCountrySelect.value, '-1'); // Initially 未設定 (-1)
+  await createLoginChannelViaDom({ devPage, logger: () => {} });
+  assert.equal(state.companyCountrySelect.value, '0');
+  assert.equal(state.companyCountrySelect.selectedOptions[0].text.trim(), '日本');
+  assert.ok(state.companyCountrySelect.changeCount >= 1);
+
+  // When option "日本" is missing -> LINE_LOGIN_COMPANY_COUNTRY_MISMATCH before submit
+  const { devPage: noJapanPage, state: noJapanState } = createCurrentUiLoginDomMock({
+    companyCountryOptions: [{ value: '-1', text: '未設定' }, { value: '1', text: '台湾' }]
+  });
+  await assert.rejects(async () => {
+    await createLoginChannelViaDom({ devPage: noJapanPage, logger: () => {} });
+  }, /LINE_LOGIN_COMPANY_COUNTRY_MISMATCH/);
+  assert.equal(noJapanState.submitButton.clickCount, 0);
+});
+
+// 78. Service Region "日本" radio: NO-OP when already checked, selects when unchecked
+await asyncTest('78. Service Region "日本" radio is NO-OP when checked and selects "日本" when unchecked', async () => {
+  // Case A: Already checked (default in Current UI) -> NO-OP (clickCount === 0)
+  const { devPage: checkedPage, state: checkedState } = createCurrentUiLoginDomMock({
+    serviceRegionJapanInitialChecked: true
+  });
+  await createLoginChannelViaDom({ devPage: checkedPage, logger: () => {} });
+  assert.equal(checkedState.serviceRegionRadios[0].checked, true);
+  assert.equal(checkedState.serviceRegionRadios[0].clickCount, 0, 'Must be NO-OP when 日本 radio is already checked');
+  assert.equal(checkedState.serviceRegionRadios[1].checked, false, 'Other region radios must remain unchecked');
+
+  // Case B: Initially unchecked -> clicks only 日本 radio
+  const { devPage: uncheckedPage, state: uncheckedState } = createCurrentUiLoginDomMock({
+    serviceRegionJapanInitialChecked: false
+  });
+  await createLoginChannelViaDom({ devPage: uncheckedPage, logger: () => {} });
+  assert.equal(uncheckedState.serviceRegionRadios[0].checked, true);
+  assert.equal(uncheckedState.serviceRegionRadios[0].clickCount, 1);
+  assert.equal(uncheckedState.serviceRegionRadios[1].clickCount, 0);
+});
+
+// 79. App Type checks "ウェブアプリ" checkbox inside .new-channel .kv-choice
+await asyncTest('79. App Type checks "ウェブアプリ" checkbox inside .new-channel .kv-choice', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock({ webAppInitialChecked: false });
+  await createLoginChannelViaDom({ devPage, logger: () => {} });
+  assert.equal(state.webAppCheckbox.checked, true);
+  assert.equal(state.webAppCheckbox.clickCount, 1);
+
+  // When already checked -> NO-OP
+  const { devPage: preCheckedPage, state: preCheckedState } = createCurrentUiLoginDomMock({ webAppInitialChecked: true });
+  await createLoginChannelViaDom({ devPage: preCheckedPage, logger: () => {} });
+  assert.equal(preCheckedState.webAppCheckbox.checked, true);
+  assert.equal(preCheckedState.webAppCheckbox.clickCount, 0);
+});
+
+// 80. Native App ("ネイティブアプリ") checkbox is completely untouched
+await asyncTest('80. Native App ("ネイティブアプリ") checkbox is never touched', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock();
+  await createLoginChannelViaDom({ devPage, logger: () => {} });
+  assert.equal(state.nativeAppCheckbox.checked, false);
+  assert.equal(state.nativeAppCheckbox.clickCount, 0);
+  assert.equal(state.nativeAppCheckbox.changeCount, 0);
+});
+
+// 81. 2FA (input[name="force2fa"]) is completely untouched
+await asyncTest('81. 2FA (input[name="force2fa"]) is completely untouched and preserves Current UI default', async () => {
+  const fnSource = createLoginChannelViaDom.toString();
+  assert.equal(fnSource.includes('force2fa'), false, 'createLoginChannelViaDom must not query or mutate force2fa');
+
+  const { devPage, state } = createCurrentUiLoginDomMock();
+  await createLoginChannelViaDom({ devPage, logger: () => {} });
+  assert.equal(state.force2faCheckbox.checked, true);
+  assert.equal(state.force2faCheckbox.clickCount, 0);
+  assert.equal(state.force2faCheckbox.changeCount, 0);
+});
+
+// 82. Email TEXTAREA non-empty rule: preserves pre-filled email, fills only when empty
+await asyncTest('82. Email TEXTAREA preserves existing non-empty value and fills only when empty', async () => {
+  // Case A: Pre-filled in Current UI ("postingareamap@gmail.com") -> fillCount === 0
+  const { devPage: prefilledPage, state: prefilledState } = createCurrentUiLoginDomMock({
+    emailInitialValue: 'postingareamap@gmail.com'
+  });
+  await createLoginChannelViaDom({
+    email: 'postingareamap@gmail.com',
+    devPage: prefilledPage,
+    logger: () => {}
+  });
+  assert.equal(prefilledState.emailTextarea.fillCount, 0, 'Must NOT overwrite when email is already non-empty');
+  assert.equal(prefilledState.emailTextarea.value, 'postingareamap@gmail.com');
+
+  // Case B: Empty ("") -> fills approved email
+  const { devPage: emptyEmailPage, state: emptyEmailState } = createCurrentUiLoginDomMock({
+    emailInitialValue: ''
+  });
+  await createLoginChannelViaDom({
+    email: 'postingareamap@gmail.com',
+    devPage: emptyEmailPage,
+    logger: () => {}
+  });
+  assert.equal(emptyEmailState.emailTextarea.fillCount, 1, 'Must fill approved email when initially empty');
+  assert.equal(emptyEmailState.emailTextarea.value, 'postingareamap@gmail.com');
+});
+
+// 83. Terms checkbox exact discovery inside .kv-choice ("LINE開発者契約" & "に同意します。")
+await asyncTest('83. Terms checkbox exact discovery checks agreement checkbox and verifies checked === true', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock({ termsInitialChecked: false });
+  await createLoginChannelViaDom({ devPage, logger: () => {} });
+  assert.equal(state.termsCheckbox.checked, true);
+  assert.equal(state.termsCheckbox.clickCount, 1);
+});
+
+// 84. Optional fields (Channel Icon, Privacy Policy URL, Terms of Service URL) are completely untouched
+await asyncTest('84. Optional fields (Channel Icon, Privacy Policy URL, Terms of Service URL) remain untouched', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock();
+  await createLoginChannelViaDom({ devPage, logger: () => {} });
+  assert.equal(state.channelIconInput.touched, false);
+  assert.equal(state.privacyPolicyTextarea.fillCount, 0);
+  assert.equal(state.privacyPolicyTextarea.value, '');
+  assert.equal(state.termsOfServiceTextarea.fillCount, 0);
+  assert.equal(state.termsOfServiceTextarea.value, '');
+  assert.equal(state.queriedSelectors.some(s => s.includes('プライバシーポリシー') || s.includes('サービス利用規約')), false);
+});
+
+// 85. Pre-submit gate succeeds without <form> tag (form.checkValidity() not used in LINE Login flow)
+await asyncTest('85. Pre-submit gate succeeds without <form> tag on LINE Login creation screen', async () => {
+  const fnSource = createLoginChannelViaDom.toString();
+  assert.equal(fnSource.includes('checkValidity'), false, 'createLoginChannelViaDom must not rely on form.checkValidity()');
+
+  const { devPage, state } = createCurrentUiLoginDomMock();
+  const res = await createLoginChannelViaDom({ devPage, logger: () => {} });
+  assert.equal(state.formTagQueriedCount, 0, 'Must not query <form> tag in LINE Login creation flow');
+  assert.equal(res.channelId, '2026101301');
+});
+
+// 86. .new-channel .form-error i.las.la-times count > 0 halts before submit (submit = 0)
+await asyncTest('86. Pre-submit gate halts with submit = 0 when .form-error i.las.la-times count > 0', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock({
+    forceLaTimesCount: 1,
+    forceSubmitDisabled: false
+  });
+  await assert.rejects(async () => {
+    await createLoginChannelViaDom({ devPage, logger: () => {} });
+  }, /LINE_LOGIN_PRE_SUBMIT_GATE_FAILED.*formErrorTimesCount=\[1\]/);
+  assert.equal(state.submitButton.clickCount, 0, 'Submit button must NEVER be clicked when la-times > 0');
+});
+
+// 87. Submit button disabled === true halts before submit (submit = 0)
+await asyncTest('87. Pre-submit gate halts with submit = 0 when submit button is disabled', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock({
+    forceLaTimesCount: 0,
+    forceSubmitDisabled: true
+  });
+  await assert.rejects(async () => {
+    await createLoginChannelViaDom({ devPage, logger: () => {} });
+  }, /LINE_LOGIN_PRE_SUBMIT_GATE_FAILED.*submitDisabled=\[true\]/);
+  assert.equal(state.submitButton.clickCount, 0, 'Submit button must NEVER be clicked when disabled === true');
+});
+
+// 88. All 11 pre-submit gates + button text "作成" PASS -> submit clicked exactly once (submit = 1, writeCount = 1)
+await asyncTest('88. All gates PASS clicks .new-channel .operations button.kv-button[type="submit"] exactly once', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock();
+  const res = await createLoginChannelViaDom({
+    providerId: '2005181930',
+    providerName: 'Civic Tech Inc.',
+    appName: 'POSTING MAP MIE-03',
+    description: 'POSTING MAP MIE-03 配布員認証アプリ',
+    email: 'postingareamap@gmail.com',
+    devPage,
+    logger: () => {}
+  });
+  assert.ok(state.queriedSelectors.includes('.new-channel .operations button.kv-button[type="submit"]'));
+  assert.equal(state.submitButton.clickCount, 1);
+  assert.equal(res.writeCount, 1);
+  assert.equal(res.channelId, '2026101301');
+});
+
+// 89. Pre-submit stop results in writeCount = 0 (form inputs/checkboxes do not increment writeCount)
+await asyncTest('89. Form filling does not count as writeCount; pre-submit halt keeps writeCount = 0', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock({
+    providerOptionText: 'Wrong Provider Inc.' // Triggers pre-submit gate failure after form fields are filled
+  });
+  await assert.rejects(async () => {
+    await executeLineProvisioning(
+      { execute: true, dryRun: false },
+      {
+        page: devPage,
+        managerPage: { evaluate: async () => false },
+        providerName: 'Civic Tech Inc.',
+        existingChannels: [],
+        logger: () => {}
+      }
+    );
+  }, /LINE_LOGIN_PRE_SUBMIT_GATE_FAILED/);
+
+  // Verify fields were filled in UI, yet submit was NOT clicked (0 external asset writes)
+  assert.equal(state.channelNameTextarea.fillCount, 1);
+  assert.equal(state.submitButton.clickCount, 0);
+});
+
+// 90. Post-submit Channel ID missing -> halts with ID_ACQUISITION_FAILED and performs ZERO retry/re-submit
+await asyncTest('90. Post-submit Channel ID missing halts with ID_ACQUISITION_FAILED and never re-submits', async () => {
+  const { devPage, state } = createCurrentUiLoginDomMock({
+    postSubmitUrl: 'https://developers.line.biz/console/provider/2005181930', // No /channel/<id> in URL
+    existingChannelDomItems: [] // And not found in DOM
+  });
+  await assert.rejects(async () => {
+    await createLoginChannelViaDom({ devPage, logger: () => {} });
+  }, /ID_ACQUISITION_FAILED/);
+
+  assert.equal(state.submitButton.clickCount, 1, 'Submit was clicked once, and must NEVER be retried');
+  assert.equal(state.createCard.clickCount, 1, 'Create Channel card must NEVER be clicked a second time');
+});
+
 console.log('\n====================================================');
-console.log(`📊 TEST SUITE SUMMARY: ${passCount} / 68 PASSED`);
+console.log(`📊 TEST SUITE SUMMARY: ${passCount} / 90 PASSED`);
 console.log('====================================================\n');
+

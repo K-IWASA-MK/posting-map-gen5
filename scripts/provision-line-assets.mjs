@@ -48,6 +48,29 @@ export const OA_CATEGORY_CONTRACT = {
   observedSubValue: '591'
 };
 
+export const LOGIN_CREATE_CONTRACT = {
+  createCardSelector: 'div.channel-card-list-create',
+  createCardText: '新規チャネル作成',
+  modalLoginLinkSelector: 'ul.selector a.item-link[href*="/console/channel/new"][href*="type=line-login"]',
+  expectedHost: 'developers.line.biz',
+  expectedPath: '/console/channel/new',
+  expectedType: 'line-login',
+  channelNameSelector: '.new-channel textarea.user-input[placeholder="チャネル名を入力してください"]',
+  descriptionSelector: '.new-channel textarea.user-input[placeholder="チャネル説明を入力してください"]',
+  emailSelector: '.new-channel textarea.user-input[placeholder="メールアドレスを入力してください"]',
+  companyCountryLabel: '会社・事業者の所在国・地域',
+  companyCountryOptionText: '日本',
+  companyCountryObservedValue: '0',
+  serviceRegionLabel: 'サービスを提供する地域',
+  serviceRegionOptionText: '日本',
+  appTypeWebLabel: 'ウェブアプリ',
+  appTypeNativeLabel: 'ネイティブアプリ',
+  termsTextParts: ['LINE開発者契約', 'に同意します。'],
+  submitButtonSelector: '.new-channel .operations button.kv-button[type="submit"]',
+  submitButtonText: '作成',
+  formErrorTimesSelector: '.new-channel .form-error i.las.la-times'
+};
+
 export const DEFAULT_CONFIG = {
   providerName: 'Civic Tech Inc.',
   providerId: '2005181930',
@@ -545,10 +568,111 @@ export async function verifyOfficialAccountManagerLogin(managerPage) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * LINE Login Channel 実作成 (Playwright DOM 操作)
+ * LINE Login 新規作成導線 URL 検証ゲート (Contract B / C / K)
+ * モーダル内リンク href および遷移後 URL が
+ * host = developers.line.biz, pathname = /console/channel/new,
+ * provider = <expectedProviderId>, type = line-login に完全一致することを検証する。
+ * 既存 Channel URL (/console/channel/<numeric-id>) は即時拒否する。
+ */
+export function verifyLoginCreateRouteUrl(rawHref, expectedProviderId = DEFAULT_CONFIG.providerId) {
+  if (!rawHref || typeof rawHref !== 'string') {
+    throw new Error('🛑 [HARD STOP: LINE_LOGIN_CREATE_ROUTE_MISMATCH] LINE Login creation route href is missing.');
+  }
+  let parsed;
+  try {
+    parsed = new URL(rawHref, 'https://developers.line.biz');
+  } catch (e) {
+    throw new Error(`🛑 [HARD STOP: LINE_LOGIN_CREATE_ROUTE_MISMATCH] Invalid LINE Login creation URL: [${rawHref}].`);
+  }
+  if (/^\/console\/channel\/\d+/.test(parsed.pathname)) {
+    throw new Error(`🛑 [HARD STOP: LINE_LOGIN_CREATE_ROUTE_MISMATCH] Existing channel URL [${parsed.pathname}] matched instead of creation route.`);
+  }
+  const actualProvider = parsed.searchParams.get('provider');
+  const actualType = parsed.searchParams.get('type');
+  const expectedProvider = String(expectedProviderId).trim();
+  if (
+    parsed.host !== LOGIN_CREATE_CONTRACT.expectedHost ||
+    parsed.pathname !== LOGIN_CREATE_CONTRACT.expectedPath ||
+    actualProvider !== expectedProvider ||
+    actualType !== LOGIN_CREATE_CONTRACT.expectedType
+  ) {
+    throw new Error(
+      `🛑 [HARD STOP: LINE_LOGIN_CREATE_ROUTE_MISMATCH] Unexpected LINE Login creation route: ` +
+      `host=[${parsed.host}], pathname=[${parsed.pathname}], provider=[${actualProvider}], type=[${actualType}]. ` +
+      `Expected host=[${LOGIN_CREATE_CONTRACT.expectedHost}], pathname=[${LOGIN_CREATE_CONTRACT.expectedPath}], ` +
+      `provider=[${expectedProvider}], type=[${LOGIN_CREATE_CONTRACT.expectedType}].`
+    );
+  }
+  return parsed.toString();
+}
+
+/**
+ * LINE Login Submit直前 不可逆境界検証ゲート (Contract J / Item 12 & 13)
+ * LINE Login 新規作成画面には <form> が存在しないため form.checkValidity() を使わず、
+ * 全11項目＋Submitボタン表示文言を再読取して1件でも不一致なら Submit 前に HARD STOP する。
+ */
+export function verifyLoginPreSubmitState(state = {}, expected = {}) {
+  const expectedProviderId = String(expected.providerId || DEFAULT_CONFIG.providerId).trim();
+  const expectedProviderName = String(expected.providerName || DEFAULT_CONFIG.providerName).trim();
+  const expectedAppName = String(expected.appName || DEFAULT_CONFIG.loginChannelName);
+  const expectedDescription = String(expected.description || '');
+
+  const failures = [];
+  if (!state || typeof state !== 'object') {
+    failures.push('pre-submit state object is missing');
+  } else {
+    if (String(state.providerId || '').trim() !== expectedProviderId) {
+      failures.push(`providerId=[${state.providerId}] (expected [${expectedProviderId}])`);
+    }
+    if (String(state.providerName || '').trim() !== expectedProviderName) {
+      failures.push(`providerName=[${state.providerName}] (expected [${expectedProviderName}])`);
+    }
+    if (state.serviceRegionJapanChecked !== true) {
+      failures.push(`serviceRegionJapanChecked=[${state.serviceRegionJapanChecked}] (expected true)`);
+    }
+    if (String(state.companyCountryText || '').trim() !== LOGIN_CREATE_CONTRACT.companyCountryOptionText) {
+      failures.push(`companyCountryText=[${state.companyCountryText}] (expected [${LOGIN_CREATE_CONTRACT.companyCountryOptionText}])`);
+    }
+    if (state.channelName !== expectedAppName) {
+      failures.push(`channelName=[${state.channelName}] (expected [${expectedAppName}])`);
+    }
+    if (state.description !== expectedDescription) {
+      failures.push(`description=[${state.description}] (expected [${expectedDescription}])`);
+    }
+    if (state.webAppChecked !== true) {
+      failures.push(`webAppChecked=[${state.webAppChecked}] (expected true)`);
+    }
+    if (typeof state.email !== 'string' || state.email.trim().length === 0) {
+      failures.push('email is empty');
+    }
+    if (state.termsChecked !== true) {
+      failures.push(`termsChecked=[${state.termsChecked}] (expected true)`);
+    }
+    if (state.formErrorTimesCount !== 0) {
+      failures.push(`formErrorTimesCount=[${state.formErrorTimesCount}] (expected 0)`);
+    }
+    if (state.submitDisabled !== false) {
+      failures.push(`submitDisabled=[${state.submitDisabled}] (expected false)`);
+    }
+    if (String(state.submitText || '').trim() !== LOGIN_CREATE_CONTRACT.submitButtonText) {
+      failures.push(`submitText=[${state.submitText}] (expected [${LOGIN_CREATE_CONTRACT.submitButtonText}])`);
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(
+      `🛑 [HARD STOP: LINE_LOGIN_PRE_SUBMIT_GATE_FAILED] Pre-submit verification failed before irreversible submit (submit = 0, writeCount = 0): ${failures.join('; ')}`
+    );
+  }
+  return true;
+}
+
+/**
+ * LINE Login Channel 実作成 (Playwright DOM 操作 — Current UI Contract A〜K 準拠)
  */
 export async function createLoginChannelViaDom({
   providerId = DEFAULT_CONFIG.providerId,
+  providerName = DEFAULT_CONFIG.providerName,
   appName = DEFAULT_CONFIG.loginChannelName,
   description = 'POSTING MAP MIE-03 配布員認証アプリ',
   email = DEFAULT_CONFIG.contactEmail,
@@ -559,71 +683,368 @@ export async function createLoginChannelViaDom({
   await devPage.goto(`https://developers.line.biz/console/provider/${providerId}`);
   await devPage.waitForLoadState('networkidle').catch(() => {});
 
-  // 「新規チャネル作成」をクリック
-  const createChannelBtn = devPage.locator('a, button').filter({ hasText: /新規チャネル|チャネルの作成|Create a new channel/ }).first();
-  if (await createChannelBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await createChannelBtn.click();
-    await devPage.waitForLoadState('networkidle').catch(() => {});
-  } else {
-    await devPage.goto('https://developers.line.biz/console/channel/new');
-    await devPage.waitForLoadState('networkidle').catch(() => {});
+  // ── 1. Create Channel カード検証 & クリック (Contract A: div.channel-card-list-create, fallback URL 禁止) ──
+  const createCard = devPage.locator(LOGIN_CREATE_CONTRACT.createCardSelector).first();
+  const isCardVisible = await createCard.isVisible({ timeout: 5000 }).catch(() => false);
+  if (!isCardVisible) {
+    throw new Error('🛑 [HARD STOP: CREATE_CHANNEL_CARD_MISMATCH] Create Channel card (div.channel-card-list-create) is not visible on provider page.');
   }
 
-  // LINEログイン カード選択
-  const loginCard = devPage.locator('.channel-type-card, a, button').filter({ hasText: 'LINEログイン' }).first();
-  if (!await loginCard.isVisible({ timeout: 5000 }).catch(() => false)) {
-    throw new Error('🛑 [HARD STOP: LOGIN_CARD_NOT_FOUND] Cannot locate "LINEログイン" channel type card.');
+  const cardInfo = await createCard.evaluate(el => {
+    if (!el) return null;
+    const classes = (el.className || '').split(/\s+/).filter(Boolean);
+    return {
+      tagName: el.tagName || '',
+      hasClass: (el.classList && typeof el.classList.contains === 'function')
+        ? el.classList.contains('channel-card-list-create')
+        : classes.includes('channel-card-list-create'),
+      text: (el.textContent || '').trim()
+    };
+  });
+
+  if (
+    !cardInfo ||
+    cardInfo.tagName !== 'DIV' ||
+    cardInfo.hasClass !== true ||
+    cardInfo.text !== LOGIN_CREATE_CONTRACT.createCardText
+  ) {
+    throw new Error(
+      `🛑 [HARD STOP: CREATE_CHANNEL_CARD_MISMATCH] Create Channel card mismatch: ` +
+      `tagName=[${cardInfo ? cardInfo.tagName : ''}], hasClass=[${cardInfo ? cardInfo.hasClass : false}], text=[${cardInfo ? cardInfo.text : ''}].`
+    );
   }
-  await loginCard.click();
+
+  await createCard.click();
   await devPage.waitForLoadState('networkidle').catch(() => {});
 
-  // フォーム入力
-  logger('      Filling channel form fields...');
-  const nameInput = devPage.locator('input[name*="name"], input#channelName').first();
-  await nameInput.fill(appName);
-
-  const descInput = devPage.locator('textarea[name*="desc"], textarea#channelDescription').first();
-  await descInput.fill(description);
-
-  // アプリタイプ: ウェブアプリ
-  const webAppRadio = devPage.locator('input[value*="web"], label:has-text("ウェブアプリ")').first();
-  if (await webAppRadio.isVisible()) {
-    await webAppRadio.click();
+  // ── 2. チャネル種別選択モーダル内 LINEログイン href 契約検証 & クリック (Contract B & K) ──
+  const loginTypeLink = devPage.locator(LOGIN_CREATE_CONTRACT.modalLoginLinkSelector).first();
+  const isLinkVisible = await loginTypeLink.isVisible({ timeout: 5000 }).catch(() => false);
+  if (!isLinkVisible) {
+    throw new Error('🛑 [HARD STOP: LINE_LOGIN_CREATE_ROUTE_MISMATCH] Modal LINE Login link (ul.selector a.item-link) is not visible.');
   }
 
-  // メールアドレス
-  const emailInput = devPage.locator('input[name*="email"], input#email').first();
-  if (await emailInput.isVisible()) {
-    await emailInput.fill(email);
+  const linkInfo = await loginTypeLink.evaluate(el => {
+    if (!el) return null;
+    const classes = (el.className || '').split(/\s+/).filter(Boolean);
+    const isChannelItem = (el.classList && typeof el.classList.contains === 'function')
+      ? el.classList.contains('channel-item')
+      : classes.includes('channel-item');
+    const hasItemLink = (el.classList && typeof el.classList.contains === 'function')
+      ? el.classList.contains('item-link')
+      : classes.includes('item-link');
+    return {
+      tagName: el.tagName || '',
+      href: el.getAttribute ? el.getAttribute('href') : (el.href || ''),
+      isChannelItem,
+      hasItemLink
+    };
+  });
+
+  if (!linkInfo || linkInfo.tagName !== 'A' || linkInfo.isChannelItem || !linkInfo.hasItemLink) {
+    throw new Error('🛑 [HARD STOP: LINE_LOGIN_CREATE_ROUTE_MISMATCH] Selected LINE Login element is not a valid modal a.item-link (or matched existing channel-item).');
   }
 
-  // 規約チェック
-  const termsCheckbox = devPage.locator('input[type="checkbox"]').first();
-  if (await termsCheckbox.isVisible()) {
-    await termsCheckbox.check();
+  verifyLoginCreateRouteUrl(linkInfo.href, providerId);
+  await loginTypeLink.click();
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+
+  // ── 3. 遷移後 URL 再検証 (Contract C: 値入力前に完全一致確認) ──
+  const landedUrl = typeof devPage.url === 'function' ? devPage.url() : '';
+  verifyLoginCreateRouteUrl(landedUrl, providerId);
+
+  logger('      Filling and verifying LINE Login channel creation fields (Contract D〜K)...');
+
+  // ── 4. Channel Name / Description を TEXTAREA で入力・再読取 (Contract D & E) ──
+  const nameTextarea = devPage.locator(LOGIN_CREATE_CONTRACT.channelNameSelector).first();
+  if (!await nameTextarea.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LINE_LOGIN_FIELD_NOT_FOUND] Channel Name textarea not found in .new-channel.');
+  }
+  await nameTextarea.fill(appName);
+  const nameCheck = await nameTextarea.evaluate(el => ({
+    tagName: el ? el.tagName : '',
+    value: el ? el.value : ''
+  }));
+  if (!nameCheck || nameCheck.tagName !== 'TEXTAREA' || nameCheck.value !== appName) {
+    throw new Error(`🛑 [HARD STOP: LINE_LOGIN_FIELD_MISMATCH] Channel Name textarea re-read mismatch: tagName=[${nameCheck ? nameCheck.tagName : ''}], value=[${nameCheck ? nameCheck.value : ''}].`);
   }
 
-  // 作成ボタンクリック
-  logger('      Submitting channel creation form...');
-  const createBtn = devPage.locator('button[type="submit"], button:has-text("作成")').first();
-  await createBtn.click();
-
-  // モーダル確認
-  const confirmBtn = devPage.locator('.modal button:has-text("作成"), .dialog button:has-text("作成")').first();
-  if (await confirmBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await confirmBtn.click();
+  const descTextarea = devPage.locator(LOGIN_CREATE_CONTRACT.descriptionSelector).first();
+  if (!await descTextarea.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LINE_LOGIN_FIELD_NOT_FOUND] Channel Description textarea not found in .new-channel.');
+  }
+  await descTextarea.fill(description);
+  const descCheck = await descTextarea.evaluate(el => ({
+    tagName: el ? el.tagName : '',
+    value: el ? el.value : ''
+  }));
+  if (!descCheck || descCheck.tagName !== 'TEXTAREA' || descCheck.value !== description) {
+    throw new Error(`🛑 [HARD STOP: LINE_LOGIN_FIELD_MISMATCH] Channel Description textarea re-read mismatch: tagName=[${descCheck ? descCheck.tagName : ''}], value=[${descCheck ? descCheck.value : ''}].`);
   }
 
-  await devPage.waitForNavigation({ timeout: 30000 }).catch(() => {});
-  const currentUrl = devPage.url();
-  const match = currentUrl.match(/\/channel\/(\d+)/);
+  // ── 5. 会社・事業者の所在国・地域: 親 .form-item ラベル一致の select で「日本」を Exact 選択 (Item 5) ──
+  const companyCountryResult = await devPage.evaluate((contract) => {
+    const formItems = Array.from(document.querySelectorAll('.new-channel .form-item'));
+    const targetItem = formItems.find(item => {
+      const heading = item.querySelector('h4, label, .form-item-label');
+      return heading && (heading.textContent || '').trim() === contract.companyCountryLabel;
+    });
+    if (!targetItem) return { found: false, reason: 'form-item not found' };
+    const sel = targetItem.querySelector('select');
+    if (!sel) return { found: false, reason: 'select not found' };
+    const opt = Array.from(sel.options || []).find(o => (o.text || '').trim() === contract.companyCountryOptionText);
+    if (!opt) return { found: false, reason: 'option 日本 not found' };
+    sel.value = opt.value;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+    const selectedText = (sel.selectedOptions && sel.selectedOptions[0])
+      ? (sel.selectedOptions[0].text || '').trim()
+      : '';
+    return {
+      found: true,
+      selectedText,
+      selectedValue: sel.value
+    };
+  }, LOGIN_CREATE_CONTRACT);
 
-  if (!match || !match[1]) {
-    throw new Error('🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real Channel ID after creating LINE Login Channel.');
+  if (!companyCountryResult || !companyCountryResult.found || companyCountryResult.selectedText !== LOGIN_CREATE_CONTRACT.companyCountryOptionText) {
+    throw new Error(
+      `🛑 [HARD STOP: LINE_LOGIN_COMPANY_COUNTRY_MISMATCH] Failed to select "${LOGIN_CREATE_CONTRACT.companyCountryOptionText}" for "${LOGIN_CREATE_CONTRACT.companyCountryLabel}": ` +
+      `${JSON.stringify(companyCountryResult)}`
+    );
+  }
+
+  // ── 6. サービスを提供する地域「日本」確認 (既に checked なら NO-OP, 未 checked なら選択) (Item 6) ──
+  const serviceRegionResult = await devPage.evaluate((contract) => {
+    const formItems = Array.from(document.querySelectorAll('.new-channel .form-item'));
+    const regionItem = formItems.find(item => {
+      const heading = item.querySelector('h4, label, .form-item-label');
+      return heading && (heading.textContent || '').trim() === contract.serviceRegionLabel;
+    }) || document.querySelector('.new-channel');
+    if (!regionItem) return { found: false };
+    const radios = Array.from(regionItem.querySelectorAll('input[type="radio"]'));
+    const targetRadio = radios.find(r => {
+      const parentLabel = r.closest('label') || (r.id ? regionItem.querySelector(`label[for="${r.id}"]`) : null) || r.parentElement;
+      return parentLabel && (parentLabel.textContent || '').trim() === contract.serviceRegionOptionText;
+    });
+    if (!targetRadio) return { found: false };
+    if (targetRadio.checked !== true) {
+      if (typeof targetRadio.click === 'function') {
+        targetRadio.click();
+      }
+      targetRadio.checked = true;
+      targetRadio.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return { found: true, checked: targetRadio.checked === true };
+  }, LOGIN_CREATE_CONTRACT);
+
+  if (!serviceRegionResult || !serviceRegionResult.found || serviceRegionResult.checked !== true) {
+    throw new Error(`🛑 [HARD STOP: LINE_LOGIN_SERVICE_REGION_MISMATCH] Service region "${LOGIN_CREATE_CONTRACT.serviceRegionOptionText}" is not checked.`);
+  }
+
+  // ── 7. App Type = ウェブアプリ (.kv-choice 走査、ネイティブアプリは不可侵) (Contract F / Item 7) ──
+  const appTypeResult = await devPage.evaluate((contract) => {
+    const choices = Array.from(document.querySelectorAll('.new-channel .kv-choice'));
+    const webChoice = choices.find(c => {
+      const lbl = c.querySelector('label');
+      return lbl && (lbl.textContent || '').trim() === contract.appTypeWebLabel;
+    });
+    if (!webChoice) return { found: false };
+    const cb = webChoice.querySelector('input[type="checkbox"]');
+    if (!cb) return { found: false };
+    if (cb.checked !== true) {
+      if (typeof cb.click === 'function') {
+        cb.click();
+      }
+      cb.checked = true;
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
+      cb.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    return { found: true, checked: cb.checked === true };
+  }, LOGIN_CREATE_CONTRACT);
+
+  if (!appTypeResult || !appTypeResult.found || appTypeResult.checked !== true) {
+    throw new Error(`🛑 [HARD STOP: LINE_LOGIN_APP_TYPE_MISMATCH] App type "${LOGIN_CREATE_CONTRACT.appTypeWebLabel}" checkbox could not be verified as checked.`);
+  }
+
+  // ── 8. 2要素認証設定は完全不可侵 (Item 8: 変更・操作一切なし) ──
+
+  // ── 9. Email TEXTAREA (既に non-empty なら変更しない、空の場合のみ承認済み email を入力) (Contract G / Item 9) ──
+  const emailTextarea = devPage.locator(LOGIN_CREATE_CONTRACT.emailSelector).first();
+  if (!await emailTextarea.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LINE_LOGIN_FIELD_NOT_FOUND] Email textarea not found in .new-channel.');
+  }
+  const initialEmailCheck = await emailTextarea.evaluate(el => ({
+    tagName: el ? el.tagName : '',
+    value: el ? (el.value || '') : ''
+  }));
+  if (!initialEmailCheck || initialEmailCheck.tagName !== 'TEXTAREA') {
+    throw new Error('🛑 [HARD STOP: LINE_LOGIN_FIELD_MISMATCH] Email field is not a TEXTAREA.');
+  }
+  if (initialEmailCheck.value.trim().length === 0) {
+    await emailTextarea.fill(email);
+  }
+  const finalEmailValue = await emailTextarea.evaluate(el => (el && el.value ? el.value.trim() : ''));
+  if (finalEmailValue.length === 0) {
+    throw new Error('🛑 [HARD STOP: LINE_LOGIN_FIELD_MISMATCH] Email textarea is empty before submit.');
+  }
+
+  // ── 10. Terms Checkbox (.kv-choice 走査: "LINE開発者契約" & "に同意します。" を含む要素のみ) (Contract H / Item 10) ──
+  const termsResult = await devPage.evaluate((contract) => {
+    const choices = Array.from(document.querySelectorAll('.new-channel .kv-choice'));
+    const termsChoice = choices.find(c => {
+      const lbl = c.querySelector('label');
+      const txt = lbl ? (lbl.textContent || '').trim() : '';
+      return contract.termsTextParts.every(part => txt.includes(part));
+    });
+    if (!termsChoice) return { found: false };
+    const cb = termsChoice.querySelector('input[type="checkbox"]');
+    if (!cb) return { found: false };
+    if (cb.checked !== true) {
+      if (typeof cb.click === 'function') {
+        cb.click();
+      }
+      cb.checked = true;
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
+      cb.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    return { found: true, checked: cb.checked === true };
+  }, LOGIN_CREATE_CONTRACT);
+
+  if (!termsResult || !termsResult.found || termsResult.checked !== true) {
+    throw new Error('🛑 [HARD STOP: LINE_LOGIN_TERMS_MISMATCH] LINE Developer Agreement checkbox could not be verified as checked.');
+  }
+
+  // ── 11. 任意項目 (Channel Icon, Privacy Policy URL, Terms of Service URL) は完全不可侵 (Item 11) ──
+
+  // ── 12. Irreversible Submit Gate: Submit直前に全11項目＋ボタン文言をDOMから再読取 (Contract J / Item 12 & 13) ──
+  const preSubmitState = await devPage.evaluate((contract) => {
+    const formItems = Array.from(document.querySelectorAll('.new-channel .form-item'));
+    const findItemByLabel = (labelText) => formItems.find(item => {
+      const h = item.querySelector('h4, label, .form-item-label');
+      return h && (h.textContent || '').trim() === labelText;
+    });
+
+    // 1 & 2: Provider ID & Provider Name
+    const providerItem = findItemByLabel('プロバイダー');
+    const providerSelect = (providerItem && providerItem.querySelector('select')) || document.querySelector('.new-channel select[readonly]');
+    const providerIdVal = providerSelect ? (providerSelect.value || '').trim() : '';
+    const providerNameVal = (providerSelect && providerSelect.selectedOptions && providerSelect.selectedOptions[0])
+      ? (providerSelect.selectedOptions[0].text || '').trim()
+      : '';
+
+    // 3: Service Region 日本 checked
+    const regionItem = findItemByLabel(contract.serviceRegionLabel) || document.querySelector('.new-channel');
+    const radios = regionItem ? Array.from(regionItem.querySelectorAll('input[type="radio"]')) : [];
+    const japanRadio = radios.find(r => {
+      const lbl = r.closest('label') || (r.id && regionItem ? regionItem.querySelector(`label[for="${r.id}"]`) : null) || r.parentElement;
+      return lbl && (lbl.textContent || '').trim() === contract.serviceRegionOptionText;
+    });
+    const serviceRegionJapanChecked = !!(japanRadio && japanRadio.checked === true);
+
+    // 4: Company Country 日本 selected
+    const companyItem = findItemByLabel(contract.companyCountryLabel);
+    const companySelect = companyItem ? companyItem.querySelector('select') : null;
+    const companyCountryText = (companySelect && companySelect.selectedOptions && companySelect.selectedOptions[0])
+      ? (companySelect.selectedOptions[0].text || '').trim()
+      : '';
+
+    // 5 & 6 & 8: Channel Name, Description, Email textareas
+    const nameEl = document.querySelector(contract.channelNameSelector);
+    const descEl = document.querySelector(contract.descriptionSelector);
+    const emailEl = document.querySelector(contract.emailSelector);
+
+    // 7 & 9: Web App & Terms checkboxes
+    const choices = Array.from(document.querySelectorAll('.new-channel .kv-choice'));
+    const webChoice = choices.find(c => {
+      const lbl = c.querySelector('label');
+      return lbl && (lbl.textContent || '').trim() === contract.appTypeWebLabel;
+    });
+    const webCb = webChoice ? webChoice.querySelector('input[type="checkbox"]') : null;
+
+    const termsChoice = choices.find(c => {
+      const lbl = c.querySelector('label');
+      const txt = lbl ? (lbl.textContent || '').trim() : '';
+      return contract.termsTextParts.every(part => txt.includes(part));
+    });
+    const termsCb = termsChoice ? termsChoice.querySelector('input[type="checkbox"]') : null;
+
+    // 10: .new-channel .form-error i.las.la-times count === 0
+    const formErrorTimesCount = document.querySelectorAll(contract.formErrorTimesSelector).length;
+
+    // 11: Submit button disabled === false & textContent === "作成"
+    const submitBtn = document.querySelector(contract.submitButtonSelector);
+    const submitDisabled = submitBtn ? (submitBtn.disabled === true || submitBtn.hasAttribute('disabled')) : true;
+    const submitText = submitBtn ? (submitBtn.textContent || '').trim() : '';
+
+    return {
+      providerId: providerIdVal,
+      providerName: providerNameVal,
+      serviceRegionJapanChecked,
+      companyCountryText,
+      channelName: nameEl ? nameEl.value : '',
+      description: descEl ? descEl.value : '',
+      webAppChecked: !!(webCb && webCb.checked === true),
+      email: emailEl ? emailEl.value : '',
+      termsChecked: !!(termsCb && termsCb.checked === true),
+      formErrorTimesCount,
+      submitDisabled,
+      submitText
+    };
+  }, LOGIN_CREATE_CONTRACT);
+
+  verifyLoginPreSubmitState(preSubmitState, {
+    providerId,
+    providerName,
+    appName,
+    description
+  });
+
+  // ── 13. Submit Button Click (Contract I & J: この click 自体が Irreversible Boundary、確認モーダル前提を置かない) ──
+  logger('      All 11 Pre-Submit Gates PASSED. Clicking irreversible "作成" button...');
+  const submitBtn = devPage.locator(LOGIN_CREATE_CONTRACT.submitButtonSelector).first();
+  if (!await submitBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LINE_LOGIN_PRE_SUBMIT_GATE_FAILED] Submit button (.new-channel .operations button.kv-button[type="submit"]) is not visible.');
+  }
+  await submitBtn.click();
+
+  // ── 14 & 15. 作成後 Channel ID 取得 (自動再Submit・自動削除・自動再作成は絶対禁止) ──
+  if (typeof devPage.waitForNavigation === 'function') {
+    await devPage.waitForNavigation({ timeout: 30000 }).catch(() => {});
+  }
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+
+  const currentUrl = typeof devPage.url === 'function' ? devPage.url() : '';
+  const urlMatch = currentUrl.match(/\/channel\/(\d{8,12})/);
+  let acquiredChannelId = urlMatch && urlMatch[1] ? urlMatch[1] : null;
+
+  if (!acquiredChannelId && typeof devPage.evaluate === 'function') {
+    acquiredChannelId = await devPage.evaluate((expectedName) => {
+      const u = window.location ? window.location.href : '';
+      const m = u.match(/\/channel\/(\d{8,12})/);
+      if (m && m[1]) return m[1];
+      const items = Array.from(document.querySelectorAll('a.channel-item[href*="/console/channel/"]'));
+      for (const el of items) {
+        const text = el.innerText || el.textContent || '';
+        if (text.includes(expectedName) && (text.includes('LINEログイン') || text.toLowerCase().includes('login'))) {
+          const href = el.getAttribute('href') || '';
+          const hm = href.match(/\/channel\/(\d{8,12})/);
+          if (hm && hm[1]) return hm[1];
+        }
+      }
+      return null;
+    }, appName).catch(() => null);
+  }
+
+  if (!acquiredChannelId || !/^\d{8,12}$/.test(acquiredChannelId)) {
+    throw new Error(
+      `🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real Channel ID after submitting LINE Login Channel creation (currentUrl=[${currentUrl}]). ` +
+      'Channel may already exist in live console; automatic re-submit, deletion, and re-creation are strictly prohibited.'
+    );
   }
 
   return {
-    channelId: match[1],
+    channelId: acquiredChannelId,
     name: appName,
     type: 'LINE_LOGIN',
     writeCount: 1
@@ -1270,6 +1691,8 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
   if (loginResolution.action === 'CREATE') {
     if (opts.execute) {
       const created = await createLoginAdapter({
+        providerId: opts.providerId,
+        providerName: actualProvider,
         appName: opts.loginChannelName,
         description: `POSTING MAP ${opts.districtId} 配布員認証アプリ`,
         email: opts.contactEmail,
@@ -1277,10 +1700,10 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
         logger
       });
       loginChannelId = created.channelId;
-      writeCount += (created.writeCount || 1);
       if (!loginChannelId || !/^\d{8,12}$/.test(loginChannelId)) {
         throw new Error('🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real Channel ID after creating LINE Login Channel.');
       }
+      writeCount += (created.writeCount ?? 1);
       logger(`   ➕ [Live] LINE Login Channel Created with Real Channel ID: [${loginChannelId}]`);
     } else {
       logger('   ℹ️ [Dry Run / Verify] LINE Login Channel creation needed (writeCount = 0).');
