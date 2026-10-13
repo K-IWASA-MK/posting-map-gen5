@@ -278,18 +278,39 @@ assert.strictEqual(contextHit.systemInfoData, undefined, 'Cache hit: context.sys
 // SystemSummaryService での同一結果検証
 const summaryService = SystemSummaryService.getInstance();
 
-// Resolverキャッシュクリアして 1回目 (FromData 経路)
-resolver.clearCache();
-const summaryMiss = summaryService.getSystemSummary('TEST-DISTRICT');
-assert.strictEqual(summaryMiss.contractStatus, 'ACTIVE');
-assert.strictEqual(summaryMiss.isExpired, false);
-assert.strictEqual(summaryMiss.contractEndDate, '2026-10-12');
+// 決定論的モック環境 (実日時 new Date() に依存しない fixture)
+const RealDate = global.Date;
+class DeterministicDate extends RealDate {
+  constructor(...args) {
+    if (args.length === 0) {
+      super(nowBefore.getTime());
+    } else {
+      super(...args);
+    }
+  }
+  static now() {
+    return nowBefore.getTime();
+  }
+}
+global.Date = DeterministicDate;
 
-// Resolverキャッシュ有効のまま 2回目 (Fallback 経路)
-const summaryHit = summaryService.getSystemSummary('TEST-DISTRICT');
-assert.strictEqual(summaryHit.contractStatus, 'ACTIVE');
-assert.strictEqual(summaryHit.isExpired, false);
-assert.strictEqual(summaryHit.contractEndDate, '2026-10-12');
+let summaryMiss, summaryHit;
+try {
+  // Resolverキャッシュクリアして 1回目 (FromData 経路)
+  resolver.clearCache();
+  summaryMiss = summaryService.getSystemSummary('TEST-DISTRICT');
+  assert.strictEqual(summaryMiss.contractStatus, 'ACTIVE');
+  assert.strictEqual(summaryMiss.isExpired, false);
+  assert.strictEqual(summaryMiss.contractEndDate, '2026-10-12');
+
+  // Resolverキャッシュ有効のまま 2回目 (Fallback 経路)
+  summaryHit = summaryService.getSystemSummary('TEST-DISTRICT');
+  assert.strictEqual(summaryHit.contractStatus, 'ACTIVE');
+  assert.strictEqual(summaryHit.isExpired, false);
+  assert.strictEqual(summaryHit.contractEndDate, '2026-10-12');
+} finally {
+  global.Date = RealDate;
+}
 
 // 両者の結果が完全一致することを確認
 assert.strictEqual(summaryMiss.success, summaryHit.success);
