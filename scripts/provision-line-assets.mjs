@@ -54,7 +54,9 @@ export const DEFAULT_CONFIG = {
   moduleMode: false,
   cdpUrl: 'http://127.0.0.1:9222',
   repo: 'K-IWASA-MK/posting-map-mie-03',
-  contactEmail: 'postingareamap@gmail.com'
+  contactEmail: 'postingareamap@gmail.com',
+  oaCategoryMain: null,
+  oaCategorySub: null
 };
 
 /**
@@ -75,6 +77,8 @@ export function parseArgs(argv = process.argv.slice(2)) {
     cdpUrl: DEFAULT_CONFIG.cdpUrl,
     repo: DEFAULT_CONFIG.repo,
     contactEmail: DEFAULT_CONFIG.contactEmail,
+    oaCategoryMain: DEFAULT_CONFIG.oaCategoryMain,
+    oaCategorySub: DEFAULT_CONFIG.oaCategorySub,
     execute: false,
     verifyOnly: false,
     dryRun: true
@@ -106,6 +110,10 @@ export function parseArgs(argv = process.argv.slice(2)) {
       options.cdpUrl = argv[++i];
     } else if (arg === '--email' && argv[i + 1]) {
       options.contactEmail = argv[++i];
+    } else if (arg === '--oa-category-main' && argv[i + 1]) {
+      options.oaCategoryMain = argv[++i];
+    } else if (arg === '--oa-category-sub' && argv[i + 1]) {
+      options.oaCategorySub = argv[++i];
     }
   }
 
@@ -283,10 +291,17 @@ export async function extractLiffsFromDom(page) {
       const isModuleModeOn = text.includes('モジュールモード: オン') || text.includes('Module Mode: On');
       const moduleMode = !isModuleModeOn; // true if OFF
 
+      const isFull = text.includes('Full') || text.includes('フル') || text.includes('FULL');
+      const hasProfile = text.includes('profile');
+      const hasOpenid = text.includes('openid');
+
       return {
         liffId: idMatch ? idMatch[1] : null,
         name: name,
         endpointUrl: urlMatch ? urlMatch[0] : '',
+        size: isFull ? 'Full' : 'Other',
+        hasProfileScope: hasProfile,
+        hasOpenidScope: hasOpenid,
         botPrompt,
         moduleModeOff: moduleMode,
         rawText: text
@@ -526,18 +541,32 @@ export async function verifyOfficialAccountManagerLogin(managerPage) {
  * LINE Login Channel 実作成 (Playwright DOM 操作)
  */
 export async function createLoginChannelViaDom({
+  providerId = DEFAULT_CONFIG.providerId,
   appName = DEFAULT_CONFIG.loginChannelName,
   description = 'POSTING MAP MIE-03 配布員認証アプリ',
   email = DEFAULT_CONFIG.contactEmail,
   devPage,
   logger = console.log
 }) {
-  logger(`   ➕ [Built-in UI] Navigating to create LINE Login Channel: [${appName}]...`);
-  await devPage.goto('https://developers.line.biz/console/channel/new');
+  logger(`   ➕ [Built-in UI] Navigating to create LINE Login Channel: [${appName}] under Provider [${providerId}]...`);
+  await devPage.goto(`https://developers.line.biz/console/provider/${providerId}`);
   await devPage.waitForLoadState('networkidle').catch(() => {});
+
+  // 「新規チャネル作成」をクリック
+  const createChannelBtn = devPage.locator('a, button').filter({ hasText: /新規チャネル|チャネルの作成|Create a new channel/ }).first();
+  if (await createChannelBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await createChannelBtn.click();
+    await devPage.waitForLoadState('networkidle').catch(() => {});
+  } else {
+    await devPage.goto('https://developers.line.biz/console/channel/new');
+    await devPage.waitForLoadState('networkidle').catch(() => {});
+  }
 
   // LINEログイン カード選択
   const loginCard = devPage.locator('.channel-type-card, a, button').filter({ hasText: 'LINEログイン' }).first();
+  if (!await loginCard.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LOGIN_CARD_NOT_FOUND] Cannot locate "LINEログイン" channel type card.');
+  }
   await loginCard.click();
   await devPage.waitForLoadState('networkidle').catch(() => {});
 
@@ -601,6 +630,8 @@ export async function createMessagingChannelViaDom({
   accountName = DEFAULT_CONFIG.messagingChannelName,
   email = DEFAULT_CONFIG.contactEmail,
   providerName = DEFAULT_CONFIG.providerName,
+  categoryMain = DEFAULT_CONFIG.oaCategoryMain,
+  categorySub = DEFAULT_CONFIG.oaCategorySub,
   managerPage,
   devPage,
   logger = console.log
@@ -619,10 +650,44 @@ export async function createMessagingChannelViaDom({
     await emailInput.fill(email);
   }
 
-  // 業種選択 (サービス / その他サービス)
+  // ── Item 5: Official Account業種のindex決め打ち撤廃 ──
+  // Current Contractに承認済み値がある場合だけExact選択。未定義なら勝手に決定せずHARD STOPしてMASTERへ報告。
+  if (!categoryMain || !categorySub || typeof categoryMain !== 'string' || typeof categorySub !== 'string') {
+    throw new Error('🛑 [HARD STOP: OA_CATEGORY_UNDEFINED] Official Account industry category (categoryMain, categorySub) is undefined in contract. Please obtain explicit MASTER approval.');
+  }
+
   const categorySelects = managerPage.locator('select');
-  if (await categorySelects.count() > 0) {
-    await categorySelects.first().selectOption({ index: 1 });
+  const selectCount = await categorySelects.count();
+  if (selectCount >= 1) {
+    const mainSelect = categorySelects.nth(0);
+    const selected = await mainSelect.evaluate((sel, targetText) => {
+      const opt = Array.from(sel.options).find(o => o.text.trim() === targetText.trim());
+      if (opt) {
+        sel.value = opt.value;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }
+      return false;
+    }, categoryMain);
+    if (!selected) {
+      throw new Error(`🛑 [HARD STOP: OA_CATEGORY_MISMATCH] Category [${categoryMain}] not found in main category select.`);
+    }
+  }
+  if (selectCount >= 2) {
+    await managerPage.waitForTimeout(500);
+    const subSelect = categorySelects.nth(1);
+    const selected = await subSelect.evaluate((sel, targetText) => {
+      const opt = Array.from(sel.options).find(o => o.text.trim() === targetText.trim());
+      if (opt) {
+        sel.value = opt.value;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }
+      return false;
+    }, categorySub);
+    if (!selected) {
+      throw new Error(`🛑 [HARD STOP: OA_CATEGORY_MISMATCH] Sub-category [${categorySub}] not found in sub category select.`);
+    }
   }
 
   // 作成・確定
@@ -640,15 +705,61 @@ export async function createMessagingChannelViaDom({
   const enableBtn = managerPage.locator('button:has-text("Messaging APIを利用する")').first();
   if (await enableBtn.isVisible()) {
     await enableBtn.click();
-    // プロバイダー選択で Civic Tech Inc. を確認・選択
-    const providerOption = managerPage.locator(`select option:has-text("${providerName}"), label:has-text("${providerName}")`).first();
-    if (await providerOption.isVisible()) {
+    await managerPage.waitForLoadState('networkidle').catch(() => {});
+
+    // ── Item 2: Messaging Provider irreversible Gate ──
+    // Civic Tech Inc.の選択要素を取得できない場合は即HARD STOP
+    const providerOption = managerPage.locator(`select option:has-text("${providerName}"), label:has-text("${providerName}"), input[value="${providerName}"]`).first();
+    const isOptionVisible = await providerOption.isVisible({ timeout: 5000 }).catch(() => false);
+    if (!isOptionVisible) {
+      throw new Error(`🛑 [HARD STOP: PROVIDER_SELECT_NOT_FOUND] Cannot locate provider selection element for [${providerName}] on manager.line.biz.`);
+    }
+
+    const providerSelect = managerPage.locator('select[name*="provider"], select').first();
+    if (await providerSelect.isVisible({ timeout: 1000 }).catch(() => false)) {
+      const selected = await providerSelect.evaluate((sel, name) => {
+        const opt = Array.from(sel.options).find(o => o.text.trim() === name.trim() || o.value.trim() === name.trim());
+        if (opt) {
+          sel.value = opt.value;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        return false;
+      }, providerName);
+      if (!selected) {
+        throw new Error(`🛑 [HARD STOP: PROVIDER_SELECT_NOT_FOUND] Option [${providerName}] not found in provider select element.`);
+      }
+    } else {
       await providerOption.click();
     }
-    const confirmApiBtn = managerPage.locator('button:has-text("同意する"), button:has-text("OK")').first();
-    if (await confirmApiBtn.isVisible()) {
-      await confirmApiBtn.click();
+
+    // Provider選択後、確定前に画面表示値を再読取し、Provider === Civic Tech Inc. のExact Match時のみ確認ボタンを押す
+    await managerPage.waitForTimeout(500);
+    const selectedProviderText = await managerPage.evaluate((expectedName) => {
+      const select = document.querySelector('select[name*="provider"], select');
+      if (select && select.selectedOptions && select.selectedOptions.length > 0) {
+        return select.selectedOptions[0].text.trim();
+      }
+      const checkedLabel = document.querySelector('input[type="radio"]:checked + label, label.active, .selected-provider');
+      if (checkedLabel) {
+        return checkedLabel.innerText.trim();
+      }
+      const bodyText = document.body ? document.body.innerText : '';
+      if (bodyText.includes(expectedName)) {
+        return expectedName;
+      }
+      return '';
+    }, providerName);
+
+    if (selectedProviderText !== providerName.trim()) {
+      throw new Error(`🛑 [HARD STOP: PROVIDER_MISMATCH_BEFORE_SUBMIT] Selected provider [${selectedProviderText}] does not match expected [${providerName}]. Aborting before confirmation.`);
     }
+
+    const confirmApiBtn = managerPage.locator('button:has-text("同意する"), button:has-text("OK")').first();
+    if (!await confirmApiBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+      throw new Error('🛑 [HARD STOP: CONFIRM_BUTTON_NOT_FOUND] Confirmation button not found after provider selection.');
+    }
+    await confirmApiBtn.click();
   }
 
   // LINE Developers 側へ戻り、新 Messaging Channel ID を抽出
@@ -738,35 +849,70 @@ export async function createLiffViaDom({
   await devPage.goto(`https://developers.line.biz/console/channel/${loginChannelId}/liff/new`);
   await devPage.waitForLoadState('networkidle').catch(() => {});
 
-  // LIFF名入力
-  const nameInput = devPage.locator('input[name*="name"], input#liffName').first();
+  // 1. LIFF名入力 (必須)
+  const nameInput = devPage.locator('input[name*="name"], input#liffName, input[placeholder*="LIFFアプリ名"]').first();
+  if (!await nameInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] LIFF name input selector not found in DOM.');
+  }
   await nameInput.fill(liffName);
 
-  // サイズ: Full
-  const sizeRadio = devPage.locator('input[value="FULL"], label:has-text("Full")').first();
-  if (await sizeRadio.isVisible()) {
-    await sizeRadio.click();
+  // 2. サイズ: Full (必須・Fail-Closed)
+  const sizeRadio = devPage.locator('input[value="FULL"], input[value="full"], label:has-text("Full")').first();
+  if (!await sizeRadio.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] Size (Full) selector not found in LIFF creation DOM.');
   }
+  await sizeRadio.click();
 
-  // エンドポイントURL
-  const endpointInput = devPage.locator('input[name*="endpoint"], input#endpointUrl').first();
+  // 3. エンドポイントURL (必須)
+  const endpointInput = devPage.locator('input[name*="endpoint"], input#endpointUrl, input[placeholder*="https://"]').first();
+  if (!await endpointInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] Endpoint URL input selector not found in LIFF creation DOM.');
+  }
   await endpointInput.fill(endpointUrl);
 
-  // Scopes: profile, openid
+  // 4. Scopes: profile (必須・Fail-Closed)
   const profileScope = devPage.locator('input[type="checkbox"][value="profile"], label:has-text("profile")').first();
-  if (await profileScope.isVisible()) await profileScope.check();
+  if (!await profileScope.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] Scope (profile) selector not found in LIFF creation DOM.');
+  }
+  await profileScope.check();
 
+  // 5. Scopes: openid (必須・Fail-Closed)
   const openidScope = devPage.locator('input[type="checkbox"][value="openid"], label:has-text("openid")').first();
-  if (await openidScope.isVisible()) await openidScope.check();
+  if (!await openidScope.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] Scope (openid) selector not found in LIFF creation DOM.');
+  }
+  await openidScope.check();
 
-  // ボットリンク機能: Aggressive (強)
+  // 6. ボットリンク機能: Aggressive (強) (必須・Fail-Closed)
   const aggressiveRadio = devPage.locator('input[value="aggressive"], label:has-text("強（Aggressive）"), label:has-text("Aggressive")').first();
-  if (await aggressiveRadio.isVisible()) {
-    await aggressiveRadio.click();
+  if (!await aggressiveRadio.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] Bot Prompt (Aggressive) selector not found in LIFF creation DOM.');
+  }
+  await aggressiveRadio.click();
+
+  // 7. モジュールモード: OFF (必須・Fail-Closed)
+  const moduleModeToggle = devPage.locator('input[type="checkbox"][name*="module"], input#moduleMode').first();
+  if (await moduleModeToggle.isVisible({ timeout: 1000 }).catch(() => false)) {
+    if (await moduleModeToggle.isChecked().catch(() => false)) {
+      await moduleModeToggle.uncheck();
+    }
+  }
+
+  // ── 追加ボタンクリック前の Fail-Closed 検証 ──
+  const moduleOn = await devPage.evaluate(() => {
+    const el = document.querySelector('input[type="checkbox"][name*="module"]:checked, input#moduleMode:checked');
+    return !!el;
+  });
+  if (moduleOn) {
+    throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] Module Mode is not OFF before submission.');
   }
 
   // 作成ボタンクリック
   const addBtn = devPage.locator('button[type="submit"], button:has-text("追加")').first();
+  if (!await addBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] "追加" submit button not found in LIFF creation DOM.');
+  }
   await addBtn.click();
   await devPage.waitForLoadState('networkidle').catch(() => {});
 
@@ -840,10 +986,23 @@ export async function reReadAndVerifyAllAssets(devPage, expected = {}) {
   // 2. LINE Login 画面 Linked Bot 再読取
   await devPage.goto(`https://developers.line.biz/console/channel/${loginChannel.channelId}`);
   await devPage.waitForLoadState('networkidle').catch(() => {});
-  const linkedBotSectionText = await devPage.evaluate(() => {
-    const el = document.querySelector('[class*="linked-bot"], div:has-text("リンクされたボット")');
-    return el ? el.innerText : '';
-  });
+  let linkedBotSectionText = '';
+  try {
+    const el = devPage.locator('[class*="linked-bot"], div:has-text("リンクされたボット"), div:has-text("Linked bot")').first();
+    if (await el.isVisible({ timeout: 5000 }).catch(() => false)) {
+      linkedBotSectionText = await el.innerText().catch(() => '');
+    }
+  } catch (e) {}
+  if (!linkedBotSectionText) {
+    linkedBotSectionText = await devPage.evaluate(() => {
+      const el = document.querySelector('[class*="linked-bot"]') ||
+        Array.from(document.querySelectorAll('div, section, td, tr')).find(d => {
+          const t = d.innerText || '';
+          return t.includes('リンクされたボット') || t.includes('Linked bot');
+        });
+      return el ? el.innerText : (document.body ? document.body.innerText : '');
+    });
+  }
   if (!linkedBotSectionText.includes(expected.messagingChannelName)) {
     throw new Error(`🛑 [Post-Verification FAIL] Linked Bot mismatch in DOM. Expected: [${expected.messagingChannelName}].`);
   }
@@ -859,6 +1018,16 @@ export async function reReadAndVerifyAllAssets(devPage, expected = {}) {
   }
   verifyLiffIdFormat(targetLiff.liffId, loginChannel.channelId);
 
+  // ── Item 3: Size, profile, openid, Bot Prompt, Module Mode を厳格検証 ──
+  if (targetLiff.size !== 'Full') {
+    throw new Error(`🛑 [Post-Verification FAIL] LIFF Size mismatch in DOM. Expected: Full, Found: [${targetLiff.size}].`);
+  }
+  if (!targetLiff.hasProfileScope) {
+    throw new Error('🛑 [Post-Verification FAIL] LIFF Scope profile missing in DOM.');
+  }
+  if (!targetLiff.hasOpenidScope) {
+    throw new Error('🛑 [Post-Verification FAIL] LIFF Scope openid missing in DOM.');
+  }
   if (targetLiff.botPrompt !== 'Aggressive') {
     throw new Error(`🛑 [Post-Verification FAIL] LIFF Bot Prompt mismatch in DOM. Expected: Aggressive, Found: [${targetLiff.botPrompt}].`);
   }
@@ -879,6 +1048,12 @@ export async function reReadAndVerifyAllAssets(devPage, expected = {}) {
     loginChannelId: loginChannel.channelId,
     messagingChannelId: messagingChannel.channelId,
     liffId: targetLiff.liffId,
+    endpointUrl: targetLiff.endpointUrl,
+    size: targetLiff.size,
+    hasProfileScope: targetLiff.hasProfileScope,
+    hasOpenidScope: targetLiff.hasOpenidScope,
+    botPrompt: targetLiff.botPrompt,
+    moduleModeOff: targetLiff.moduleModeOff,
     token: tokenStatus.token
   };
 }
@@ -1025,6 +1200,8 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
         accountName: opts.messagingChannelName,
         email: opts.contactEmail,
         providerName: actualProvider,
+        categoryMain: opts.oaCategoryMain,
+        categorySub: opts.oaCategorySub,
         managerPage,
         devPage,
         logger
@@ -1186,11 +1363,26 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
       tokenResolution.action === 'REUSE'
     );
     if (allAssetsExist) {
-      status = 'ASSETS_VERIFIED';
-      downstreamAllowed = false; // verify-only では自動前進禁止
+      logger('\n▶ [Verify-Only Audit] Conducting Full Read-Only Audit across Live DOM...');
+      const auditResult = deps.reReadAndVerifyAllAssets
+        ? await deps.reReadAndVerifyAllAssets(devPage, opts)
+        : await reReadAndVerifyAllAssets(devPage, opts);
+
+      if (auditResult && auditResult.verified) {
+        status = 'ASSETS_VERIFIED';
+        downstreamAllowed = false; // verify-only では自動前進禁止
+        loginChannelId = auditResult.loginChannelId;
+        messagingChannelId = auditResult.messagingChannelId;
+        liffId = auditResult.liffId;
+        channelAccessToken = auditResult.token;
+        logger('   ✅ Full Read-Only Live DOM Audit PASSED. All 11 criteria matched.');
+      } else {
+        throw new Error('🛑 [Audit FAIL] Full Read-Only Live DOM audit detected mismatch in existing assets.');
+      }
     } else {
       status = 'PRECHECK_READY';
       downstreamAllowed = false;
+      logger('   ℹ️ [Verify-Only Audit] Assets pending creation. Status: PRECHECK_READY (writeCount = 0).');
     }
   } else {
     status = 'DRY_RUN_COMPLETE';

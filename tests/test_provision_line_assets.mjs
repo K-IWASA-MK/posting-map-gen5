@@ -6,6 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
   DEFAULT_CONFIG,
   parseArgs,
@@ -483,7 +484,7 @@ await asyncTest('43. executeLineProvisioning in --verify-only returns PRECHECK_R
 });
 
 // 44. executeLineProvisioning --verify-only returns ASSETS_VERIFIED when all assets exist
-await asyncTest('44. executeLineProvisioning in --verify-only returns ASSETS_VERIFIED when all assets exist', async () => {
+await asyncTest('44. executeLineProvisioning in --verify-only returns ASSETS_VERIFIED when all assets exist and audit passes', async () => {
   const existingChannels = [
     { channelId: '2010941735', name: 'POSTING MAP MIE-03', type: 'LINE_LOGIN' },
     { channelId: '2010941440', name: 'POSTING MAP MIE-03', type: 'MESSAGING_API' }
@@ -498,6 +499,17 @@ await asyncTest('44. executeLineProvisioning in --verify-only returns ASSETS_VER
   };
   const mockDevPage = { evaluate: async () => 'Civic Tech Inc.' };
   const mockManagerPage = { evaluate: async () => false };
+  let auditCalled = false;
+  const mockReReadAdapter = async () => {
+    auditCalled = true;
+    return {
+      verified: true,
+      loginChannelId: '2010941735',
+      messagingChannelId: '2010941440',
+      liffId: '2010941735-mie03liff',
+      token: 'existing_token_abcdef1234567890'
+    };
+  };
 
   const res = await executeLineProvisioning(
     { verifyOnly: true, execute: false, dryRun: false },
@@ -508,9 +520,11 @@ await asyncTest('44. executeLineProvisioning in --verify-only returns ASSETS_VER
       existingChannels,
       existingLiffs,
       tokenStatus,
+      reReadAndVerifyAllAssets: mockReReadAdapter,
       logger: () => {}
     }
   );
+  assert.equal(auditCalled, true, 'reReadAndVerifyAllAssets audit must be executed in verify-only mode');
   assert.equal(res.writeCount, 0);
   assert.equal(res.mode, 'VERIFY_ONLY');
   assert.equal(res.status, 'ASSETS_VERIFIED');
@@ -683,15 +697,20 @@ await asyncTest('51. CLI wiring: built-in real adapters selected by default when
   const mockDevPage = {
     evaluate: async () => 'Civic Tech Inc.',
     goto: async (url) => {
-      if (url.includes('channel/new')) devPageCalled = true;
+      if (url.includes('provider/') || url.includes('channel/new')) devPageCalled = true;
     },
     waitForLoadState: async () => {},
     locator: () => ({
-      filter: () => ({ first: () => ({ click: async () => {} }) }),
+      filter: () => ({
+        first: () => ({
+          click: async () => {},
+          isVisible: async () => true
+        })
+      }),
       first: () => ({
         fill: async () => {},
         click: async () => {},
-        isVisible: async () => false,
+        isVisible: async () => true,
         check: async () => {}
       })
     }),
@@ -775,6 +794,244 @@ await asyncTest('52. Live DOM post-verification throws on asset mismatch', async
   }, /Post-Verification FAIL/);
 });
 
+// 53. extractLiffsFromDom extracts Full size, profile, and openid scopes
+await asyncTest('53. extractLiffsFromDom extracts Full size, profile, and openid scopes', async () => {
+  const fakeDomPage = {
+    evaluate: async () => [
+      {
+        liffId: '2010941735-mie03liff',
+        name: 'POSTING MAP MIE-03',
+        endpointUrl: 'https://mie-03.postingmap.jp/',
+        size: 'Full',
+        hasProfileScope: true,
+        hasOpenidScope: true,
+        botPrompt: 'Aggressive',
+        moduleModeOff: true,
+        rawText: 'Full profile openid 強'
+      }
+    ]
+  };
+  const extracted = await extractLiffsFromDom(fakeDomPage);
+  assert.equal(extracted[0].size, 'Full');
+  assert.equal(extracted[0].hasProfileScope, true);
+  assert.equal(extracted[0].hasOpenidScope, true);
+});
+
+// 54. reReadAndVerifyAllAssets rejects when LIFF size is not Full
+await asyncTest('54. reReadAndVerifyAllAssets rejects when LIFF size is not Full', async () => {
+  const mockPageWithBadLiff = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    evaluate: async (fn) => {
+      const src = fn.toString();
+      if (src.includes('provider-name')) return 'Civic Tech Inc.';
+      if (src.includes('channel-item')) return [
+        { name: 'POSTING MAP MIE-03', type: 'LINE_LOGIN', channelId: '2010941735' },
+        { name: 'POSTING MAP MIE-03', type: 'MESSAGING_API', channelId: '2010941440' }
+      ];
+      if (src.includes('liff-item')) return [
+        {
+          liffId: '2010941735-mie03liff',
+          name: 'POSTING MAP MIE-03',
+          endpointUrl: 'https://mie-03.postingmap.jp/',
+          size: 'Compact', // NOT Full!
+          hasProfileScope: true,
+          hasOpenidScope: true,
+          botPrompt: 'Aggressive',
+          moduleModeOff: true
+        }
+      ];
+      if (src.includes('textarea[readonly]')) return 'existing_token_abcdef1234567890';
+      return '';
+    },
+    locator: () => ({
+      first: () => ({
+        isVisible: async () => true,
+        innerText: async () => 'POSTING MAP MIE-03'
+      })
+    })
+  };
+
+  await assert.rejects(async () => {
+    await reReadAndVerifyAllAssets(mockPageWithBadLiff, {
+      providerName: 'Civic Tech Inc.',
+      loginChannelName: 'POSTING MAP MIE-03',
+      messagingChannelName: 'POSTING MAP MIE-03',
+      liffName: 'POSTING MAP MIE-03',
+      endpointUrl: 'https://mie-03.postingmap.jp/'
+    });
+  }, /LIFF Size mismatch/);
+});
+
+// 55. createMessagingChannelViaDom throws OA_CATEGORY_UNDEFINED when categories missing
+await asyncTest('55. createMessagingChannelViaDom throws OA_CATEGORY_UNDEFINED when categories missing', async () => {
+  await assert.rejects(async () => {
+    await createMessagingChannelViaDom({
+      accountName: 'POSTING MAP MIE-03',
+      categoryMain: null,
+      categorySub: null,
+      managerPage: {
+        goto: async () => {},
+        waitForLoadState: async () => {},
+        locator: () => ({ first: () => ({ fill: async () => {}, isVisible: async () => false }) })
+      },
+      devPage: {},
+      logger: () => {}
+    });
+  }, /OA_CATEGORY_UNDEFINED/);
+});
+
+// 56. createMessagingChannelViaDom throws PROVIDER_SELECT_NOT_FOUND when provider option missing
+await asyncTest('56. createMessagingChannelViaDom throws PROVIDER_SELECT_NOT_FOUND when provider option missing', async () => {
+  const mockManagerPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    locator: (sel) => ({
+      first: () => ({
+        fill: async () => {},
+        click: async () => {},
+        isVisible: async () => {
+          if (typeof sel === 'string' && sel.includes('Messaging APIを利用する')) return true;
+          if (typeof sel === 'string' && (sel.includes('provider') || sel.includes('Civic Tech Inc.'))) return false;
+          return true;
+        },
+        evaluate: async () => false
+      }),
+      count: async () => 2,
+      nth: () => ({
+        evaluate: async () => true
+      })
+    }),
+    waitForTimeout: async () => {}
+  };
+
+  await assert.rejects(async () => {
+    await createMessagingChannelViaDom({
+      accountName: 'POSTING MAP MIE-03',
+      categoryMain: 'サービス',
+      categorySub: 'その他サービス',
+      providerName: 'Civic Tech Inc.',
+      managerPage: mockManagerPage,
+      devPage: { goto: async () => {}, waitForLoadState: async () => {} },
+      logger: () => {}
+    });
+  }, /PROVIDER_SELECT_NOT_FOUND/);
+});
+
+// 57. createMessagingChannelViaDom throws PROVIDER_MISMATCH_BEFORE_SUBMIT if re-read differs
+await asyncTest('57. createMessagingChannelViaDom throws PROVIDER_MISMATCH_BEFORE_SUBMIT if re-read differs', async () => {
+  const mockManagerPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    locator: (sel) => ({
+      first: () => ({
+        fill: async () => {},
+        click: async () => {},
+        isVisible: async () => true,
+        evaluate: async () => true
+      }),
+      count: async () => 2,
+      nth: () => ({
+        evaluate: async () => true
+      })
+    }),
+    waitForTimeout: async () => {},
+    evaluate: async () => 'Wrong Provider Inc.' // Mismatched provider re-read
+  };
+
+  await assert.rejects(async () => {
+    await createMessagingChannelViaDom({
+      accountName: 'POSTING MAP MIE-03',
+      categoryMain: 'サービス',
+      categorySub: 'その他サービス',
+      providerName: 'Civic Tech Inc.',
+      managerPage: mockManagerPage,
+      devPage: { goto: async () => {}, waitForLoadState: async () => {} },
+      logger: () => {}
+    });
+  }, /PROVIDER_MISMATCH_BEFORE_SUBMIT/);
+});
+
+// 58. createLiffViaDom throws LIFF_CONFIG_FAIL when required selector missing
+await asyncTest('58. createLiffViaDom throws LIFF_CONFIG_FAIL when required selector missing', async () => {
+  const mockDevPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    locator: (sel) => ({
+      first: () => ({
+        fill: async () => {},
+        click: async () => {},
+        isVisible: async () => sel.includes('liffName') ? true : false, // Size/scope selector missing!
+        check: async () => {}
+      })
+    })
+  };
+
+  await assert.rejects(async () => {
+    await createLiffViaDom({
+      loginChannelId: '2010941735',
+      liffName: 'POSTING MAP MIE-03',
+      endpointUrl: 'https://mie-03.postingmap.jp/',
+      devPage: mockDevPage,
+      logger: () => {}
+    });
+  }, /LIFF_CONFIG_FAIL/);
+});
+
+// 59. executeLineProvisioning in --verify-only rejects if live DOM audit fails
+await asyncTest('59. executeLineProvisioning in --verify-only rejects if live DOM audit fails', async () => {
+  const existingChannels = [
+    { channelId: '2010941735', name: 'POSTING MAP MIE-03', type: 'LINE_LOGIN' },
+    { channelId: '2010941440', name: 'POSTING MAP MIE-03', type: 'MESSAGING_API' }
+  ];
+  const existingLiffs = [
+    { liffId: '2010941735-mie03liff', name: 'POSTING MAP MIE-03', endpointUrl: 'https://mie-03.postingmap.jp/' }
+  ];
+  const tokenStatus = {
+    isIssued: true,
+    token: 'existing_token_abcdef1234567890',
+    canRetrieve: true
+  };
+  const failingAudit = async () => ({
+    verified: false,
+    loginChannelId: null,
+    messagingChannelId: null,
+    liffId: null,
+    token: null
+  });
+
+  await assert.rejects(async () => {
+    await executeLineProvisioning(
+      { verifyOnly: true, execute: false, dryRun: false },
+      {
+        page: { evaluate: async () => 'Civic Tech Inc.' },
+        managerPage: { evaluate: async () => false },
+        providerName: 'Civic Tech Inc.',
+        existingChannels,
+        existingLiffs,
+        tokenStatus,
+        reReadAndVerifyAllAssets: failingAudit,
+        logger: () => {}
+      }
+    );
+  }, /Full Read-Only Live DOM audit detected mismatch/);
+});
+
+// 60. Browser evaluate selector safety: querySelector does NOT contain invalid :has-text syntax
+await asyncTest('60. Browser evaluate selector safety: no :has-text pseudo-selectors in querySelector calls', async () => {
+  const code = fs.readFileSync('scripts/provision-line-assets.mjs', 'utf8');
+  const qsRegex = /querySelector(?:All)?\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
+  let match;
+  let violations = [];
+  while ((match = qsRegex.exec(code)) !== null) {
+    const sel = match[1];
+    if (sel.includes(':has-text')) {
+      violations.push({ selector: sel, match: match[0] });
+    }
+  }
+  assert.equal(violations.length, 0, `No :has-text permitted in querySelector: ${JSON.stringify(violations)}`);
+});
+
 console.log('\n====================================================');
-console.log(`📊 TEST SUITE SUMMARY: ${passCount} / 52 PASSED`);
+console.log(`📊 TEST SUITE SUMMARY: ${passCount} / 60 PASSED`);
 console.log('====================================================\n');
