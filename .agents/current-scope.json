@@ -1,5 +1,6 @@
 [
   ".agents/current-scope.json",
-  "active/h-app/render.js",
-  "tests/test_phase11_activity_state_machine.mjs"
+  "scripts/provision-domain.mjs",
+  "tests/test_provision_domain.mjs",
+  ".agents/agents/deployer/agent.md"
 ]
