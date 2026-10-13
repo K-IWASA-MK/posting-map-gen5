@@ -8,8 +8,8 @@
  * 【最高設計原則 & ガバナンス規程】
  * 1. 実行モード:
  *    - default: DRY RUN (writeCount = 0, 外部変更禁止)
- *    - --execute: 明示指定時のみ実外部変更許可
- *    - --verify-only: 読取り検証のみ (writeCount = 0)
+ *    - --execute: 明示指定時のみ実外部変更許可 (Built-in Real UI Adapters による完全自律執行)
+ *    - --verify-only: 読取り検証・実機Preflightのみ (writeCount = 0)
  * 2. 実行順序:
  *    1. Chrome CDP Preflight (Developers & Official Account Manager ログイン実査)
  *    2. Civic Tech Inc. Provider確認 (Fail-Closed: DOM取得不能時は即時 HARD STOP)
@@ -23,6 +23,7 @@
  *    10. Module Mode = OFF
  *    11. LIFF ID取得・prefix検証
  *    12. 長期Channel Access Token実取得 (初回1回のみ発行 / 再発行禁止 / DOMより実取得)
+ *    13. Strict Post-Verification: 全資産の生DOM再読取による100%完全一致検証
  * 3. 冪等性:
  *    - 同名・同種資産が存在する場合は再利用し、二重作成禁止
  *    - 同名だが内容不一致は即時 HARD STOP
@@ -34,6 +35,9 @@
  *    - Channel Access Token等の生値をログ・stdout・stderr・JSON・Git等へ一切露出しない
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { chromium } from 'playwright';
 
@@ -48,8 +52,9 @@ export const DEFAULT_CONFIG = {
   endpointUrl: 'https://mie-03.postingmap.jp/',
   botPrompt: 'Aggressive',
   moduleMode: false,
-  cdpUrl: 'http://[::1]:9222',
-  repo: 'K-IWASA-MK/posting-map-mie-03'
+  cdpUrl: 'http://127.0.0.1:9222',
+  repo: 'K-IWASA-MK/posting-map-mie-03',
+  contactEmail: 'postingareamap@gmail.com'
 };
 
 /**
@@ -69,6 +74,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
     moduleMode: DEFAULT_CONFIG.moduleMode,
     cdpUrl: DEFAULT_CONFIG.cdpUrl,
     repo: DEFAULT_CONFIG.repo,
+    contactEmail: DEFAULT_CONFIG.contactEmail,
     execute: false,
     verifyOnly: false,
     dryRun: true
@@ -98,6 +104,8 @@ export function parseArgs(argv = process.argv.slice(2)) {
       options.providerName = argv[++i];
     } else if (arg === '--cdp-url' && argv[i + 1]) {
       options.cdpUrl = argv[++i];
+    } else if (arg === '--email' && argv[i + 1]) {
+      options.contactEmail = argv[++i];
     }
   }
 
@@ -106,11 +114,31 @@ export function parseArgs(argv = process.argv.slice(2)) {
 
 /**
  * 終了コード解決関数
- * Exit 0 を許すのは PASS, ASSETS_VERIFIED, DRY_RUN_COMPLETE のみ。
+ * Exit 0 を許すのは PASS, ASSETS_VERIFIED, PRECHECK_READY, DRY_RUN_COMPLETE のみ。
  */
 export function resolveExitCode(status) {
-  const ALLOWED_EXIT_ZERO = new Set(['PASS', 'ASSETS_VERIFIED', 'DRY_RUN_COMPLETE']);
+  const ALLOWED_EXIT_ZERO = new Set(['PASS', 'ASSETS_VERIFIED', 'PRECHECK_READY', 'DRY_RUN_COMPLETE']);
   return ALLOWED_EXIT_ZERO.has(status) ? 0 : 1;
+}
+
+/**
+ * Chrome CDP WebSocket エンドポイント自動解決ヘルパー
+ * macOS の DevToolsActivePort が存在する場合は最優先で直接 WebSocket パスを解決する
+ */
+export function resolveCdpEndpoint(cdpUrl = DEFAULT_CONFIG.cdpUrl) {
+  if (cdpUrl && cdpUrl.startsWith('ws://')) return cdpUrl;
+  try {
+    const activePortPath = path.join(os.homedir(), 'Library/Application Support/Google/Chrome/DevToolsActivePort');
+    if (fs.existsSync(activePortPath)) {
+      const lines = fs.readFileSync(activePortPath, 'utf8').trim().split('\n');
+      if (lines.length >= 2) {
+        const port = lines[0].trim();
+        const wsPath = lines[1].trim();
+        return `ws://127.0.0.1:${port}${wsPath}`;
+      }
+    }
+  } catch (e) {}
+  return cdpUrl || 'http://127.0.0.1:9222';
 }
 
 /**
@@ -211,7 +239,6 @@ export async function extractChannelsFromDom(page) {
       const isLogin = text.includes('LINEログイン') || text.toLowerCase().includes('login');
       const isMessaging = text.includes('Messaging API') || text.toLowerCase().includes('messaging');
 
-      // チャンネル名の抽出 (Admin, LINEログイン, Messaging API 以外の行)
       const name = textLines.find(l => (
         l !== 'Admin' &&
         !l.includes('ログイン') &&
@@ -231,7 +258,7 @@ export async function extractChannelsFromDom(page) {
 }
 
 /**
- * 実DOMからLIFFアプリ一覧を抽出
+ * 実DOMからLIFFアプリ一覧および設定詳細を抽出
  */
 export async function extractLiffsFromDom(page) {
   if (!page || typeof page.evaluate !== 'function') {
@@ -245,13 +272,23 @@ export async function extractLiffsFromDom(page) {
       const idMatch = text.match(/\b(\d{8,12}-[a-zA-Z0-9_-]+)\b/);
       const urlMatch = text.match(/https?:\/\/[^\s\n\r"']+/);
 
-      const titleEl = r.querySelector('h3, h4, .title, [class*="name"]');
+      const titleEl = r.querySelector('h3, h4, .title, [class*="name"], td:first-child');
       const name = titleEl ? titleEl.innerText.trim() : '';
+
+      const isAggressive = text.includes('強') || text.toLowerCase().includes('aggressive');
+      const isNormal = text.includes('標準') || text.toLowerCase().includes('normal');
+      const isNone = text.includes('無') || text.toLowerCase().includes('none');
+      const botPrompt = isAggressive ? 'Aggressive' : isNormal ? 'Normal' : isNone ? 'None' : 'Unknown';
+
+      const isModuleModeOn = text.includes('モジュールモード: オン') || text.includes('Module Mode: On');
+      const moduleMode = !isModuleModeOn; // true if OFF
 
       return {
         liffId: idMatch ? idMatch[1] : null,
         name: name,
         endpointUrl: urlMatch ? urlMatch[0] : '',
+        botPrompt,
+        moduleModeOff: moduleMode,
         rawText: text
       };
     }).filter(l => l.liffId);
@@ -267,11 +304,9 @@ export async function extractTokenFromDom(page) {
   }
 
   return await page.evaluate(() => {
-    // 1. トークン表示フィールドの検索 (textarea, input, code)
     const tokenEl = document.querySelector('textarea[readonly], code.token, input[readonly][value*="."]');
     const rawVal = tokenEl ? (tokenEl.value || tokenEl.innerText || '').trim() : '';
 
-    // 2. 「発行」ボタンの検索
     const issueBtn = Array.from(document.querySelectorAll('button, input[type="button"]')).find(b => {
       return (b.innerText || b.value || '').trim() === '発行' || (b.innerText || '').includes('Issue');
     });
@@ -284,7 +319,6 @@ export async function extractTokenFromDom(page) {
       return { isIssued: false, token: null, canRetrieve: true };
     }
 
-    // 発行済みだが値が伏字またはDOMに存在しない場合
     const hasReissueBtn = Array.from(document.querySelectorAll('button')).some(b => (b.innerText || '').includes('再発行'));
     if (hasReissueBtn) {
       return { isIssued: true, token: null, canRetrieve: false };
@@ -484,38 +518,369 @@ export async function verifyOfficialAccountManagerLogin(managerPage) {
   return true;
 }
 
+// ─────────────────────────────────────────────────────────────
+// 【BUILT-IN REAL UI ADAPTERS】
+// ─────────────────────────────────────────────────────────────
+
 /**
- * 実画面からの全資産再読取・整合性完全検証 (PASS Gate)
+ * LINE Login Channel 実作成 (Playwright DOM 操作)
  */
-export function verifyAllProvisionedAssets(assets = {}) {
-  if (!assets.loginChannelId || !/^\d{8,12}$/.test(assets.loginChannelId)) {
-    throw new Error(`🛑 [Post-Verification FAIL] Valid Login Channel ID missing: [${assets.loginChannelId}]`);
-  }
-  if (!assets.messagingChannelId || !/^\d{8,12}$/.test(assets.messagingChannelId)) {
-    throw new Error(`🛑 [Post-Verification FAIL] Valid Messaging API Channel ID missing: [${assets.messagingChannelId}]`);
-  }
-  if (!assets.provider || assets.provider !== DEFAULT_CONFIG.providerName) {
-    throw new Error(`🛑 [Post-Verification FAIL] Provider mismatch: [${assets.provider}]`);
-  }
-  if (!assets.linkedBotVerified) {
-    throw new Error('🛑 [Post-Verification FAIL] Linked Bot configuration is not verified.');
-  }
-  if (!assets.liffId) {
-    throw new Error('🛑 [Post-Verification FAIL] LIFF ID is missing.');
-  }
-  verifyLiffIdFormat(assets.liffId, assets.loginChannelId);
+export async function createLoginChannelViaDom({
+  appName = DEFAULT_CONFIG.loginChannelName,
+  description = 'POSTING MAP MIE-03 配布員認証アプリ',
+  email = DEFAULT_CONFIG.contactEmail,
+  devPage,
+  logger = console.log
+}) {
+  logger(`   ➕ [Built-in UI] Navigating to create LINE Login Channel: [${appName}]...`);
+  await devPage.goto('https://developers.line.biz/console/channel/new');
+  await devPage.waitForLoadState('networkidle').catch(() => {});
 
-  if (!assets.botPromptVerified) {
-    throw new Error('🛑 [Post-Verification FAIL] Bot Prompt is not verified as Aggressive.');
-  }
-  if (!assets.moduleModeVerified) {
-    throw new Error('🛑 [Post-Verification FAIL] Module Mode is not verified as OFF.');
-  }
-  if (!assets.tokenAcquired) {
-    throw new Error('🛑 [Post-Verification FAIL] Long-lived Channel Access Token is not acquired.');
+  // LINEログイン カード選択
+  const loginCard = devPage.locator('.channel-type-card, a, button').filter({ hasText: 'LINEログイン' }).first();
+  await loginCard.click();
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+
+  // フォーム入力
+  logger('      Filling channel form fields...');
+  const nameInput = devPage.locator('input[name*="name"], input#channelName').first();
+  await nameInput.fill(appName);
+
+  const descInput = devPage.locator('textarea[name*="desc"], textarea#channelDescription').first();
+  await descInput.fill(description);
+
+  // アプリタイプ: ウェブアプリ
+  const webAppRadio = devPage.locator('input[value*="web"], label:has-text("ウェブアプリ")').first();
+  if (await webAppRadio.isVisible()) {
+    await webAppRadio.click();
   }
 
-  return true;
+  // メールアドレス
+  const emailInput = devPage.locator('input[name*="email"], input#email').first();
+  if (await emailInput.isVisible()) {
+    await emailInput.fill(email);
+  }
+
+  // 規約チェック
+  const termsCheckbox = devPage.locator('input[type="checkbox"]').first();
+  if (await termsCheckbox.isVisible()) {
+    await termsCheckbox.check();
+  }
+
+  // 作成ボタンクリック
+  logger('      Submitting channel creation form...');
+  const createBtn = devPage.locator('button[type="submit"], button:has-text("作成")').first();
+  await createBtn.click();
+
+  // モーダル確認
+  const confirmBtn = devPage.locator('.modal button:has-text("作成"), .dialog button:has-text("作成")').first();
+  if (await confirmBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await confirmBtn.click();
+  }
+
+  await devPage.waitForNavigation({ timeout: 30000 }).catch(() => {});
+  const currentUrl = devPage.url();
+  const match = currentUrl.match(/\/channel\/(\d+)/);
+
+  if (!match || !match[1]) {
+    throw new Error('🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real Channel ID after creating LINE Login Channel.');
+  }
+
+  return {
+    channelId: match[1],
+    name: appName,
+    type: 'LINE_LOGIN',
+    writeCount: 1
+  };
+}
+
+/**
+ * Official Account & Messaging API Channel 実作成 (Playwright DOM 操作)
+ */
+export async function createMessagingChannelViaDom({
+  accountName = DEFAULT_CONFIG.messagingChannelName,
+  email = DEFAULT_CONFIG.contactEmail,
+  providerName = DEFAULT_CONFIG.providerName,
+  managerPage,
+  devPage,
+  logger = console.log
+}) {
+  logger(`   ➕ [Built-in UI] Navigating to create Official Account on manager.line.biz: [${accountName}]...`);
+  await managerPage.goto('https://manager.line.biz/account/create');
+  await managerPage.waitForLoadState('networkidle').catch(() => {});
+
+  // アカウント名入力
+  const nameInput = managerPage.locator('input[name*="name"], input[placeholder*="アカウント名"]').first();
+  await nameInput.fill(accountName);
+
+  // メールアドレス入力
+  const emailInput = managerPage.locator('input[type="email"]').first();
+  if (await emailInput.isVisible()) {
+    await emailInput.fill(email);
+  }
+
+  // 業種選択 (サービス / その他サービス)
+  const categorySelects = managerPage.locator('select');
+  if (await categorySelects.count() > 0) {
+    await categorySelects.first().selectOption({ index: 1 });
+  }
+
+  // 作成・確定
+  const submitBtn = managerPage.locator('button[type="submit"], button:has-text("確認"), button:has-text("作成")').first();
+  await submitBtn.click();
+  await managerPage.waitForLoadState('networkidle').catch(() => {});
+
+  // Messaging API 設定へ遷移
+  logger('      Enabling Messaging API under Civic Tech Inc....');
+  const messagingMenu = managerPage.locator('a[href*="setting/messaging-api"], button:has-text("Messaging API")').first();
+  if (await messagingMenu.isVisible()) {
+    await messagingMenu.click();
+  }
+
+  const enableBtn = managerPage.locator('button:has-text("Messaging APIを利用する")').first();
+  if (await enableBtn.isVisible()) {
+    await enableBtn.click();
+    // プロバイダー選択で Civic Tech Inc. を確認・選択
+    const providerOption = managerPage.locator(`select option:has-text("${providerName}"), label:has-text("${providerName}")`).first();
+    if (await providerOption.isVisible()) {
+      await providerOption.click();
+    }
+    const confirmApiBtn = managerPage.locator('button:has-text("同意する"), button:has-text("OK")').first();
+    if (await confirmApiBtn.isVisible()) {
+      await confirmApiBtn.click();
+    }
+  }
+
+  // LINE Developers 側へ戻り、新 Messaging Channel ID を抽出
+  logger('      Scanning LINE Developers Console for newly registered Messaging API Channel...');
+  await devPage.goto(`https://developers.line.biz/console/provider/${DEFAULT_CONFIG.providerId}`);
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+
+  const channels = await extractChannelsFromDom(devPage);
+  const matched = channels.find(c => c.name === accountName.trim() && c.type === 'MESSAGING_API');
+
+  if (!matched || !matched.channelId) {
+    throw new Error('🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real Messaging Channel ID after creation.');
+  }
+
+  return {
+    channelId: matched.channelId,
+    name: accountName,
+    type: 'MESSAGING_API',
+    writeCount: 1
+  };
+}
+
+/**
+ * Linked Bot 実設定 & 再読取確認 (Playwright DOM 操作)
+ */
+export async function linkMessagingBotViaDom({
+  loginChannelId,
+  messagingChannelId,
+  botName = DEFAULT_CONFIG.messagingChannelName,
+  devPage,
+  logger = console.log
+}) {
+  logger(`   🔗 [Built-in UI] Navigating to configure Linked Bot on LINE Login [${loginChannelId}]...`);
+  await devPage.goto(`https://developers.line.biz/console/channel/${loginChannelId}`);
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+
+  // LINEログイン設定タブへ遷移
+  const settingsTab = devPage.locator('a, button').filter({ hasText: /LINEログイン設定|チャネル基本設定/ }).first();
+  if (await settingsTab.isVisible()) {
+    await settingsTab.click();
+  }
+
+  // 現在のリンク確認
+  const linkedSection = devPage.locator('[class*="linked-bot"], div:has-text("リンクされたボット")').first();
+  const currentText = await linkedSection.innerText().catch(() => '');
+
+  if (currentText.includes(botName)) {
+    logger('      Linked Bot is already set to target bot (No-op).');
+    return { action: 'NO_OP', verified: true, writeCount: 0 };
+  }
+
+  // 編集をクリック
+  const editBtn = linkedSection.locator('button:has-text("編集"), a:has-text("編集")').first();
+  if (await editBtn.isVisible()) {
+    await editBtn.click();
+    const botOption = devPage.locator(`select option:has-text("${botName}"), label:has-text("${botName}")`).first();
+    await botOption.click();
+    const saveBtn = devPage.locator('button:has-text("更新"), button:has-text("保存")').first();
+    await saveBtn.click();
+  }
+
+  // 再読取検証
+  await devPage.waitForTimeout(2000);
+  const updatedText = await linkedSection.innerText().catch(() => '');
+  const verified = updatedText.includes(botName);
+
+  if (!verified) {
+    throw new Error('🛑 [HARD STOP: LINKED_BOT_MISMATCH] Linked Bot verification failed after update.');
+  }
+
+  return { action: 'LINKED', verified: true, writeCount: 1 };
+}
+
+/**
+ * LIFF アプリ実作成 (Playwright DOM 操作)
+ */
+export async function createLiffViaDom({
+  loginChannelId,
+  liffName = DEFAULT_CONFIG.liffName,
+  endpointUrl = DEFAULT_CONFIG.endpointUrl,
+  botPrompt = DEFAULT_CONFIG.botPrompt,
+  moduleMode = DEFAULT_CONFIG.moduleMode,
+  devPage,
+  logger = console.log
+}) {
+  logger(`   ➕ [Built-in UI] Navigating to create LIFF app on LINE Login [${loginChannelId}]...`);
+  await devPage.goto(`https://developers.line.biz/console/channel/${loginChannelId}/liff/new`);
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+
+  // LIFF名入力
+  const nameInput = devPage.locator('input[name*="name"], input#liffName').first();
+  await nameInput.fill(liffName);
+
+  // サイズ: Full
+  const sizeRadio = devPage.locator('input[value="FULL"], label:has-text("Full")').first();
+  if (await sizeRadio.isVisible()) {
+    await sizeRadio.click();
+  }
+
+  // エンドポイントURL
+  const endpointInput = devPage.locator('input[name*="endpoint"], input#endpointUrl').first();
+  await endpointInput.fill(endpointUrl);
+
+  // Scopes: profile, openid
+  const profileScope = devPage.locator('input[type="checkbox"][value="profile"], label:has-text("profile")').first();
+  if (await profileScope.isVisible()) await profileScope.check();
+
+  const openidScope = devPage.locator('input[type="checkbox"][value="openid"], label:has-text("openid")').first();
+  if (await openidScope.isVisible()) await openidScope.check();
+
+  // ボットリンク機能: Aggressive (強)
+  const aggressiveRadio = devPage.locator('input[value="aggressive"], label:has-text("強（Aggressive）"), label:has-text("Aggressive")').first();
+  if (await aggressiveRadio.isVisible()) {
+    await aggressiveRadio.click();
+  }
+
+  // 作成ボタンクリック
+  const addBtn = devPage.locator('button[type="submit"], button:has-text("追加")').first();
+  await addBtn.click();
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+
+  // リストから実 LIFF ID を取得
+  logger('      Extracting newly created LIFF ID from DOM...');
+  const liffs = await extractLiffsFromDom(devPage);
+  const matched = liffs.find(l => l.name === liffName.trim() && l.endpointUrl.replace(/\/+$/, '') === endpointUrl.replace(/\/+$/, ''));
+
+  if (!matched || !matched.liffId) {
+    throw new Error('🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real LIFF ID after creation.');
+  }
+
+  return { action: 'CREATED', liffId: matched.liffId, writeCount: 1 };
+}
+
+/**
+ * 長期 Channel Access Token 実発行・取得 (Playwright DOM 操作)
+ */
+export async function issueTokenViaDom({
+  messagingChannelId,
+  devPage,
+  logger = console.log
+}) {
+  logger(`   🔑 [Built-in UI] Navigating to Messaging API channel [${messagingChannelId}] for token...`);
+  await devPage.goto(`https://developers.line.biz/console/channel/${messagingChannelId}/messaging-api`);
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+
+  const currentTokenStatus = await extractTokenFromDom(devPage);
+  if (currentTokenStatus.isIssued && currentTokenStatus.token) {
+    logger('      Existing valid token found in DOM (Reusing).');
+    return { action: 'REUSE', token: currentTokenStatus.token, writeCount: 0 };
+  }
+
+  const issueBtn = devPage.locator('button:has-text("発行"), button:has-text("Issue")').first();
+  if (await issueBtn.isVisible()) {
+    logger('      Clicking "発行" button for initial issuance...');
+    await issueBtn.click();
+    await devPage.waitForTimeout(3000);
+  }
+
+  const updatedTokenStatus = await extractTokenFromDom(devPage);
+  if (!updatedTokenStatus.token || updatedTokenStatus.token.length < 20) {
+    throw new Error('🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to extract real Channel Access Token from DOM after issuance.');
+  }
+
+  return { action: 'ISSUED', token: updatedTokenStatus.token, writeCount: 1 };
+}
+
+/**
+ * 実画面からの全資産生DOM再読取・整合性完全検証 (Strict PASS Gate)
+ */
+export async function reReadAndVerifyAllAssets(devPage, expected = {}) {
+  // 1. Provider 画面再読取
+  await devPage.goto(`https://developers.line.biz/console/provider/${DEFAULT_CONFIG.providerId}`);
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+
+  const actualProvider = await extractProviderNameFromDom(devPage);
+  verifyProviderMatch(actualProvider, expected.providerName || DEFAULT_CONFIG.providerName);
+
+  const channels = await extractChannelsFromDom(devPage);
+  const loginChannel = channels.find(c => c.name === expected.loginChannelName && c.type === 'LINE_LOGIN');
+  const messagingChannel = channels.find(c => c.name === expected.messagingChannelName && c.type === 'MESSAGING_API');
+
+  if (!loginChannel || !loginChannel.channelId) {
+    throw new Error(`🛑 [Post-Verification FAIL] LINE Login Channel [${expected.loginChannelName}] not found in Provider DOM.`);
+  }
+  if (!messagingChannel || !messagingChannel.channelId) {
+    throw new Error(`🛑 [Post-Verification FAIL] Messaging API Channel [${expected.messagingChannelName}] not found in Provider DOM.`);
+  }
+
+  // 2. LINE Login 画面 Linked Bot 再読取
+  await devPage.goto(`https://developers.line.biz/console/channel/${loginChannel.channelId}`);
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+  const linkedBotSectionText = await devPage.evaluate(() => {
+    const el = document.querySelector('[class*="linked-bot"], div:has-text("リンクされたボット")');
+    return el ? el.innerText : '';
+  });
+  if (!linkedBotSectionText.includes(expected.messagingChannelName)) {
+    throw new Error(`🛑 [Post-Verification FAIL] Linked Bot mismatch in DOM. Expected: [${expected.messagingChannelName}].`);
+  }
+
+  // 3. LIFF 一覧再読取
+  await devPage.goto(`https://developers.line.biz/console/channel/${loginChannel.channelId}/liff`);
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+  const liffs = await extractLiffsFromDom(devPage);
+  const targetLiff = liffs.find(l => l.name === expected.liffName && l.endpointUrl.replace(/\/+$/, '') === expected.endpointUrl.replace(/\/+$/, ''));
+
+  if (!targetLiff || !targetLiff.liffId) {
+    throw new Error(`🛑 [Post-Verification FAIL] LIFF [${expected.liffName}] matching endpoint [${expected.endpointUrl}] not found in DOM.`);
+  }
+  verifyLiffIdFormat(targetLiff.liffId, loginChannel.channelId);
+
+  if (targetLiff.botPrompt !== 'Aggressive') {
+    throw new Error(`🛑 [Post-Verification FAIL] LIFF Bot Prompt mismatch in DOM. Expected: Aggressive, Found: [${targetLiff.botPrompt}].`);
+  }
+  if (!targetLiff.moduleModeOff) {
+    throw new Error('🛑 [Post-Verification FAIL] LIFF Module Mode is not OFF in DOM.');
+  }
+
+  // 4. Messaging API Token 再読取
+  await devPage.goto(`https://developers.line.biz/console/channel/${messagingChannel.channelId}/messaging-api`);
+  await devPage.waitForLoadState('networkidle').catch(() => {});
+  const tokenStatus = await extractTokenFromDom(devPage);
+  if (!tokenStatus.token || tokenStatus.token.length < 20) {
+    throw new Error('🛑 [Post-Verification FAIL] Valid Channel Access Token could not be re-read from DOM.');
+  }
+
+  return {
+    verified: true,
+    loginChannelId: loginChannel.channelId,
+    messagingChannelId: messagingChannel.channelId,
+    liffId: targetLiff.liffId,
+    token: tokenStatus.token
+  };
 }
 
 /**
@@ -545,13 +910,13 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
   if (opts.execute || opts.verifyOnly) {
     logger('\n🛡️ [Preflight Gate] Validating Chrome CDP Connection & Console Contexts...');
     if (!devPage || !managerPage) {
-      const cdpUrl = opts.cdpUrl || DEFAULT_CONFIG.cdpUrl;
-      logger(`   Connecting to CDP endpoint: ${cdpUrl}...`);
+      const cdpEndpoint = resolveCdpEndpoint(opts.cdpUrl);
+      logger(`   Connecting to CDP endpoint: ${cdpEndpoint}...`);
       try {
         const chromiumModule = deps.chromium || chromium;
-        browser = await chromiumModule.connectOverCDP(cdpUrl);
+        browser = await chromiumModule.connectOverCDP(cdpEndpoint);
       } catch (err) {
-        throw new Error(`🛑 [Preflight FAIL] Cannot connect to Chrome over CDP (${cdpUrl}): ${err.message}. Aborting with 0 external writes.`);
+        throw new Error(`🛑 [Preflight FAIL] Cannot connect to Chrome over CDP (${cdpEndpoint}): ${err.message}. Aborting with 0 external writes.`);
       }
 
       const contexts = browser.contexts ? browser.contexts() : [];
@@ -622,87 +987,89 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
   const loginResolution = resolveLoginChannel(existingChannels, opts.loginChannelName);
   logger(`   Resolution Result: ${loginResolution.action} (Channel: ${loginResolution.channelName})`);
 
+  // Adapter 選択: テスト DI 優先、本番は Built-in Real UI Adapter
+  const createLoginAdapter = deps.createLoginChannelAdapter ?? createLoginChannelViaDom;
+
   let loginChannelId = loginResolution.channelId || null;
   if (loginResolution.action === 'CREATE') {
     if (opts.execute) {
-      if (deps.createLoginChannelAdapter) {
-        const created = await deps.createLoginChannelAdapter({ appName: opts.loginChannelName, devPage, logger });
-        loginChannelId = created.channelId;
-        writeCount += (created.writeCount || 1);
-      } else {
-        throw new Error('🛑 [HARD STOP: REAL_UI_ADAPTER_REQUIRED] Live LINE Login Channel creation requires valid Playwright UI execution adapter.');
-      }
+      const created = await createLoginAdapter({
+        appName: opts.loginChannelName,
+        description: `POSTING MAP ${opts.districtId} 配布員認証アプリ`,
+        email: opts.contactEmail,
+        devPage,
+        logger
+      });
+      loginChannelId = created.channelId;
+      writeCount += (created.writeCount || 1);
       if (!loginChannelId || !/^\d{8,12}$/.test(loginChannelId)) {
-        throw new Error(`🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real Channel ID after creating LINE Login Channel.`);
+        throw new Error('🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real Channel ID after creating LINE Login Channel.');
       }
       logger(`   ➕ [Live] LINE Login Channel Created with Real Channel ID: [${loginChannelId}]`);
     } else {
-      logger('   ℹ️ [Dry Run] LINE Login Channel creation simulated (writeCount = 0).');
+      logger('   ℹ️ [Dry Run / Verify] LINE Login Channel creation needed (writeCount = 0).');
     }
   }
 
-  // ── Step 4 & 5: LINE Official Account / Messaging API Channel 解決・作成 ──
+  // ── Step 4: LINE Official Account / Messaging API Channel 解決・作成 ──
   logger('\n▶ [Step 4] LINE Official Account & Messaging API Channel Resolution');
   const messagingResolution = resolveMessagingChannel(existingChannels, opts.messagingChannelName);
   logger(`   Resolution Result: ${messagingResolution.action} (Channel: ${messagingResolution.channelName})`);
 
+  const createMessagingAdapter = deps.createMessagingChannelAdapter ?? createMessagingChannelViaDom;
+
   let messagingChannelId = messagingResolution.channelId || null;
   if (messagingResolution.action === 'CREATE') {
     if (opts.execute) {
-      if (deps.createMessagingChannelAdapter) {
-        const created = await deps.createMessagingChannelAdapter({
-          accountName: opts.messagingChannelName,
-          providerName: actualProvider,
-          managerPage,
-          devPage,
-          logger
-        });
-        messagingChannelId = created.channelId;
-        writeCount += (created.writeCount || 1);
-      } else {
-        throw new Error('🛑 [HARD STOP: REAL_UI_ADAPTER_REQUIRED] Live Messaging API Channel creation requires valid Playwright UI execution adapter.');
-      }
+      const created = await createMessagingAdapter({
+        accountName: opts.messagingChannelName,
+        email: opts.contactEmail,
+        providerName: actualProvider,
+        managerPage,
+        devPage,
+        logger
+      });
+      messagingChannelId = created.channelId;
+      writeCount += (created.writeCount || 1);
       if (!messagingChannelId || !/^\d{8,12}$/.test(messagingChannelId)) {
-        throw new Error(`🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real Messaging Channel ID after creation.`);
+        throw new Error('🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real Messaging Channel ID after creation.');
       }
       logger(`   ➕ [Live] Messaging API Channel Created with Real Channel ID: [${messagingChannelId}]`);
     } else {
-      logger('   ℹ️ [Dry Run] Messaging API Channel creation simulated (writeCount = 0).');
+      logger('   ℹ️ [Dry Run / Verify] Messaging API Channel creation needed (writeCount = 0).');
     }
   }
 
-  // ── Step 6: Provider = Civic Tech Inc. Exact Match Gate ──
+  // ── Step 5: Provider = Civic Tech Inc. Exact Match Gate ──
   logger('\n▶ [Step 5] Provider Gate for Messaging Channel');
   verifyProviderMatch(actualProvider, opts.providerName);
   logger(`   ✅ Messaging Channel Provider Verified: [${actualProvider}]`);
 
-  // ── Step 7: Linked Bot 実設定 & 再読取確認 ──
+  // ── Step 6: Linked Bot 実設定 & 再読取確認 ──
   logger('\n▶ [Step 6] Linking Messaging API Bot to LINE Login Channel');
+  const linkBotAdapter = deps.linkBotAdapter ?? linkMessagingBotViaDom;
   let linkedBotVerified = false;
+
   if (opts.execute) {
-    if (deps.linkBotAdapter) {
-      const linkRes = await deps.linkBotAdapter({
-        loginChannelId,
-        messagingChannelId,
-        botName: opts.messagingChannelName,
-        devPage,
-        logger
-      });
-      writeCount += (linkRes.writeCount || 0);
-      linkedBotVerified = !!linkRes.verified;
-    } else {
-      throw new Error('🛑 [HARD STOP: REAL_UI_ADAPTER_REQUIRED] Live Linked Bot setting requires valid Playwright UI execution adapter.');
-    }
+    const linkRes = await linkBotAdapter({
+      loginChannelId,
+      messagingChannelId,
+      botName: opts.messagingChannelName,
+      devPage,
+      logger
+    });
+    writeCount += (linkRes.writeCount || 0);
+    linkedBotVerified = !!linkRes.verified;
     if (!linkedBotVerified) {
-      throw new Error(`🛑 [HARD STOP: LINKED_BOT_MISMATCH] Linked Bot verification failed after update.`);
+      throw new Error('🛑 [HARD STOP: LINKED_BOT_MISMATCH] Linked Bot verification failed after update.');
     }
     logger(`   🔗 [Live] Linked Bot [${opts.messagingChannelName}] verified on LINE Login [${loginChannelId}].`);
   } else {
-    linkedBotVerified = true;
-    logger(`   ℹ️ [Dry Run] Linked Bot configuration simulated (writeCount = 0).`);
+    linkedBotVerified = (loginResolution.action === 'REUSE' && messagingResolution.action === 'REUSE');
+    logger(`   ℹ️ [Dry Run / Verify] Linked Bot configuration inspected (writeCount = 0).`);
   }
 
-  // ── Step 8: LIFF 解決・作成 ──
+  // ── Step 7: LIFF 解決・作成 ──
   logger('\n▶ [Step 7] LIFF Application Resolution & Creation');
   let existingLiffs = [];
   if (Array.isArray(deps.existingLiffs)) {
@@ -718,34 +1085,32 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
   });
   logger(`   Resolution Result: ${liffResolution.action} (LIFF: ${liffResolution.name})`);
 
+  const createLiffAdapter = deps.createLiffAdapter ?? createLiffViaDom;
+
   let liffId = liffResolution.liffId || null;
   if (liffResolution.action === 'CREATE') {
     if (opts.execute) {
-      if (deps.createLiffAdapter) {
-        const created = await deps.createLiffAdapter({
-          loginChannelId,
-          liffName: opts.liffName,
-          endpointUrl: opts.endpointUrl,
-          botPrompt: opts.botPrompt,
-          moduleMode: opts.moduleMode,
-          devPage,
-          logger
-        });
-        liffId = created.liffId;
-        writeCount += (created.writeCount || 1);
-      } else {
-        throw new Error('🛑 [HARD STOP: REAL_UI_ADAPTER_REQUIRED] Live LIFF creation requires valid Playwright UI execution adapter.');
-      }
+      const created = await createLiffAdapter({
+        loginChannelId,
+        liffName: opts.liffName,
+        endpointUrl: opts.endpointUrl,
+        botPrompt: opts.botPrompt,
+        moduleMode: opts.moduleMode,
+        devPage,
+        logger
+      });
+      liffId = created.liffId;
+      writeCount += (created.writeCount || 1);
       if (!liffId) {
-        throw new Error(`🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real LIFF ID after creation.`);
+        throw new Error('🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real LIFF ID after creation.');
       }
       logger(`   ➕ [Live] LIFF Registered with Real LIFF ID: [${liffId}]`);
     } else {
-      logger('   ℹ️ [Dry Run] LIFF registration simulated (writeCount = 0).');
+      logger('   ℹ️ [Dry Run / Verify] LIFF registration needed (writeCount = 0).');
     }
   }
 
-  // ── Step 9 & 10: Bot Prompt = Aggressive & Module Mode = OFF 検証 ──
+  // ── Step 8: Bot Prompt = Aggressive & Module Mode = OFF 検証 ──
   logger('\n▶ [Step 8] Bot Prompt & Module Mode Policy Verification');
   verifyBotSettings({
     botPrompt: opts.botPrompt,
@@ -753,14 +1118,14 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
   });
   logger(`   ✅ Bot Settings Verified: Bot Prompt = [${opts.botPrompt}], Module Mode = [OFF]`);
 
-  // ── Step 11: LIFF ID 形式およびチャネル一致検証 ──
+  // ── Step 9: LIFF ID 形式およびチャネル一致検証 ──
   if (liffId && loginChannelId) {
     logger('\n▶ [Step 9] LIFF ID Validation');
     verifyLiffIdFormat(liffId, loginChannelId);
     logger(`   ✅ LIFF ID Format & Channel Prefix Verified: [${liffId}]`);
   }
 
-  // ── Step 12: 長期 Channel Access Token 解決・取得 ──
+  // ── Step 10: 長期 Channel Access Token 解決・取得 ──
   logger('\n▶ [Step 10] Long-lived Channel Access Token Verification');
   let tokenStatus = { isIssued: false, token: null, canRetrieve: false };
   if (deps.tokenStatus) {
@@ -772,39 +1137,64 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
   const tokenResolution = verifyTokenIssuance(tokenStatus);
   logger(`   Token Resolution: ${tokenResolution.action} - ${tokenResolution.description}`);
 
+  const issueTokenAdapter = deps.issueTokenAdapter ?? issueTokenViaDom;
+
   let channelAccessToken = tokenStatus.token || null;
   if (tokenResolution.action === 'ISSUE_ONCE') {
     if (opts.execute) {
-      if (deps.issueTokenAdapter) {
-        const issued = await deps.issueTokenAdapter({ messagingChannelId, devPage, logger });
-        channelAccessToken = issued.token;
-        writeCount += (issued.writeCount || 1);
-      } else {
-        throw new Error('🛑 [HARD STOP: REAL_UI_ADAPTER_REQUIRED] Live Token issuance requires valid Playwright UI execution adapter.');
-      }
+      const issued = await issueTokenAdapter({ messagingChannelId, devPage, logger });
+      channelAccessToken = issued.token;
+      writeCount += (issued.writeCount || 1);
       if (!channelAccessToken || typeof channelAccessToken !== 'string' || channelAccessToken.length < 20) {
         throw new Error('🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to extract real Channel Access Token from DOM after issuance.');
       }
       logger('   🔑 [Live] Initial long-lived channel access token issued and extracted from DOM.');
     } else {
-      logger('   ℹ️ [Dry Run] Long-lived token initial issuance simulated (writeCount = 0).');
+      logger('   ℹ️ [Dry Run / Verify] Token issuance needed (writeCount = 0).');
     }
   }
 
-  // ── Step 13: 本番 PASS 条件再読取完全照合 (Strict PASS Gate) ──
+  // ── Step 11: 本番 Strict Post-Verification (生DOM再読取) ──
   if (opts.execute) {
-    logger('\n▶ [Step 11] Strict Post-Verification across All Real Assets');
-    verifyAllProvisionedAssets({
-      loginChannelId,
-      messagingChannelId,
-      provider: actualProvider,
-      linkedBotVerified,
-      liffId,
-      botPromptVerified: true,
-      moduleModeVerified: true,
-      tokenAcquired: !!channelAccessToken
-    });
-    logger('   ✅ All Real LINE Assets Verified via DOM Re-reading.');
+    logger('\n▶ [Step 11] Strict Post-Verification across All Real Assets (Live DOM Re-read)');
+    const postState = deps.reReadAndVerifyAllAssets
+      ? await deps.reReadAndVerifyAllAssets(devPage, opts)
+      : await reReadAndVerifyAllAssets(devPage, opts);
+
+    if (!postState.verified || !postState.liffId || !postState.token) {
+      throw new Error('🛑 [Post-Verification FAIL] Live DOM re-reading failed to verify all 3 provisioned LINE assets.');
+    }
+    loginChannelId = postState.loginChannelId;
+    messagingChannelId = postState.messagingChannelId;
+    liffId = postState.liffId;
+    channelAccessToken = postState.token;
+    logger('   ✅ All Real LINE Assets 100% Verified via Live DOM Re-reading.');
+  }
+
+  // ── 状態判定 (MASTER Specification) ──
+  let status;
+  let downstreamAllowed = false;
+
+  if (opts.execute) {
+    status = 'PASS';
+    downstreamAllowed = true;
+  } else if (opts.verifyOnly) {
+    const allAssetsExist = (
+      loginResolution.action === 'REUSE' &&
+      messagingResolution.action === 'REUSE' &&
+      liffResolution.action === 'REUSE' &&
+      tokenResolution.action === 'REUSE'
+    );
+    if (allAssetsExist) {
+      status = 'ASSETS_VERIFIED';
+      downstreamAllowed = false; // verify-only では自動前進禁止
+    } else {
+      status = 'PRECHECK_READY';
+      downstreamAllowed = false;
+    }
+  } else {
+    status = 'DRY_RUN_COMPLETE';
+    downstreamAllowed = false;
   }
 
   // ── Binding 計画 (Gated: Implementation Phase では実行禁止・参照のみ) ──
@@ -830,16 +1220,15 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
     }
   };
 
-  const status = opts.execute ? 'PASS' : opts.verifyOnly ? 'ASSETS_VERIFIED' : 'DRY_RUN_COMPLETE';
-
   logger('\n====================================================');
   logger(`🎉 LINE Assets Provisioning Engine Result: [${status}]`);
   logger(`   Total External Writes: ${writeCount}`);
+  logger(`   Downstream Allowed:    ${downstreamAllowed}`);
   logger('====================================================');
 
   return {
     status,
-    downstreamAllowed: status === 'PASS',
+    downstreamAllowed,
     writeCount,
     mode: opts.execute ? 'EXECUTE' : opts.verifyOnly ? 'VERIFY_ONLY' : 'DRY_RUN',
     provider: actualProvider,

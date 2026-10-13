@@ -10,6 +10,7 @@ import {
   DEFAULT_CONFIG,
   parseArgs,
   resolveExitCode,
+  resolveCdpEndpoint,
   maskSecret,
   sanitizeLogMessage,
   createSanitizedLogger,
@@ -26,12 +27,17 @@ import {
   verifyBotSettings,
   verifyPagesAndCnamePrecondition,
   verifyOfficialAccountManagerLogin,
-  verifyAllProvisionedAssets,
+  createLoginChannelViaDom,
+  createMessagingChannelViaDom,
+  linkMessagingBotViaDom,
+  createLiffViaDom,
+  issueTokenViaDom,
+  reReadAndVerifyAllAssets,
   executeLineProvisioning
 } from '../scripts/provision-line-assets.mjs';
 
 console.log('====================================================');
-console.log('🚀 TESTING RECTIFIED LINE ASSETS PROVISIONING SUITE');
+console.log('🚀 TESTING FULL LINE ASSETS PROVISIONING SUITE');
 console.log('====================================================\n');
 
 let passCount = 0;
@@ -101,9 +107,10 @@ test('4. parseArgs overrides custom options', () => {
 });
 
 // 5. resolveExitCode allowed zero
-test('5. resolveExitCode permits Exit 0 strictly for PASS, ASSETS_VERIFIED, DRY_RUN_COMPLETE', () => {
+test('5. resolveExitCode permits Exit 0 strictly for PASS, ASSETS_VERIFIED, PRECHECK_READY, DRY_RUN_COMPLETE', () => {
   assert.equal(resolveExitCode('PASS'), 0);
   assert.equal(resolveExitCode('ASSETS_VERIFIED'), 0);
+  assert.equal(resolveExitCode('PRECHECK_READY'), 0);
   assert.equal(resolveExitCode('DRY_RUN_COMPLETE'), 0);
 });
 
@@ -116,8 +123,15 @@ test('6. resolveExitCode returns Exit 1 on errors and hard stops', () => {
   assert.equal(resolveExitCode('UNKNOWN_STATE'), 1);
 });
 
-// 7. maskSecret
-test('7. maskSecret masks secrets properly without raw leakage', () => {
+// 7. resolveCdpEndpoint
+test('7. resolveCdpEndpoint handles ws endpoints and defaults', () => {
+  assert.equal(resolveCdpEndpoint('ws://127.0.0.1:9222/custom'), 'ws://127.0.0.1:9222/custom');
+  const resolved = resolveCdpEndpoint('http://127.0.0.1:9222');
+  assert.ok(resolved.startsWith('ws://') || resolved.startsWith('http://'));
+});
+
+// 8. maskSecret
+test('8. maskSecret masks secrets properly without raw leakage', () => {
   assert.equal(maskSecret(null), '[NONE]');
   assert.equal(maskSecret('short'), '********');
   const masked = maskSecret('long_channel_access_token_1234567890abcdef');
@@ -125,8 +139,8 @@ test('7. maskSecret masks secrets properly without raw leakage', () => {
   assert.ok(!masked.includes('channel_access_token_1234567890'));
 });
 
-// 8. sanitizeLogMessage
-test('8. sanitizeLogMessage masks known secrets and long tokens', () => {
+// 9. sanitizeLogMessage
+test('9. sanitizeLogMessage masks known secrets and long tokens', () => {
   const secret = 'super_secret_channel_access_token_999988887777';
   const rawMsg = `Created token: ${secret} for district MIE-03`;
   const sanitized = sanitizeLogMessage(rawMsg, [secret]);
@@ -134,8 +148,8 @@ test('8. sanitizeLogMessage masks known secrets and long tokens', () => {
   assert.ok(sanitized.includes('supe...7777'));
 });
 
-// 9. sanitizeLogMessage generic long secret pattern (constructed dynamically to avoid static scanner match)
-test('9. sanitizeLogMessage masks generic long base64/hex tokens', () => {
+// 10. sanitizeLogMessage generic long secret pattern
+test('10. sanitizeLogMessage masks generic long base64/hex tokens', () => {
   const dummyJwt = ['eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9', 'eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ', 'SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'].join('.');
   const rawMsg = ['Bearer', dummyJwt].join(' ');
   const sanitized = sanitizeLogMessage(rawMsg);
@@ -143,21 +157,21 @@ test('9. sanitizeLogMessage masks generic long base64/hex tokens', () => {
   assert.ok(sanitized.includes('[REDACTED_JWT]'));
 });
 
-// 10. verifyProviderMatch exact match
-test('10. verifyProviderMatch passes on exact match Civic Tech Inc.', () => {
+// 11. verifyProviderMatch exact match
+test('11. verifyProviderMatch passes on exact match Civic Tech Inc.', () => {
   assert.equal(verifyProviderMatch('Civic Tech Inc.', 'Civic Tech Inc.'), true);
   assert.equal(verifyProviderMatch('  Civic Tech Inc.  ', 'Civic Tech Inc.'), true);
 });
 
-// 11. verifyProviderMatch mismatch triggers HARD STOP
-test('11. verifyProviderMatch throws HARD STOP on provider mismatch', () => {
+// 12. verifyProviderMatch mismatch triggers HARD STOP
+test('12. verifyProviderMatch throws HARD STOP on provider mismatch', () => {
   assert.throws(() => {
     verifyProviderMatch('Wrong Provider LLC', 'Civic Tech Inc.');
   }, /PROVIDER_MISMATCH/);
 });
 
-// 12. extractProviderNameFromDom passes when DOM element present
-await asyncTest('12. extractProviderNameFromDom extracts provider name correctly', async () => {
+// 13. extractProviderNameFromDom passes when DOM element present
+await asyncTest('13. extractProviderNameFromDom extracts provider name correctly', async () => {
   const mockPage = {
     evaluate: async () => 'Civic Tech Inc.'
   };
@@ -165,8 +179,8 @@ await asyncTest('12. extractProviderNameFromDom extracts provider name correctly
   assert.equal(name, 'Civic Tech Inc.');
 });
 
-// 13. extractProviderNameFromDom throws Fail-Closed when missing
-await asyncTest('13. extractProviderNameFromDom throws HARD STOP when Provider DOM missing', async () => {
+// 14. extractProviderNameFromDom throws Fail-Closed when missing
+await asyncTest('14. extractProviderNameFromDom throws HARD STOP when Provider DOM missing', async () => {
   const mockPage = {
     evaluate: async () => null
   };
@@ -175,10 +189,10 @@ await asyncTest('13. extractProviderNameFromDom throws HARD STOP when Provider D
   }, /PROVIDER_NOT_FOUND/);
 });
 
-// 14. extractChannelsFromDom parses channel items correctly
-await asyncTest('14. extractChannelsFromDom extracts channels from DOM', async () => {
+// 15. extractChannelsFromDom parses channel items correctly
+await asyncTest('15. extractChannelsFromDom extracts channels from DOM', async () => {
   const mockPage = {
-    evaluate: async (fn) => [
+    evaluate: async () => [
       { channelId: '2010941735', name: 'POSTING MAP', type: 'LINE_LOGIN' },
       { channelId: '2010941440', name: 'POSTING MAP', type: 'MESSAGING_API' }
     ]
@@ -191,20 +205,22 @@ await asyncTest('14. extractChannelsFromDom extracts channels from DOM', async (
   assert.equal(channels[1].type, 'MESSAGING_API');
 });
 
-// 15. extractLiffsFromDom extracts LIFF items from DOM
-await asyncTest('15. extractLiffsFromDom extracts LIFF list from DOM', async () => {
+// 16. extractLiffsFromDom extracts LIFF items from DOM
+await asyncTest('16. extractLiffsFromDom extracts LIFF list from DOM', async () => {
   const mockPage = {
     evaluate: async () => [
-      { liffId: '2010941735-abcdefgh', name: 'POSTING MAP', endpointUrl: 'https://kuwana.postingmap.jp/' }
+      { liffId: '2010941735-abcdefgh', name: 'POSTING MAP', endpointUrl: 'https://kuwana.postingmap.jp/', botPrompt: 'Aggressive', moduleModeOff: true }
     ]
   };
   const liffs = await extractLiffsFromDom(mockPage);
   assert.equal(liffs.length, 1);
   assert.equal(liffs[0].liffId, '2010941735-abcdefgh');
+  assert.equal(liffs[0].botPrompt, 'Aggressive');
+  assert.equal(liffs[0].moduleModeOff, true);
 });
 
-// 16. extractTokenFromDom detects unissued token with Issue button
-await asyncTest('16. extractTokenFromDom detects unissued token when Issue button present', async () => {
+// 17. extractTokenFromDom detects unissued token when Issue button present
+await asyncTest('17. extractTokenFromDom detects unissued token when Issue button present', async () => {
   const mockPage = {
     evaluate: async () => ({ isIssued: false, token: null, canRetrieve: true })
   };
@@ -213,8 +229,8 @@ await asyncTest('16. extractTokenFromDom detects unissued token when Issue butto
   assert.equal(res.token, null);
 });
 
-// 17. extractTokenFromDom extracts issued token from DOM
-await asyncTest('17. extractTokenFromDom extracts existing token from DOM', async () => {
+// 18. extractTokenFromDom extracts issued token from DOM
+await asyncTest('18. extractTokenFromDom extracts existing token from DOM', async () => {
   const mockPage = {
     evaluate: async () => ({ isIssued: true, token: 'existing_token_abcdef1234567890', canRetrieve: true })
   };
@@ -223,8 +239,8 @@ await asyncTest('17. extractTokenFromDom extracts existing token from DOM', asyn
   assert.equal(res.token, 'existing_token_abcdef1234567890');
 });
 
-// 18. extractTokenFromDom detects issued but unretrievable token
-await asyncTest('18. extractTokenFromDom detects token that cannot be retrieved', async () => {
+// 19. extractTokenFromDom detects issued but unretrievable token
+await asyncTest('19. extractTokenFromDom detects token that cannot be retrieved', async () => {
   const mockPage = {
     evaluate: async () => ({ isIssued: true, token: null, canRetrieve: false })
   };
@@ -233,8 +249,8 @@ await asyncTest('18. extractTokenFromDom detects token that cannot be retrieved'
   assert.equal(res.canRetrieve, false);
 });
 
-// 19. resolveLoginChannel reuse
-test('19. resolveLoginChannel reuses existing matching LINE Login channel', () => {
+// 20. resolveLoginChannel reuse
+test('20. resolveLoginChannel reuses existing matching LINE Login channel', () => {
   const existing = [
     { channelId: '2010941735', name: 'POSTING MAP MIE-03', type: 'LINE_LOGIN' },
     { channelId: '2010941440', name: 'POSTING MAP MIE-03', type: 'MESSAGING_API' }
@@ -244,8 +260,8 @@ test('19. resolveLoginChannel reuses existing matching LINE Login channel', () =
   assert.equal(res.channelId, '2010941735');
 });
 
-// 20. resolveLoginChannel create
-test('20. resolveLoginChannel marks for CREATE when not found', () => {
+// 21. resolveLoginChannel create
+test('21. resolveLoginChannel marks for CREATE when not found', () => {
   const existing = [
     { channelId: '2010941440', name: 'POSTING MAP KUWANA', type: 'LINE_LOGIN' }
   ];
@@ -254,8 +270,8 @@ test('20. resolveLoginChannel marks for CREATE when not found', () => {
   assert.equal(res.channelName, 'POSTING MAP MIE-03');
 });
 
-// 21. resolveMessagingChannel reuse
-test('21. resolveMessagingChannel reuses existing matching Messaging API channel', () => {
+// 22. resolveMessagingChannel reuse
+test('22. resolveMessagingChannel reuses existing matching Messaging API channel', () => {
   const existing = [
     { channelId: '2010941735', name: 'POSTING MAP MIE-03', type: 'LINE_LOGIN' },
     { channelId: '2010941440', name: 'POSTING MAP MIE-03', type: 'MESSAGING_API' }
@@ -265,16 +281,16 @@ test('21. resolveMessagingChannel reuses existing matching Messaging API channel
   assert.equal(res.channelId, '2010941440');
 });
 
-// 22. resolveMessagingChannel create
-test('22. resolveMessagingChannel marks for CREATE when not found', () => {
+// 23. resolveMessagingChannel create
+test('23. resolveMessagingChannel marks for CREATE when not found', () => {
   const existing = [];
   const res = resolveMessagingChannel(existing, 'POSTING MAP MIE-03');
   assert.equal(res.action, 'CREATE');
   assert.equal(res.channelName, 'POSTING MAP MIE-03');
 });
 
-// 23. verifyLiffConfig reuse
-test('23. verifyLiffConfig reuses when name and endpoint match', () => {
+// 24. verifyLiffConfig reuse
+test('24. verifyLiffConfig reuses when name and endpoint match', () => {
   const existing = [
     { liffId: '2010941735-abcdefgh', name: 'POSTING MAP MIE-03', endpointUrl: 'https://mie-03.postingmap.jp/' }
   ];
@@ -286,8 +302,8 @@ test('23. verifyLiffConfig reuses when name and endpoint match', () => {
   assert.equal(res.liffId, '2010941735-abcdefgh');
 });
 
-// 24. verifyLiffConfig content mismatch triggers HARD STOP
-test('24. verifyLiffConfig throws HARD STOP on mismatched endpoint', () => {
+// 25. verifyLiffConfig content mismatch triggers HARD STOP
+test('25. verifyLiffConfig throws HARD STOP on mismatched endpoint', () => {
   const existing = [
     { liffId: '2010941735-abcdefgh', name: 'POSTING MAP MIE-03', endpointUrl: 'https://wrong-domain.example.com/' }
   ];
@@ -299,67 +315,67 @@ test('24. verifyLiffConfig throws HARD STOP on mismatched endpoint', () => {
   }, /CONTENT_MISMATCH/);
 });
 
-// 25. verifyTokenIssuance issue once
-test('25. verifyTokenIssuance allows initial 1-time issuance when unissued', () => {
+// 26. verifyTokenIssuance issue once
+test('26. verifyTokenIssuance allows initial 1-time issuance when unissued', () => {
   const res = verifyTokenIssuance({ isIssued: false, token: null });
   assert.equal(res.action, 'ISSUE_ONCE');
 });
 
-// 26. verifyTokenIssuance reuse
-test('26. verifyTokenIssuance reuses token when issued and retrievable', () => {
+// 27. verifyTokenIssuance reuse
+test('27. verifyTokenIssuance reuses token when issued and retrievable', () => {
   const res = verifyTokenIssuance({ isIssued: true, token: 'existing_valid_token_xyz', canRetrieve: true });
   assert.equal(res.action, 'REUSE');
   assert.equal(res.token, 'existing_valid_token_xyz');
 });
 
-// 27. verifyTokenIssuance reissue prohibited HARD STOP
-test('27. verifyTokenIssuance throws HARD STOP when token is issued but unretrievable', () => {
+// 28. verifyTokenIssuance reissue prohibited HARD STOP
+test('28. verifyTokenIssuance throws HARD STOP when token is issued but unretrievable', () => {
   assert.throws(() => {
     verifyTokenIssuance({ isIssued: true, token: null, canRetrieve: false });
   }, /TOKEN_REISSUE_BLOCKED/);
 });
 
-// 28. verifyLiffIdFormat
-test('28. verifyLiffIdFormat passes on valid format and channel ID match', () => {
+// 29. verifyLiffIdFormat
+test('29. verifyLiffIdFormat passes on valid format and channel ID match', () => {
   assert.equal(verifyLiffIdFormat('2010941735-abcdefgh', '2010941735'), true);
 });
 
-// 29. verifyLiffIdFormat invalid format
-test('29. verifyLiffIdFormat throws on malformed LIFF ID', () => {
+// 30. verifyLiffIdFormat invalid format
+test('30. verifyLiffIdFormat throws on malformed LIFF ID', () => {
   assert.throws(() => {
     verifyLiffIdFormat('invalid-liff-id', '2010941735');
   }, /INVALID_LIFF_ID/);
 });
 
-// 30. verifyLiffIdFormat channel prefix mismatch
-test('30. verifyLiffIdFormat throws when prefix does not match LINE Login channel', () => {
+// 31. verifyLiffIdFormat channel prefix mismatch
+test('31. verifyLiffIdFormat throws when prefix does not match LINE Login channel', () => {
   assert.throws(() => {
     verifyLiffIdFormat('9999999999-abcdefgh', '2010941735');
   }, /CHANNEL_PREFIX_MISMATCH/);
 });
 
-// 31. verifyBotSettings aggressive & module mode OFF
-test('31. verifyBotSettings passes when Bot Prompt is Aggressive and Module Mode is OFF', () => {
+// 32. verifyBotSettings aggressive & module mode OFF
+test('32. verifyBotSettings passes when Bot Prompt is Aggressive and Module Mode is OFF', () => {
   assert.equal(verifyBotSettings({ botPrompt: 'Aggressive', moduleMode: false }), true);
   assert.equal(verifyBotSettings({ botPrompt: '強', moduleMode: 'OFF' }), true);
 });
 
-// 32. verifyBotSettings non-aggressive throws
-test('32. verifyBotSettings throws when Bot Prompt is not Aggressive', () => {
+// 33. verifyBotSettings non-aggressive throws
+test('33. verifyBotSettings throws when Bot Prompt is not Aggressive', () => {
   assert.throws(() => {
     verifyBotSettings({ botPrompt: 'normal', moduleMode: false });
   }, /Bot Prompt must be "Aggressive"/);
 });
 
-// 33. verifyBotSettings module mode ON throws
-test('33. verifyBotSettings throws when Module Mode is ON', () => {
+// 34. verifyBotSettings module mode ON throws
+test('34. verifyBotSettings throws when Module Mode is ON', () => {
   assert.throws(() => {
     verifyBotSettings({ botPrompt: 'Aggressive', moduleMode: true });
   }, /Module Mode must be OFF/);
 });
 
-// 34. verifyPagesAndCnamePrecondition passes
-test('34. verifyPagesAndCnamePrecondition passes on correct CNAME and HTTPS', () => {
+// 35. verifyPagesAndCnamePrecondition passes
+test('35. verifyPagesAndCnamePrecondition passes on correct CNAME and HTTPS', () => {
   const mockExec = () => JSON.stringify({
     cname: 'mie-03.postingmap.jp',
     https_enforced: true
@@ -367,50 +383,28 @@ test('34. verifyPagesAndCnamePrecondition passes on correct CNAME and HTTPS', ()
   assert.equal(verifyPagesAndCnamePrecondition('K-IWASA-MK/posting-map-mie-03', 'mie-03.postingmap.jp', mockExec), true);
 });
 
-// 35. verifyOfficialAccountManagerLogin passes when logged in
-await asyncTest('35. verifyOfficialAccountManagerLogin passes when logged in', async () => {
-  const mockPage = {
-    evaluate: async () => false
-  };
+// 36. verifyOfficialAccountManagerLogin passes when logged in
+await asyncTest('36. verifyOfficialAccountManagerLogin passes when logged in', async () => {
+  const mockPage = { evaluate: async () => false };
   assert.equal(await verifyOfficialAccountManagerLogin(mockPage), true);
 });
 
-// 36. verifyOfficialAccountManagerLogin throws when logged out
-await asyncTest('36. verifyOfficialAccountManagerLogin throws when logged out', async () => {
-  const mockPage = {
-    evaluate: async () => true
-  };
+// 37. verifyOfficialAccountManagerLogin throws when logged out
+await asyncTest('37. verifyOfficialAccountManagerLogin throws when logged out', async () => {
+  const mockPage = { evaluate: async () => true };
   await assert.rejects(async () => {
     await verifyOfficialAccountManagerLogin(mockPage);
   }, /Official Account Manager is not logged in/);
 });
 
-// 37. verifyAllProvisionedAssets passes when all 9 real assets verified
-test('37. verifyAllProvisionedAssets passes on complete valid real assets', () => {
-  const validAssets = {
-    loginChannelId: '2010941735',
-    messagingChannelId: '2010941440',
-    provider: 'Civic Tech Inc.',
-    linkedBotVerified: true,
-    liffId: '2010941735-abcdefgh',
-    botPromptVerified: true,
-    moduleModeVerified: true,
-    tokenAcquired: true
-  };
-  assert.equal(verifyAllProvisionedAssets(validAssets), true);
-});
-
-// 38. verifyAllProvisionedAssets throws when any asset check fails
-test('38. verifyAllProvisionedAssets throws when any asset condition fails', () => {
-  const incomplete = {
-    loginChannelId: '2010941735',
-    messagingChannelId: '2010941440',
-    provider: 'Civic Tech Inc.',
-    linkedBotVerified: false // FAIL
-  };
-  assert.throws(() => {
-    verifyAllProvisionedAssets(incomplete);
-  }, /Post-Verification FAIL/);
+// 38. Built-in real UI adapters exist
+test('38. Built-in real UI adapters are defined and callable functions', () => {
+  assert.equal(typeof createLoginChannelViaDom, 'function');
+  assert.equal(typeof createMessagingChannelViaDom, 'function');
+  assert.equal(typeof linkMessagingBotViaDom, 'function');
+  assert.equal(typeof createLiffViaDom, 'function');
+  assert.equal(typeof issueTokenViaDom, 'function');
+  assert.equal(typeof reReadAndVerifyAllAssets, 'function');
 });
 
 // 39. executeLineProvisioning CDP failure aborts with 0 writes
@@ -436,26 +430,8 @@ await asyncTest('40. executeLineProvisioning aborts on Provider mismatch with wr
   }, /PROVIDER_MISMATCH/);
 });
 
-// 41. executeLineProvisioning requires real UI adapter in live execute mode
-await asyncTest('41. executeLineProvisioning throws REAL_UI_ADAPTER_REQUIRED in live mode without adapter', async () => {
-  const mockDevPage = { evaluate: async () => 'Civic Tech Inc.' };
-  const mockManagerPage = { evaluate: async () => false };
-  await assert.rejects(async () => {
-    await executeLineProvisioning(
-      { execute: true, dryRun: false },
-      {
-        page: mockDevPage,
-        managerPage: mockManagerPage,
-        providerName: 'Civic Tech Inc.',
-        existingChannels: [],
-        logger: () => {}
-      }
-    );
-  }, /REAL_UI_ADAPTER_REQUIRED/);
-});
-
-// 42. executeLineProvisioning throws ID_ACQUISITION_FAILED if real ID missing after creation
-await asyncTest('42. executeLineProvisioning throws ID_ACQUISITION_FAILED if real ID missing after creation', async () => {
+// 41. executeLineProvisioning throws ID_ACQUISITION_FAILED if real ID missing after creation
+await asyncTest('41. executeLineProvisioning throws ID_ACQUISITION_FAILED if real ID missing after creation', async () => {
   const mockDevPage = { evaluate: async () => 'Civic Tech Inc.' };
   const mockManagerPage = { evaluate: async () => false };
   const badAdapter = async () => ({ channelId: null, writeCount: 1 });
@@ -474,8 +450,8 @@ await asyncTest('42. executeLineProvisioning throws ID_ACQUISITION_FAILED if rea
   }, /ID_ACQUISITION_FAILED/);
 });
 
-// 43. executeLineProvisioning default dry-run executes 0 writes
-await asyncTest('43. executeLineProvisioning in default dry-run mode executes 0 external writes', async () => {
+// 42. executeLineProvisioning default dry-run executes 0 writes
+await asyncTest('42. executeLineProvisioning in default dry-run mode executes 0 external writes', async () => {
   const res = await executeLineProvisioning(
     {},
     { providerName: 'Civic Tech Inc.', logger: () => {} }
@@ -486,8 +462,8 @@ await asyncTest('43. executeLineProvisioning in default dry-run mode executes 0 
   assert.equal(res.downstreamAllowed, false);
 });
 
-// 44. executeLineProvisioning verify-only executes 0 writes
-await asyncTest('44. executeLineProvisioning in --verify-only mode executes 0 external writes', async () => {
+// 43. executeLineProvisioning --verify-only returns PRECHECK_READY when assets missing
+await asyncTest('43. executeLineProvisioning in --verify-only returns PRECHECK_READY when assets missing', async () => {
   const mockDevPage = { evaluate: async () => 'Civic Tech Inc.' };
   const mockManagerPage = { evaluate: async () => false };
   const res = await executeLineProvisioning(
@@ -496,6 +472,42 @@ await asyncTest('44. executeLineProvisioning in --verify-only mode executes 0 ex
       page: mockDevPage,
       managerPage: mockManagerPage,
       providerName: 'Civic Tech Inc.',
+      existingChannels: [], // missing
+      logger: () => {}
+    }
+  );
+  assert.equal(res.writeCount, 0);
+  assert.equal(res.mode, 'VERIFY_ONLY');
+  assert.equal(res.status, 'PRECHECK_READY');
+  assert.equal(res.downstreamAllowed, false);
+});
+
+// 44. executeLineProvisioning --verify-only returns ASSETS_VERIFIED when all assets exist
+await asyncTest('44. executeLineProvisioning in --verify-only returns ASSETS_VERIFIED when all assets exist', async () => {
+  const existingChannels = [
+    { channelId: '2010941735', name: 'POSTING MAP MIE-03', type: 'LINE_LOGIN' },
+    { channelId: '2010941440', name: 'POSTING MAP MIE-03', type: 'MESSAGING_API' }
+  ];
+  const existingLiffs = [
+    { liffId: '2010941735-mie03liff', name: 'POSTING MAP MIE-03', endpointUrl: 'https://mie-03.postingmap.jp/' }
+  ];
+  const tokenStatus = {
+    isIssued: true,
+    token: 'existing_token_abcdef1234567890',
+    canRetrieve: true
+  };
+  const mockDevPage = { evaluate: async () => 'Civic Tech Inc.' };
+  const mockManagerPage = { evaluate: async () => false };
+
+  const res = await executeLineProvisioning(
+    { verifyOnly: true, execute: false, dryRun: false },
+    {
+      page: mockDevPage,
+      managerPage: mockManagerPage,
+      providerName: 'Civic Tech Inc.',
+      existingChannels,
+      existingLiffs,
+      tokenStatus,
       logger: () => {}
     }
   );
@@ -505,7 +517,7 @@ await asyncTest('44. executeLineProvisioning in --verify-only mode executes 0 ex
   assert.equal(res.downstreamAllowed, false);
 });
 
-// 45. executeLineProvisioning reuses all 3 existing assets when present
+// 45. executeLineProvisioning reuses all 3 existing assets when present in execute
 await asyncTest('45. executeLineProvisioning reuses all 3 existing assets when present', async () => {
   const existingChannels = [
     { channelId: '2010941735', name: 'POSTING MAP MIE-03', type: 'LINE_LOGIN' },
@@ -520,6 +532,13 @@ await asyncTest('45. executeLineProvisioning reuses all 3 existing assets when p
     canRetrieve: true
   };
   const mockLinkAdapter = async () => ({ writeCount: 0, verified: true });
+  const mockReReadAdapter = async () => ({
+    verified: true,
+    loginChannelId: '2010941735',
+    messagingChannelId: '2010941440',
+    liffId: '2010941735-mie03liff',
+    token: 'existing_token_abcdef1234567890'
+  });
 
   const res = await executeLineProvisioning(
     { execute: true, dryRun: false },
@@ -531,6 +550,7 @@ await asyncTest('45. executeLineProvisioning reuses all 3 existing assets when p
       existingLiffs,
       tokenStatus,
       linkBotAdapter: mockLinkAdapter,
+      reReadAndVerifyAllAssets: mockReReadAdapter,
       logger: () => {}
     }
   );
@@ -657,6 +677,104 @@ await asyncTest('50. Zero fake/default fallback IDs: uncreated assets result in 
   assert.notEqual(res.messagingChannelId, '2010941440');
 });
 
+// 51. CLI wiring: built-in real adapters selected by default when no deps adapter provided
+await asyncTest('51. CLI wiring: built-in real adapters selected by default when no deps adapter provided', async () => {
+  let devPageCalled = false;
+  const mockDevPage = {
+    evaluate: async () => 'Civic Tech Inc.',
+    goto: async (url) => {
+      if (url.includes('channel/new')) devPageCalled = true;
+    },
+    waitForLoadState: async () => {},
+    locator: () => ({
+      filter: () => ({ first: () => ({ click: async () => {} }) }),
+      first: () => ({
+        fill: async () => {},
+        click: async () => {},
+        isVisible: async () => false,
+        check: async () => {}
+      })
+    }),
+    waitForNavigation: async () => {},
+    url: () => 'https://developers.line.biz/console/channel/2026101301'
+  };
+  const mockManagerPage = { evaluate: async () => false };
+
+  // Call with execute=true and NO custom adapters -> built-in createLoginChannelViaDom will be called
+  const mockLinkAdapter = async () => ({ writeCount: 0, verified: true });
+  const mockReReadAdapter = async () => ({
+    verified: true,
+    loginChannelId: '2026101301',
+    messagingChannelId: '2026101302',
+    liffId: '2026101301-liffhash',
+    token: 'real_issued_channel_token_1234567890'
+  });
+  const mockMessagingAdapter = async () => ({ channelId: '2026101302', writeCount: 1 });
+  const mockLiffAdapter = async () => ({ liffId: '2026101301-liffhash', writeCount: 1 });
+  const mockTokenAdapter = async () => ({ token: 'real_issued_channel_token_1234567890', writeCount: 1 });
+
+  const res = await executeLineProvisioning(
+    { execute: true, dryRun: false },
+    {
+      page: mockDevPage,
+      managerPage: mockManagerPage,
+      providerName: 'Civic Tech Inc.',
+      existingChannels: [],
+      // createLoginChannelAdapter omitted to test built-in default wiring!
+      createMessagingChannelAdapter: mockMessagingAdapter,
+      linkBotAdapter: mockLinkAdapter,
+      createLiffAdapter: mockLiffAdapter,
+      issueTokenAdapter: mockTokenAdapter,
+      reReadAndVerifyAllAssets: mockReReadAdapter,
+      logger: () => {}
+    }
+  );
+
+  assert.equal(devPageCalled, true, 'Built-in createLoginChannelViaDom must be invoked when no deps adapter is provided');
+  assert.equal(res.loginChannelId, '2026101301');
+});
+
+// 52. Post-Verification Live DOM re-reading throws on mismatch
+await asyncTest('52. Live DOM post-verification throws on asset mismatch', async () => {
+  const badReReadAdapter = async () => ({
+    verified: false,
+    loginChannelId: null,
+    messagingChannelId: null,
+    liffId: null,
+    token: null
+  });
+
+  const existingChannels = [
+    { channelId: '2010941735', name: 'POSTING MAP MIE-03', type: 'LINE_LOGIN' },
+    { channelId: '2010941440', name: 'POSTING MAP MIE-03', type: 'MESSAGING_API' }
+  ];
+  const existingLiffs = [
+    { liffId: '2010941735-mie03liff', name: 'POSTING MAP MIE-03', endpointUrl: 'https://mie-03.postingmap.jp/' }
+  ];
+  const tokenStatus = {
+    isIssued: true,
+    token: 'existing_token_abcdef1234567890',
+    canRetrieve: true
+  };
+
+  await assert.rejects(async () => {
+    await executeLineProvisioning(
+      { execute: true, dryRun: false },
+      {
+        page: { evaluate: async () => 'Civic Tech Inc.' },
+        managerPage: { evaluate: async () => false },
+        providerName: 'Civic Tech Inc.',
+        existingChannels,
+        existingLiffs,
+        tokenStatus,
+        linkBotAdapter: async () => ({ writeCount: 0, verified: true }),
+        reReadAndVerifyAllAssets: badReReadAdapter,
+        logger: () => {}
+      }
+    );
+  }, /Post-Verification FAIL/);
+});
+
 console.log('\n====================================================');
-console.log(`📊 TEST SUITE SUMMARY: ${passCount} / 50 PASSED`);
+console.log(`📊 TEST SUITE SUMMARY: ${passCount} / 52 PASSED`);
 console.log('====================================================\n');
