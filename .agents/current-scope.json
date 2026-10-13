@@ -2,5 +2,6 @@
   ".agents/current-scope.json",
   "scripts/provision-domain.mjs",
   "tests/test_provision_domain.mjs",
-  ".agents/agents/deployer/agent.md"
+  ".agents/agents/deployer/agent.md",
+  "CNAME"
 ]
