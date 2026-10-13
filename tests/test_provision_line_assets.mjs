@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
+  OA_CATEGORY_CONTRACT,
   DEFAULT_CONFIG,
   parseArgs,
   resolveExitCode,
@@ -28,6 +29,7 @@ import {
   verifyBotSettings,
   verifyPagesAndCnamePrecondition,
   verifyOfficialAccountManagerLogin,
+  verifyOaCreateRouteUrl,
   createLoginChannelViaDom,
   createMessagingChannelViaDom,
   linkMessagingBotViaDom,
@@ -888,6 +890,7 @@ await asyncTest('56. createMessagingChannelViaDom throws PROVIDER_SELECT_NOT_FOU
     waitForLoadState: async () => {},
     locator: (sel) => ({
       first: () => ({
+        getAttribute: async () => 'https://entry.line.biz/form/entry/unverified',
         fill: async () => {},
         click: async () => {},
         isVisible: async () => {
@@ -895,21 +898,25 @@ await asyncTest('56. createMessagingChannelViaDom throws PROVIDER_SELECT_NOT_FOU
           if (typeof sel === 'string' && (sel.includes('provider') || sel.includes('Civic Tech Inc.'))) return false;
           return true;
         },
-        evaluate: async () => false
-      }),
-      count: async () => 2,
-      nth: () => ({
         evaluate: async () => true
       })
     }),
+    evaluate: async (fn) => {
+      const src = fn.toString();
+      if (src.includes('category_group')) {
+        return { mainText: 'ウェブサービス', subText: 'ウェブサービス(ビジネス)' };
+      }
+      if (src.includes('checkValidity')) return true;
+      return '';
+    },
     waitForTimeout: async () => {}
   };
 
   await assert.rejects(async () => {
     await createMessagingChannelViaDom({
       accountName: 'POSTING MAP MIE-03',
-      categoryMain: 'サービス',
-      categorySub: 'その他サービス',
+      categoryMain: 'ウェブサービス',
+      categorySub: 'ウェブサービス(ビジネス)',
       providerName: 'Civic Tech Inc.',
       managerPage: mockManagerPage,
       devPage: { goto: async () => {}, waitForLoadState: async () => {} },
@@ -923,27 +930,31 @@ await asyncTest('57. createMessagingChannelViaDom throws PROVIDER_MISMATCH_BEFOR
   const mockManagerPage = {
     goto: async () => {},
     waitForLoadState: async () => {},
-    locator: (sel) => ({
+    locator: () => ({
       first: () => ({
+        getAttribute: async () => 'https://entry.line.biz/form/entry/unverified',
         fill: async () => {},
         click: async () => {},
         isVisible: async () => true,
         evaluate: async () => true
-      }),
-      count: async () => 2,
-      nth: () => ({
-        evaluate: async () => true
       })
     }),
     waitForTimeout: async () => {},
-    evaluate: async () => 'Wrong Provider Inc.' // Mismatched provider re-read
+    evaluate: async (fn) => {
+      const src = fn.toString();
+      if (src.includes('category_group')) {
+        return { mainText: 'ウェブサービス', subText: 'ウェブサービス(ビジネス)' };
+      }
+      if (src.includes('checkValidity')) return true;
+      return 'Wrong Provider Inc.'; // Mismatched provider re-read
+    }
   };
 
   await assert.rejects(async () => {
     await createMessagingChannelViaDom({
       accountName: 'POSTING MAP MIE-03',
-      categoryMain: 'サービス',
-      categorySub: 'その他サービス',
+      categoryMain: 'ウェブサービス',
+      categorySub: 'ウェブサービス(ビジネス)',
       providerName: 'Civic Tech Inc.',
       managerPage: mockManagerPage,
       devPage: { goto: async () => {}, waitForLoadState: async () => {} },
@@ -1032,6 +1043,362 @@ await asyncTest('60. Browser evaluate selector safety: no :has-text pseudo-selec
   assert.equal(violations.length, 0, `No :has-text permitted in querySelector: ${JSON.stringify(violations)}`);
 });
 
+// 61. Do NOT use manager.line.biz/account/create direct route
+await asyncTest('61. Official Account creation does NOT use deprecated manager.line.biz/account/create', async () => {
+  const code = fs.readFileSync('scripts/provision-line-assets.mjs', 'utf8');
+  assert.equal(code.includes('manager.line.biz/account/create'), false, 'Deprecated manager.line.biz/account/create must be completely removed');
+
+  await assert.rejects(async () => {
+    verifyOaCreateRouteUrl('https://manager.line.biz/account/create');
+  }, /OA_CREATE_ROUTE_MISMATCH/);
+});
+
+// 62. Official Account creation route resolves href from manager.line.biz and enforces entry.line.biz/form/entry/unverified Exact Gate
+await asyncTest('62. entry.line.biz/form/entry/unverified route gate passes on exact match and halts on unexpected URL', async () => {
+  const resolved = verifyOaCreateRouteUrl('https://entry.line.biz/form/entry/unverified');
+  assert.equal(resolved, 'https://entry.line.biz/form/entry/unverified');
+
+  await assert.rejects(async () => {
+    verifyOaCreateRouteUrl('https://entry.line.biz/form/entry/other');
+  }, /OA_CREATE_ROUTE_MISMATCH/);
+
+  await assert.rejects(async () => {
+    verifyOaCreateRouteUrl('https://evil.example.com/form/entry/unverified');
+  }, /OA_CREATE_ROUTE_MISMATCH/);
+
+  let visitedUrls = [];
+  let submitClicked = false;
+  const mockBadRoutePage = {
+    goto: async (u) => visitedUrls.push(u),
+    waitForLoadState: async () => {},
+    locator: () => ({
+      first: () => ({
+        getAttribute: async () => 'https://manager.line.biz/wrong/path',
+        click: async () => { submitClicked = true; }
+      })
+    })
+  };
+
+  await assert.rejects(async () => {
+    await createMessagingChannelViaDom({
+      accountName: 'POSTING MAP MIE-03',
+      managerPage: mockBadRoutePage,
+      devPage: {},
+      logger: () => {}
+    });
+  }, /OA_CREATE_ROUTE_MISMATCH/);
+  assert.deepEqual(visitedUrls, ['https://manager.line.biz/']);
+  assert.equal(submitClicked, false);
+});
+
+// 63. Do NOT touch legalCountryCode or use nth(0)/nth(1) index-based category selection
+await asyncTest('63. Category selection never touches legalCountryCode and never uses nth(0)/nth(1)', async () => {
+  const code = fs.readFileSync('scripts/provision-line-assets.mjs', 'utf8');
+  assert.equal(code.includes('.nth(0)'), false, 'nth(0) index selection is prohibited');
+  assert.equal(code.includes('.nth(1)'), false, 'nth(1) index selection is prohibited');
+  assert.equal(code.includes('legalCountryCode'), false, 'legalCountryCode must not be modified or targeted');
+
+  let queriedSelectors = [];
+  const mockManagerPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    locator: (sel) => {
+      queriedSelectors.push(sel);
+      return {
+        first: () => ({
+          getAttribute: async () => 'https://entry.line.biz/form/entry/unverified',
+          fill: async () => {},
+          click: async () => {},
+          isVisible: async () => sel.includes('Messaging APIを利用する') ? false : true,
+          evaluate: async () => true
+        })
+      };
+    },
+    waitForTimeout: async () => {},
+    evaluate: async (fn) => {
+      const src = fn.toString();
+      if (src.includes('category_group')) {
+        return { mainText: 'ウェブサービス', subText: 'ウェブサービス(ビジネス)' };
+      }
+      if (src.includes('checkValidity')) return true;
+      return '';
+    }
+  };
+  const mockDevPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    evaluate: async () => [{ name: 'POSTING MAP MIE-03', type: 'MESSAGING_API', channelId: '2026101499' }]
+  };
+
+  await createMessagingChannelViaDom({
+    accountName: 'POSTING MAP MIE-03',
+    managerPage: mockManagerPage,
+    devPage: mockDevPage,
+    logger: () => {}
+  });
+
+  assert.equal(queriedSelectors.some(s => s.includes('legalCountryCode')), false, 'Must never query legalCountryCode');
+  assert.equal(queriedSelectors.includes('select'), false, 'Must not query generic select without name attribute for OA categories');
+});
+
+// 64. Exact selector select[name="category_group"] required and verified
+await asyncTest('64. Main category uses exact selector select[name="category_group"] and halts if missing', async () => {
+  let queriedSelectors = [];
+  const mockManagerPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    locator: (sel) => {
+      queriedSelectors.push(sel);
+      return {
+        first: () => ({
+          getAttribute: async () => 'https://entry.line.biz/form/entry/unverified',
+          fill: async () => {},
+          isVisible: async () => sel === 'select[name="category_group"]' ? false : true
+        })
+      };
+    }
+  };
+
+  await assert.rejects(async () => {
+    await createMessagingChannelViaDom({
+      accountName: 'POSTING MAP MIE-03',
+      managerPage: mockManagerPage,
+      devPage: {},
+      logger: () => {}
+    });
+  }, /OA_CATEGORY_SELECT_NOT_FOUND.*category_group/);
+  assert.ok(queriedSelectors.includes('select[name="category_group"]'));
+});
+
+// 65. Exact selector select[name="category"] required and verified
+await asyncTest('65. Sub category uses exact selector select[name="category"] and halts if missing', async () => {
+  let queriedSelectors = [];
+  const mockManagerPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+    locator: (sel) => {
+      queriedSelectors.push(sel);
+      return {
+        first: () => ({
+          getAttribute: async () => 'https://entry.line.biz/form/entry/unverified',
+          fill: async () => {},
+          isVisible: async () => sel === 'select[name="category"]' ? false : true,
+          evaluate: async () => true
+        })
+      };
+    }
+  };
+
+  await assert.rejects(async () => {
+    await createMessagingChannelViaDom({
+      accountName: 'POSTING MAP MIE-03',
+      managerPage: mockManagerPage,
+      devPage: {},
+      logger: () => {}
+    });
+  }, /OA_CATEGORY_SELECT_NOT_FOUND.*select\[name="category"\]/);
+  assert.ok(queriedSelectors.includes('select[name="category"]'));
+});
+
+// 66. Current Contract Exact Label match ("ウェブサービス" / "ウェブサービス(ビジネス)") by option text, not value alone
+await asyncTest('66. Current Contract Exact Labels ("ウェブサービス" / "ウェブサービス(ビジネス)") matched strictly by option text', async () => {
+  assert.equal(DEFAULT_CONFIG.oaCategoryMain, 'ウェブサービス');
+  assert.equal(DEFAULT_CONFIG.oaCategorySub, 'ウェブサービス(ビジネス)');
+  assert.equal(OA_CATEGORY_CONTRACT.categoryMain, 'ウェブサービス');
+  assert.equal(OA_CATEGORY_CONTRACT.categorySub, 'ウェブサービス(ビジネス)');
+
+  const fakeMainSelectEl = {
+    name: 'category_group',
+    value: '',
+    options: [
+      { value: '71', text: '別のラベル' }, // Same value 71, wrong text -> must NOT be selected by value alone!
+      { value: '71', text: 'ウェブサービス' }
+    ],
+    dispatchEvent: () => {}
+  };
+  const fakeSubSelectEl = {
+    name: 'category',
+    value: '',
+    options: [
+      { value: '591', text: 'ウェブサービス（ビジネス）' }, // Full-width parentheses -> must NOT match half-width contract!
+      { value: '591', text: 'ウェブサービス(ビジネス)' }
+    ],
+    dispatchEvent: () => {}
+  };
+
+  let submitClicked = false;
+  const mockManagerPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+    locator: (sel) => ({
+      first: () => ({
+        getAttribute: async () => 'https://entry.line.biz/form/entry/unverified',
+        fill: async () => {},
+        click: async () => {
+          if (sel.includes('button[type="submit"]')) submitClicked = true;
+        },
+        isVisible: async () => sel.includes('Messaging APIを利用する') ? false : true,
+        evaluate: async (fn, targetText) => {
+          if (sel === 'select[name="category_group"]') return fn(fakeMainSelectEl, targetText);
+          if (sel === 'select[name="category"]') return fn(fakeSubSelectEl, targetText);
+          return true;
+        }
+      })
+    }),
+    evaluate: async (fn) => {
+      const src = fn.toString();
+      if (src.includes('category_group')) {
+        return { mainText: 'ウェブサービス', subText: 'ウェブサービス(ビジネス)' };
+      }
+      if (src.includes('checkValidity')) return true;
+      return '';
+    }
+  };
+  const mockDevPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    evaluate: async () => [{ name: 'POSTING MAP MIE-03', type: 'MESSAGING_API', channelId: '2026101488' }]
+  };
+
+  const res = await createMessagingChannelViaDom({
+    accountName: 'POSTING MAP MIE-03',
+    managerPage: mockManagerPage,
+    devPage: mockDevPage,
+    logger: () => {}
+  });
+  assert.equal(res.channelId, '2026101488');
+  assert.equal(submitClicked, true);
+});
+
+// 67. Label mismatch or pre-submit selectedOptions[0].text re-read mismatch halts BEFORE submit (submit = 0)
+await asyncTest('67. Label mismatch or pre-submit re-read mismatch halts with HARD STOP before submit (submit = 0)', async () => {
+  let submitCount = 0;
+
+  // Case A: Option text mismatch (only full-width parentheses in UI when half-width expected)
+  const fakeSubSelectFullWidthOnly = {
+    name: 'category',
+    value: '591',
+    options: [
+      { value: '591', text: 'ウェブサービス（ビジネス）' } // value=591 matches, but text is full-width! Must NOT select by value!
+    ],
+    dispatchEvent: () => {}
+  };
+  const mockPageOptionMismatch = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+    locator: (sel) => ({
+      first: () => ({
+        getAttribute: async () => 'https://entry.line.biz/form/entry/unverified',
+        fill: async () => {},
+        click: async () => {
+          if (sel.includes('button[type="submit"]')) submitCount++;
+        },
+        isVisible: async () => true,
+        evaluate: async (fn, targetText) => {
+          if (sel === 'select[name="category_group"]') return true;
+          if (sel === 'select[name="category"]') return fn(fakeSubSelectFullWidthOnly, targetText);
+          return true;
+        }
+      })
+    })
+  };
+
+  await assert.rejects(async () => {
+    await createMessagingChannelViaDom({
+      accountName: 'POSTING MAP MIE-03',
+      categoryMain: 'ウェブサービス',
+      categorySub: 'ウェブサービス(ビジネス)',
+      managerPage: mockPageOptionMismatch,
+      devPage: {},
+      logger: () => {}
+    });
+  }, /OA_CATEGORY_MISMATCH/);
+  assert.equal(submitCount, 0, 'Submit must NEVER be clicked on option label mismatch');
+
+  // Case B: Pre-submit re-read mismatch on selectedOptions[0].text
+  const mockPageReReadMismatch = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+    locator: (sel) => ({
+      first: () => ({
+        getAttribute: async () => 'https://entry.line.biz/form/entry/unverified',
+        fill: async () => {},
+        click: async () => {
+          if (sel.includes('button[type="submit"]')) submitCount++;
+        },
+        isVisible: async () => true,
+        evaluate: async () => true
+      })
+    }),
+    evaluate: async (fn) => {
+      const src = fn.toString();
+      if (src.includes('category_group')) {
+        return { mainText: 'ウェブサービス', subText: 'ウェブサービス(その他)' }; // Mismatch on re-read!
+      }
+      return true;
+    }
+  };
+
+  await assert.rejects(async () => {
+    await createMessagingChannelViaDom({
+      accountName: 'POSTING MAP MIE-03',
+      categoryMain: 'ウェブサービス',
+      categorySub: 'ウェブサービス(ビジネス)',
+      managerPage: mockPageReReadMismatch,
+      devPage: {},
+      logger: () => {}
+    });
+  }, /OA_CATEGORY_REREAD_MISMATCH/);
+  assert.equal(submitCount, 0, 'Submit must NEVER be clicked on category re-read mismatch');
+});
+
+// 68. Form Validity Gate: form.checkValidity() === false halts BEFORE submit (submit = 0, writeCount = 0)
+await asyncTest('68. Form Validity Gate: form.checkValidity() === false halts with OA_FORM_INVALID before submit (submit = 0)', async () => {
+  let submitCount = 0;
+  const mockInvalidFormPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    waitForTimeout: async () => {},
+    locator: (sel) => ({
+      first: () => ({
+        getAttribute: async () => 'https://entry.line.biz/form/entry/unverified',
+        fill: async () => {},
+        click: async () => {
+          if (sel.includes('button[type="submit"]')) submitCount++;
+        },
+        isVisible: async () => true,
+        evaluate: async () => true
+      })
+    }),
+    evaluate: async (fn) => {
+      const src = fn.toString();
+      if (src.includes('category_group')) {
+        return { mainText: 'ウェブサービス', subText: 'ウェブサービス(ビジネス)' };
+      }
+      if (src.includes('checkValidity')) {
+        return false; // form.checkValidity() === false!
+      }
+      return '';
+    }
+  };
+
+  await assert.rejects(async () => {
+    await createMessagingChannelViaDom({
+      accountName: 'POSTING MAP MIE-03',
+      categoryMain: 'ウェブサービス',
+      categorySub: 'ウェブサービス(ビジネス)',
+      managerPage: mockInvalidFormPage,
+      devPage: {},
+      logger: () => {}
+    });
+  }, /OA_FORM_INVALID/);
+  assert.equal(submitCount, 0, 'Submit must NEVER be clicked when form.checkValidity() is false');
+});
+
 console.log('\n====================================================');
-console.log(`📊 TEST SUITE SUMMARY: ${passCount} / 60 PASSED`);
+console.log(`📊 TEST SUITE SUMMARY: ${passCount} / 68 PASSED`);
 console.log('====================================================\n');

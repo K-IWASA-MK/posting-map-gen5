@@ -41,6 +41,13 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { chromium } from 'playwright';
 
+export const OA_CATEGORY_CONTRACT = {
+  categoryMain: 'ウェブサービス',
+  categorySub: 'ウェブサービス(ビジネス)',
+  observedMainValue: '71',
+  observedSubValue: '591'
+};
+
 export const DEFAULT_CONFIG = {
   providerName: 'Civic Tech Inc.',
   providerId: '2005181930',
@@ -55,8 +62,8 @@ export const DEFAULT_CONFIG = {
   cdpUrl: 'http://127.0.0.1:9222',
   repo: 'K-IWASA-MK/posting-map-mie-03',
   contactEmail: 'postingareamap@gmail.com',
-  oaCategoryMain: null,
-  oaCategorySub: null
+  oaCategoryMain: OA_CATEGORY_CONTRACT.categoryMain,
+  oaCategorySub: OA_CATEGORY_CONTRACT.categorySub
 };
 
 /**
@@ -624,6 +631,30 @@ export async function createLoginChannelViaDom({
 }
 
 /**
+ * Official Account 作成導線 URL 検証ゲート
+ * manager.line.biz 上の「作成」リンクから取得した遷移先が
+ * host = entry.line.biz かつ path = /form/entry/unverified であることを厳格検証する。
+ */
+export function verifyOaCreateRouteUrl(rawHref) {
+  if (!rawHref || typeof rawHref !== 'string') {
+    throw new Error('🛑 [HARD STOP: OA_CREATE_ROUTE_MISMATCH] Official Account creation link href is missing on manager.line.biz.');
+  }
+  let parsed;
+  try {
+    parsed = new URL(rawHref, 'https://manager.line.biz/');
+  } catch (e) {
+    throw new Error(`🛑 [HARD STOP: OA_CREATE_ROUTE_MISMATCH] Invalid Official Account creation URL: [${rawHref}].`);
+  }
+  if (parsed.host !== 'entry.line.biz' || parsed.pathname !== '/form/entry/unverified') {
+    throw new Error(
+      `🛑 [HARD STOP: OA_CREATE_ROUTE_MISMATCH] Unexpected Official Account creation URL: host=[${parsed.host}], path=[${parsed.pathname}]. ` +
+      'Expected host=[entry.line.biz], path=[/form/entry/unverified].'
+    );
+  }
+  return parsed.toString();
+}
+
+/**
  * Official Account & Messaging API Channel 実作成 (Playwright DOM 操作)
  */
 export async function createMessagingChannelViaDom({
@@ -636,58 +667,128 @@ export async function createMessagingChannelViaDom({
   devPage,
   logger = console.log
 }) {
-  logger(`   ➕ [Built-in UI] Navigating to create Official Account on manager.line.biz: [${accountName}]...`);
-  await managerPage.goto('https://manager.line.biz/account/create');
-  await managerPage.waitForLoadState('networkidle').catch(() => {});
-
-  // アカウント名入力
-  const nameInput = managerPage.locator('input[name*="name"], input[placeholder*="アカウント名"]').first();
-  await nameInput.fill(accountName);
-
-  // メールアドレス入力
-  const emailInput = managerPage.locator('input[type="email"]').first();
-  if (await emailInput.isVisible()) {
-    await emailInput.fill(email);
-  }
-
-  // ── Item 5: Official Account業種のindex決め打ち撤廃 ──
-  // Current Contractに承認済み値がある場合だけExact選択。未定義なら勝手に決定せずHARD STOPしてMASTERへ報告。
+  // ── Current Contract 業種定義チェック (未定義時は一切遷移・書込せず即 HARD STOP) ──
   if (!categoryMain || !categorySub || typeof categoryMain !== 'string' || typeof categorySub !== 'string') {
     throw new Error('🛑 [HARD STOP: OA_CATEGORY_UNDEFINED] Official Account industry category (categoryMain, categorySub) is undefined in contract. Please obtain explicit MASTER approval.');
   }
 
-  const categorySelects = managerPage.locator('select');
-  const selectCount = await categorySelects.count();
-  if (selectCount >= 1) {
-    const mainSelect = categorySelects.nth(0);
-    const selected = await mainSelect.evaluate((sel, targetText) => {
-      const opt = Array.from(sel.options).find(o => o.text.trim() === targetText.trim());
-      if (opt) {
-        sel.value = opt.value;
-        sel.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      }
-      return false;
-    }, categoryMain);
-    if (!selected) {
-      throw new Error(`🛑 [HARD STOP: OA_CATEGORY_MISMATCH] Category [${categoryMain}] not found in main category select.`);
+  // ── 1. Official Account作成画面の正式導線解決 (manager.line.biz → 「作成」リンク href → entry.line.biz/form/entry/unverified) ──
+  logger(`   ➕ [Built-in UI] Resolving Official Account creation link on manager.line.biz for [${accountName}]...`);
+  await managerPage.goto('https://manager.line.biz/');
+  await managerPage.waitForLoadState('networkidle').catch(() => {});
+
+  let rawCreateHref = null;
+  const createLink = managerPage.locator('a[href*="entry.line.biz"], a:has-text("作成")').first();
+  if (createLink && typeof createLink.getAttribute === 'function') {
+    rawCreateHref = await createLink.getAttribute('href').catch(() => null);
+  }
+  if (!rawCreateHref && typeof managerPage.evaluate === 'function') {
+    rawCreateHref = await managerPage.evaluate(() => {
+      const links = Array.from(document.querySelectorAll('a'));
+      const found = links.find(a => (a.innerText || '').trim() === '作成' || (a.getAttribute('href') || '').includes('entry.line.biz'));
+      return found ? found.getAttribute('href') : null;
+    });
+  }
+
+  const verifiedCreateUrl = verifyOaCreateRouteUrl(rawCreateHref);
+  logger(`      Navigating to verified Official Account creation form: [${verifiedCreateUrl}]...`);
+  await managerPage.goto(verifiedCreateUrl);
+  await managerPage.waitForLoadState('networkidle').catch(() => {});
+
+  if (typeof managerPage.url === 'function') {
+    const landedUrl = managerPage.url();
+    if (landedUrl) {
+      verifyOaCreateRouteUrl(landedUrl);
     }
   }
-  if (selectCount >= 2) {
-    await managerPage.waitForTimeout(500);
-    const subSelect = categorySelects.nth(1);
-    const selected = await subSelect.evaluate((sel, targetText) => {
-      const opt = Array.from(sel.options).find(o => o.text.trim() === targetText.trim());
-      if (opt) {
-        sel.value = opt.value;
-        sel.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      }
-      return false;
-    }, categorySub);
-    if (!selected) {
-      throw new Error(`🛑 [HARD STOP: OA_CATEGORY_MISMATCH] Sub-category [${categorySub}] not found in sub category select.`);
+
+  // アカウント名入力 (bot.name)
+  const nameInput = managerPage.locator('input[name="bot.name"], input[name*="name"], input[placeholder*="アカウント名"]').first();
+  await nameInput.fill(accountName);
+
+  // メールアドレス入力 (account.email / type="mail" / type="email")
+  const emailInput = managerPage.locator('input[name="account.email"], input[type="email"], input[type="mail"]').first();
+  if (await emailInput.isVisible()) {
+    await emailInput.fill(email);
+  }
+
+  // ── 2 & 3. 業種 select を name 属性で固定 & Exact Label 一致選択 (順番依存・他select干渉禁止) ──
+  const mainSelect = managerPage.locator('select[name="category_group"]').first();
+  if (!await mainSelect.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: OA_CATEGORY_SELECT_NOT_FOUND] Cannot locate select[name="category_group"] in Official Account creation form.');
+  }
+  const mainSelected = await mainSelect.evaluate((sel, targetText) => {
+    if (!sel || (sel.name && sel.name !== 'category_group')) return false;
+    const opt = Array.from(sel.options || []).find(o => o.text.trim() === targetText.trim());
+    if (opt) {
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      sel.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
     }
+    return false;
+  }, categoryMain);
+  if (!mainSelected) {
+    throw new Error(`🛑 [HARD STOP: OA_CATEGORY_MISMATCH] Category [${categoryMain}] not found in select[name="category_group"].`);
+  }
+
+  if (typeof managerPage.waitForTimeout === 'function') {
+    await managerPage.waitForTimeout(500);
+  }
+
+  const subSelect = managerPage.locator('select[name="category"]').first();
+  if (!await subSelect.isVisible({ timeout: 5000 }).catch(() => false)) {
+    throw new Error('🛑 [HARD STOP: OA_CATEGORY_SELECT_NOT_FOUND] Cannot locate select[name="category"] in Official Account creation form.');
+  }
+  const subSelected = await subSelect.evaluate((sel, targetText) => {
+    if (!sel || (sel.name && sel.name !== 'category')) return false;
+    const opt = Array.from(sel.options || []).find(o => o.text.trim() === targetText.trim());
+    if (opt) {
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      sel.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    }
+    return false;
+  }, categorySub);
+  if (!subSelected) {
+    throw new Error(`🛑 [HARD STOP: OA_CATEGORY_MISMATCH] Sub-category [${categorySub}] not found in select[name="category"].`);
+  }
+
+  // ── 4. 選択後の再読取 (Submit前 Exact Match Gate) ──
+  const reReadCategories = await managerPage.evaluate(() => {
+    const mainSel = document.querySelector('select[name="category_group"]');
+    const subSel = document.querySelector('select[name="category"]');
+    const mainText = (mainSel && mainSel.selectedOptions && mainSel.selectedOptions[0])
+      ? mainSel.selectedOptions[0].text.trim()
+      : '';
+    const subText = (subSel && subSel.selectedOptions && subSel.selectedOptions[0])
+      ? subSel.selectedOptions[0].text.trim()
+      : '';
+    return { mainText, subText };
+  });
+
+  if (
+    !reReadCategories ||
+    reReadCategories.mainText !== categoryMain.trim() ||
+    reReadCategories.subText !== categorySub.trim()
+  ) {
+    throw new Error(
+      `🛑 [HARD STOP: OA_CATEGORY_REREAD_MISMATCH] Selected category re-read mismatch before submit: ` +
+      `category_group=[${reReadCategories ? reReadCategories.mainText : ''}] (expected [${categoryMain.trim()}]), ` +
+      `category=[${reReadCategories ? reReadCategories.subText : ''}] (expected [${categorySub.trim()}]). Submit aborted (writeCount = 0).`
+    );
+  }
+
+  // ── 5. Form Validity Gate (Submit前 form.checkValidity() === true) ──
+  const isFormValid = await managerPage.evaluate(() => {
+    const form = document.querySelector('form');
+    if (!form || typeof form.checkValidity !== 'function') return false;
+    return form.checkValidity() === true;
+  });
+
+  if (isFormValid !== true) {
+    throw new Error('🛑 [HARD STOP: OA_FORM_INVALID] Official Account creation form checkValidity() is false before submit. Submit aborted (writeCount = 0).');
   }
 
   // 作成・確定
