@@ -3,5 +3,6 @@
   "scripts/provision-domain.mjs",
   "tests/test_provision_domain.mjs",
   ".agents/agents/deployer/agent.md",
-  "CNAME"
+  "CNAME",
+  "tests/test_contract_expiry.mjs"
 ]
