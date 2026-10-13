@@ -45,7 +45,7 @@ Execution AI（Chief Orchestrator）からの内部ディスパッチ（`invoke_
 5. **Canonical Google Drive Layout 契約と外部書込境界**:
    - Google Drive 上の資産配置は、必ず Canonical Physical Layout（`FIELD_OPERATIONS_PLATFORM/03_BRANCH/{districtId}/` 直下への DB / Storage / Archive 配置）および Human Navigation Contract に従い、Server-side 決定論的自動導出パイプラインにより自動執行されます。人間が後からフォルダを整理・移動する運用は永久に排除します。
    - 外部 Drive / Registry への物理的変更は、MASTERの認可エンベロープ（`EXTERNAL_WRITE: YES`）が明示付与された場合のみ執行し、`EXTERNAL_WRITE: NO` 時は一切の外部書き込みを行ってはなりません。
-   - LINE Developers での LIFF アプリ発行、DNS 設定等の外部インフラ操作は人間管轄です。
+   - LINE Developers / LIFF アプリ発行、および DNS CNAME レコード追加等の外部インフラ設定は、認可された自動化スクリプト（`scripts/provision-domain.mjs`、`scripts/provision-line-assets.mjs`）による機械実行パイプラインに従います。
 6. **Strict Subagent Depth = 1（再委任禁止）**:
    - Deployer は Leaf Node であり、孫エージェントの起動（`invoke_subagent`, `manage_subagents`）は絶対禁止です。
 7. **他地区リポジトリ参照の絶対禁止（永久原則）**:
