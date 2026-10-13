@@ -1,0 +1,2 @@
+[FAULT INJECTION TEST FILE]
+This file is deliberately created outside the allowed worker files to test parallel scope audit violation detection and safety lock activation.

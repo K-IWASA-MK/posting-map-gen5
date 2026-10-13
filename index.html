@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>POSTING MAP</title>
+  <meta property="og:title" content="POSTING MAP" />
+  <meta property="og:description" content="アイコンをタップ！" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="./active/h-app/assets/icon180-v2.png" />
+  <script src="./data/config.js"></script>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      const liffId = (window.PMS_CLIENT_CONFIG && window.PMS_CLIENT_CONFIG.line && window.PMS_CLIENT_CONFIG.line.liffId) || null;
+      if (!liffId) {
+        console.error("LIFF ID not configured in config.js");
+        document.getElementById("loading-text").innerText = "Config Error: LIFF ID missing";
+        return;
+      }
+      
+      liff.init({ liffId: liffId })
+        .then(() => {
+          if (!liff.isLoggedIn()) {
+            // 未ログイン時はLINE認証へリダイレクト
+            liff.login();
+          } else {
+            // 認証済みであればH-Appへ遷移
+            window.location.replace('./active/h-app/index.html');
+          }
+        })
+        .catch(err => {
+          console.error("LIFF Init Error:", err);
+          document.getElementById("loading-text").innerText = "LIFF Init Error: " + err.message;
+        });
+    });
+  </script>
+</head>
+<body style="background-color: #000000; color: #ffffff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; font-family: sans-serif;">
+  <p id="loading-text" style="opacity: 0.6; font-size: 12px; font-weight: bold; letter-spacing: 0.2em;">POSTING MAP...</p>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "lockedAt": "2026-10-05T21:49:24.439Z",
+  "reason": "Scope violations detected during parallel execution audit",
+  "violations": [
+    "Perspective 3: Unexpected unauthorized file in test dir: [scratch/parallel_test/worker_a_metric.mjs]",
+    "Perspective 3: Unexpected unauthorized file in test dir: [scratch/parallel_test/worker_b_report.mjs]"
+  ]
+}

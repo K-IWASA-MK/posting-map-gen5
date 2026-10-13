@@ -1,0 +1,7 @@
+{
+  "lockedAt": "2026-10-05T13:14:15.531Z",
+  "reason": "Scope violations detected during parallel execution audit",
+  "violations": [
+    "Unexpected unauthorized file in test dir: [scratch/parallel_test/unauthorized_fault_injection.txt]"
+  ]
+}

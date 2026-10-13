@@ -1,0 +1,355 @@
+{
+  "$schema": "./os-registry.schema.json",
+  "version": "2.0.0",
+  "activationState": "active",
+  "principleContract": {
+    "canonicalSource": "docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md",
+    "expectedVersion": "2026-10-12",
+    "sha256": "3e52d77ad774ee81b74485f139912477ad00502d0181c84b776f6bf442a61831"
+  },
+  "universalContract": {
+    "oneDistrictOneApp": true,
+    "zeroDistrictHardcodingInUniversal": true,
+    "universalEnginePath": "active/",
+    "districtDataPath": "data/"
+  },
+  "physicalRoles": [
+    "architect",
+    "execution",
+    "worker",
+    "auditor",
+    "deployer"
+  ],
+  "authorities": {
+    "codeDeployment": {
+      "authorizedRole": "execution",
+      "requiresMasterExplicitApproval": true
+    },
+    "districtProvisioning": {
+      "authorizedRole": "deployer",
+      "canDeployCode": false,
+      "requiresMasterExplicitApproval": true
+    }
+  },
+  "rolePackAssignments": {
+    "architect": [
+      "h-app-architecture",
+      "manager-architecture",
+      "backend-architecture",
+      "knowledge-governance",
+      "behavior-preservation"
+    ],
+    "execution": [
+      "release-integrity",
+      "knowledge-governance",
+      "behavior-preservation"
+    ],
+    "worker": [
+      "h-app-architecture",
+      "backend-architecture",
+      "async-lifecycle",
+      "behavior-preservation",
+      "durable-client-runtime",
+      "auth-security"
+    ],
+    "auditor": [
+      "release-integrity",
+      "official-data-audit",
+      "auth-security",
+      "behavior-preservation"
+    ],
+    "deployer": [
+      "official-data-audit",
+      "district-data-provisioning"
+    ]
+  },
+  "capabilityPacks": {
+    "h-app-architecture": {
+      "manifestPath": ".agents/skills/h-app-architecture/SKILL.md",
+      "description": "H-App Target Architecture B' compliance, state separation, DOM constraints",
+      "canonicalSources": [
+        {
+          "path": "docs/architecture/01_DESIGN_CONTRACT.md",
+          "sha256": "204cd4e55e61b2875141a18de0014e04fd1709b20b747770edd8d9595ee7a1c9"
+        },
+        {
+          "path": "docs/architecture/03_CURRENT_H_APP_INVENTORY.md",
+          "sha256": "376da3ed0b0a096c6a11c79a04177491f99feaaed1f86bbb55f1dca8fd713b46"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    },
+    "manager-architecture": {
+      "manifestPath": ".agents/skills/manager-architecture/SKILL.md",
+      "description": "Manager Dashboard architecture, Leaflet map isolation, aggregation boundaries",
+      "canonicalSources": [
+        {
+          "path": "docs/architecture/01_DESIGN_CONTRACT.md",
+          "sha256": "204cd4e55e61b2875141a18de0014e04fd1709b20b747770edd8d9595ee7a1c9"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    },
+    "backend-architecture": {
+      "manifestPath": ".agents/skills/backend-architecture/SKILL.md",
+      "description": "Standalone GAS backend, Pure DB spreadsheet design, concurrency control",
+      "canonicalSources": [
+        {
+          "path": "docs/api/API_CONTRACT.md",
+          "sha256": "db006430002a98163b1695e33d206d3ab31b30ecd8912839dfafa658c6ee74be"
+        },
+        {
+          "path": "active/api/v2_api.js",
+          "sha256": "dd77f69e4d1cdb00eb46b0db023c072fb09762fe9051f46d20baeb176ee95f84"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    },
+    "behavior-preservation": {
+      "manifestPath": ".agents/skills/behavior-preservation/SKILL.md",
+      "description": "Behavior preservation doctrine, regression prevention, UI/UX consistency",
+      "canonicalSources": [
+        {
+          "path": "docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md",
+          "sha256": "3e52d77ad774ee81b74485f139912477ad00502d0181c84b776f6bf442a61831"
+        },
+        {
+          "path": "docs/architecture/UNIVERSAL_QUALITY_DOCTRINE.md",
+          "sha256": "92e31cb2e365ec652a33c7cdf6b0e628c0f982d93ae58a4cf09b332f8c21bad0"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    },
+    "async-lifecycle": {
+      "manifestPath": ".agents/skills/async-lifecycle/SKILL.md",
+      "description": "In-flight asynchronous request control, UI race condition elimination",
+      "canonicalSources": [
+        {
+          "path": "docs/architecture/01_DESIGN_CONTRACT.md",
+          "sha256": "204cd4e55e61b2875141a18de0014e04fd1709b20b747770edd8d9595ee7a1c9"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    },
+    "auth-security": {
+      "manifestPath": ".agents/skills/auth-security/SKILL.md",
+      "description": "Authentication boundary enforcement, Dual Auth, LIFF verification",
+      "canonicalSources": [
+        {
+          "path": "docs/api/API_CONTRACT.md",
+          "sha256": "db006430002a98163b1695e33d206d3ab31b30ecd8912839dfafa658c6ee74be"
+        },
+        {
+          "path": "docs/security/SECURITY_BASELINE.md",
+          "sha256": "2e201c9ea9cda515568fe6724ba3ecad992c0ebf9303d0bbc19ed2651d502156"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    },
+    "durable-client-runtime": {
+      "manifestPath": ".agents/skills/durable-client-runtime/SKILL.md",
+      "description": "Client offline persistence, IndexedDB sync queue, optimistic first paint",
+      "canonicalSources": [
+        {
+          "path": "docs/architecture/UNIVERSAL_QUALITY_DOCTRINE.md",
+          "sha256": "92e31cb2e365ec652a33c7cdf6b0e628c0f982d93ae58a4cf09b332f8c21bad0"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    },
+    "release-integrity": {
+      "manifestPath": ".agents/skills/release-integrity/SKILL.md",
+      "description": "Verification gates (V1-V4), Scope Guard, atomic diff confirmation",
+      "canonicalSources": [
+        {
+          "path": ".agents/rules/verification-gates.md",
+          "sha256": "b901fe196c4ae3aff38a4810ed35239596dc39211395813ad3c296241509776a"
+        },
+        {
+          "path": ".agents/workflows/development/workflow.md",
+          "sha256": "39d32947aecf0e4a97ea161bbbb21676db6786e604d146a2be8333281c1504a9"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    },
+    "knowledge-governance": {
+      "manifestPath": ".agents/skills/knowledge-governance/SKILL.md",
+      "description": "AI Employee OS governance, 1-in-1-out discipline, source digest sync",
+      "canonicalSources": [
+        {
+          "path": "docs/ai-foundation.md",
+          "sha256": "f7aa74f6156ea7c53a5db671904ee1565c2eb6e233ac3d161102d30bce4bf0b3"
+        },
+        {
+          "path": "AGENTS.md",
+          "sha256": "29ccef0ea225725d5ed025a261b7ad4a9cb8e4756dcf6fa5e271e82b79a977fb"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    },
+    "official-data-audit": {
+      "manifestPath": ".agents/skills/official-data-audit/SKILL.md",
+      "description": "Official census / municipal primary data audit and closure verification",
+      "canonicalSources": [
+        {
+          "path": "docs/architecture/UNIVERSAL_QUALITY_DOCTRINE.md",
+          "sha256": "92e31cb2e365ec652a33c7cdf6b0e628c0f982d93ae58a4cf09b332f8c21bad0"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    },
+    "district-data-provisioning": {
+      "manifestPath": ".agents/skills/district-data-provisioning/SKILL.md",
+      "description": "District master data generation, GeoJSON boundary build, area mapping protocol",
+      "canonicalSources": [
+        {
+          "path": ".agents/rules/district-data-transition-rule.md",
+          "sha256": "4a2e2bfbd104d2c41b510b1f0f9bacff6ad7be78f3c3b8320914f36a9f254f35"
+        }
+      ],
+      "evidenceSources": [
+        "docs/research/evidence_kuwana_historical_lessons.md"
+      ]
+    }
+  },
+  "taskContracts": {
+    "TC-HAPP-MODULAR": {
+      "name": "H-App Modular Implementation Contract",
+      "requiredPacks": [
+        "h-app-architecture",
+        "behavior-preservation",
+        "async-lifecycle"
+      ],
+      "maxFiles": 1,
+      "stopCondition": "Unit test passes and zero global scope pollution"
+    },
+    "TC-BACKEND-API": {
+      "name": "Backend / Standalone GAS Implementation Contract",
+      "requiredPacks": [
+        "backend-architecture",
+        "auth-security",
+        "behavior-preservation"
+      ],
+      "maxFiles": 2,
+      "stopCondition": "API contract validation passes and zero container-bound dependency"
+    },
+    "TC-SEC-AUDIT": {
+      "name": "Security Audit Contract",
+      "requiredPacks": [
+        "auth-security",
+        "behavior-preservation"
+      ],
+      "maxFiles": 0,
+      "stopCondition": "Zero auth bypass verified and zero secret leakage"
+    },
+    "TC-DISTRICT-PROVISION": {
+      "name": "District Data Provisioning Contract",
+      "requiredPacks": [
+        "district-data-provisioning",
+        "official-data-audit"
+      ],
+      "maxFiles": 5,
+      "stopCondition": "Master data acceptance gate 100% pass"
+    },
+    "TC-RELEASE-VERIFY": {
+      "name": "Release Integrity Verification Contract",
+      "requiredPacks": [
+        "release-integrity",
+        "behavior-preservation"
+      ],
+      "maxFiles": 0,
+      "stopCondition": "V1-V4 gates all pass and atomic diff verified"
+    }
+  },
+  "virtualProfessions": {
+    "H-App Frontend Specialist": {
+      "baseRole": "worker",
+      "capabilityPacks": [
+        "h-app-architecture",
+        "behavior-preservation",
+        "async-lifecycle"
+      ],
+      "defaultTaskContract": "TC-HAPP-MODULAR"
+    },
+    "Backend / GAS Specialist": {
+      "baseRole": "worker",
+      "capabilityPacks": [
+        "backend-architecture",
+        "auth-security",
+        "behavior-preservation"
+      ],
+      "defaultTaskContract": "TC-BACKEND-API"
+    },
+    "Security Reviewer": {
+      "baseRole": "auditor",
+      "capabilityPacks": [
+        "auth-security",
+        "release-integrity"
+      ],
+      "defaultTaskContract": "TC-SEC-AUDIT"
+    },
+    "District Provisioner": {
+      "baseRole": "deployer",
+      "capabilityPacks": [
+        "district-data-provisioning",
+        "official-data-audit"
+      ],
+      "defaultTaskContract": "TC-DISTRICT-PROVISION"
+    },
+    "Quality Release Auditor": {
+      "baseRole": "auditor",
+      "capabilityPacks": [
+        "release-integrity",
+        "behavior-preservation"
+      ],
+      "defaultTaskContract": "TC-RELEASE-VERIFY"
+    }
+  },
+  "operationalKnowledgeSurfaces": [
+    "AGENTS.md",
+    "docs/ai-foundation.md",
+    "docs/architecture/01_DESIGN_CONTRACT.md",
+    "docs/architecture/03_CURRENT_H_APP_INVENTORY.md",
+    "docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md",
+    "docs/architecture/UNIVERSAL_QUALITY_DOCTRINE.md",
+    "docs/api/API_CONTRACT.md",
+    "docs/security/SECURITY_BASELINE.md",
+    ".agents/rules/agent-authority.md",
+    ".agents/rules/verification-gates.md",
+    ".agents/rules/security-rule.md",
+    ".agents/rules/district-data-transition-rule.md",
+    ".agents/workflows/development/workflow.md",
+    ".agents/os-registry.json",
+    ".agents/skills/h-app-architecture/SKILL.md",
+    ".agents/skills/manager-architecture/SKILL.md",
+    ".agents/skills/backend-architecture/SKILL.md",
+    ".agents/skills/behavior-preservation/SKILL.md",
+    ".agents/skills/async-lifecycle/SKILL.md",
+    ".agents/skills/auth-security/SKILL.md",
+    ".agents/skills/durable-client-runtime/SKILL.md",
+    ".agents/skills/release-integrity/SKILL.md",
+    ".agents/skills/knowledge-governance/SKILL.md",
+    ".agents/skills/official-data-audit/SKILL.md",
+    ".agents/skills/district-data-provisioning/SKILL.md"
+  ]
+}

@@ -1,0 +1,13 @@
+**/*.bak
+**/*.gs_old
+**/*.tmp
+**/*.txt
+node_modules/
+package.json
+package-lock.json
+
+# Ignore H-App frontend files
+h-app/**
+
+# Ignore manager frontend files
+manager/**

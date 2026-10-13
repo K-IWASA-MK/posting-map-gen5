@@ -1,0 +1,15 @@
+{
+  "parentConversationId": "parent-1234",
+  "workers": {
+    "worker-A": {
+      "role": "worker",
+      "assignedFile": "/Volumes/SSD_DATA/posting-map-kuwana/scratch/parallel_test/worker_a.txt",
+      "allowedTestCommand": "node scratch/parallel_test/verify_worker_a.mjs"
+    },
+    "worker-B": {
+      "role": "worker",
+      "assignedFile": "/Volumes/SSD_DATA/posting-map-kuwana/scratch/parallel_test/worker_b.txt",
+      "allowedTestCommand": "node scratch/parallel_test/verify_worker_b.mjs"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "@kiwasa/posting-map",
+  "version": "1.0.1",
+  "description": "POSTING MAP Product",
+  "main": "active/h-app/app.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "node scripts/check-secrets.mjs && node tests/run_all_tests.mjs",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "gate:minus-1": "node scripts/verify-gate-minus-1.mjs",
+    "liff:acquire": "node scripts/acquire-liff-id.mjs",
+    "check:ssot": "node scripts/validate-gas-endpoint-ssot.mjs",
+    "verify:gas": "node scripts/verify-gas-deployment.mjs",
+    "deploy:gas": "node scripts/safe-deploy.mjs",
+    "stamp:assets": "node scripts/stamp-h-app-token.mjs",
+    "audit:gate": "node scripts/check-scope.mjs",
+    "gate:cleanup": "node scripts/check-cleanup-gate.mjs",
+    "gate:auditor": "node scripts/check-auditor-gate.mjs",
+    "check:knowledge": "node scripts/check-knowledge-gate.mjs",
+    "build:manager-css": "tailwindcss -i ./active/manager/tailwind-input.css -o ./active/manager/assets/manager.tailwind.css --minify"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "playwright": "^1.62.1",
+    "tailwindcss": "3.4.17"
+  }
+}

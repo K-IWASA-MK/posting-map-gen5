@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "2.0.0",
+  "districtId": "KUWANA",
+  "districtName": "三重県桑名市",
+  "historyPolicy": {
+    "maxHistoryLength": 3,
+    "rotationPolicy": "KEEP_LATEST_3_ELECTIONS"
+  },
+  "sourcePolicy": {
+    "national": "桑名市選挙管理委員会事務局",
+    "district": "桑名市選挙管理委員会事務局",
+    "municipality": "桑名市選挙管理委員会事務局"
+  },
+  "elections": [
+    {
+      "electionId": "COUNCIL-2022-11",
+      "electionType": "local",
+      "electionName": "桑名市議会議員選挙",
+      "year": "2022",
+      "electionDate": "2022-11-20",
+      "eligibleVoters": 112988,
+      "voters": 50933,
+      "turnout": 45.08,
+      "districtTurnout": 45.08,
+      "municipalities": {
+        "桑名市": 45.08
+      }
+    },
+    {
+      "electionId": "COUNCIL-2018-12",
+      "electionType": "local",
+      "electionName": "桑名市議会議員選挙",
+      "year": "2018",
+      "electionDate": "2018-12-02",
+      "eligibleVoters": 114894,
+      "voters": 55492,
+      "turnout": 48.3,
+      "districtTurnout": 48.3,
+      "municipalities": {
+        "桑名市": 48.3
+      }
+    },
+    {
+      "electionId": "COUNCIL-2014-11",
+      "electionType": "local",
+      "electionName": "桑名市議会議員選挙",
+      "year": "2014",
+      "electionDate": "2014-11-16",
+      "eligibleVoters": 111902,
+      "voters": 54895,
+      "turnout": 49.06,
+      "districtTurnout": 49.06,
+      "municipalities": {
+        "桑名市": 49.06
+      }
+    }
+  ],
+  "lastUpdated": "2026-09-21T02:15:00+09:00"
+}
