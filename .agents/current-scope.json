@@ -1,20 +1,6 @@
 [
   ".agents/current-scope.json",
-  ".agents/os-registry.json",
-  ".agents/rules/ui-rule.md",
-  "DEPLOYMENT_REGISTRY.md",
-  "docs/architecture/03_CURRENT_H_APP_INVENTORY.md",
-  "docs/architecture/DASHBOARD_QUALITY_GATE.md",
-  "docs/architecture/DATA_PLATFORM_GOVERNANCE.md",
-  "docs/architecture/PROJECT_POLICY.md",
-  "docs/architecture/PROJECT_SCOPE.md",
-  "docs/architecture/UNIVERSAL_PARENT_GAS_ROUTING_DESIGN.md",
-  "docs/architecture/UNIVERSAL_RELEASE_BASELINE.md",
-  "docs/operations/DISTRICT_PROVISIONING_RUNBOOK.md",
-  "docs/requirements/REQUIREMENTS_TRACEABILITY.md",
-  "package.json",
-  "scripts/certify-universal-engine.mjs",
-  "scripts/verify-gate-minus-1.mjs",
-  "tests/run_all_tests.mjs",
-  "tests/test_phase17_production_verification.mjs"
+  ".gitignore",
+  "scripts/check-secrets.mjs",
+  "scripts/validate-gas-endpoint-ssot.mjs"
 ]
