@@ -1,4 +1,4 @@
 [
   ".agents/current-scope.json",
-  "data/config.js"
+  "scripts/check-universal-boundary.mjs"
 ]
