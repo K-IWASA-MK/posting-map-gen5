@@ -265,30 +265,46 @@ export async function extractChannelsFromDom(page) {
     return [];
   }
 
+  if (typeof page.waitForSelector === 'function') {
+    await page.waitForSelector('a.channel-item[href*="/console/channel/"], [class*="channel-item"]', { timeout: 5000 }).catch(() => {});
+  }
+
   return await page.evaluate(() => {
     const items = Array.from(document.querySelectorAll('a.channel-item[href*="/console/channel/"], [class*="channel-item"]'));
     return items.map(el => {
       const link = el.tagName === 'A' ? el : el.querySelector('a[href*="/console/channel/"]');
       const href = link ? link.getAttribute('href') : (el.getAttribute('href') || '');
       const match = href.match(/\/channel\/(\d+)/);
-      const text = el.innerText || '';
+      const text = el.innerText || el.textContent || '';
       const textLines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
-      const isLogin = text.includes('LINEログイン') || text.toLowerCase().includes('login');
-      const isMessaging = text.includes('Messaging API') || text.toLowerCase().includes('messaging');
+      const productEl = el.querySelector('.product');
+      const productText = productEl ? (productEl.innerText || productEl.textContent || '').trim() : text;
+      const isLogin = productText.includes('LINEログイン') || productText.toLowerCase().includes('login');
+      const isMessaging = productText.includes('Messaging API') || productText.toLowerCase().includes('messaging');
 
-      const name = textLines.find(l => (
+      const titleEl = el.querySelector('h3.title, .title');
+      const titleText = titleEl ? (titleEl.innerText || titleEl.textContent || '').trim() : '';
+
+      const fallbackName = textLines.find(l => (
         l !== 'Admin' &&
+        l !== '新規' &&
+        l !== '新規Admin' &&
+        !/^新規\s*Admin$/i.test(l) &&
         !l.includes('ログイン') &&
         !l.includes('Messaging') &&
         !l.includes('公開') &&
         !l.includes('開発中')
       )) || textLines[1] || textLines[0] || '';
 
+      const statusEl = el.querySelector('.dc-channel-status');
+      const statusText = statusEl ? (statusEl.innerText || statusEl.textContent || '').trim() : '';
+
       return {
         channelId: match ? match[1] : null,
-        name: name.trim(),
+        name: (titleText || fallbackName).trim(),
         type: isLogin ? 'LINE_LOGIN' : isMessaging ? 'MESSAGING_API' : 'OTHER',
+        status: statusText || (text.includes('公開済み') ? '公開済み' : text.includes('開発中') ? '開発中' : 'ACTIVE'),
         rawText: text
       };
     }).filter(c => c.channelId);
@@ -297,21 +313,88 @@ export async function extractChannelsFromDom(page) {
 
 /**
  * 実DOMからLIFFアプリ一覧および設定詳細を抽出
+ * 実UIでは /liff 一覧画面が a.row[href*="/liff/"] (LIFF URLとサイズのみ表示) であり、
+ * エンドポイントURL・Scope・友だち追加オプション・モジュールモードは
+ * /liff/<liffId> 詳細画面の .liff-detail .kv-field 内に存在するため、両対応でREAD ONLY抽出する。
  */
 export async function extractLiffsFromDom(page) {
   if (!page || typeof page.evaluate !== 'function') {
     return [];
   }
 
-  return await page.evaluate(() => {
-    const rows = Array.from(document.querySelectorAll('table tbody tr, .liff-item, [class*="liff-card"]'));
-    return rows.map(r => {
-      const text = r.innerText || '';
-      const idMatch = text.match(/\b(\d{8,12}-[a-zA-Z0-9_-]+)\b/);
-      const urlMatch = text.match(/https?:\/\/[^\s\n\r"']+/);
+  if (typeof page.waitForSelector === 'function') {
+    await page.waitForSelector('a.row[href*="/liff/"], .liff-detail, table tbody tr, .liff-item, [class*="liff-card"]', { timeout: 5000 }).catch(() => {});
+  }
 
-      const titleEl = r.querySelector('h3, h4, .title, [class*="name"], td:first-child');
-      const name = titleEl ? titleEl.innerText.trim() : '';
+  const initialList = await page.evaluate(() => {
+    const parseDetailFields = (root) => {
+      const fields = Array.from(root.querySelectorAll('.kv-field'));
+      if (fields.length === 0) return null;
+      const getFieldText = (labelPrefix) => {
+        const f = fields.find(el => {
+          const lbl = el.querySelector('label');
+          return lbl && (lbl.innerText || lbl.textContent || '').replace(/\s+/g, ' ').trim().startsWith(labelPrefix);
+        });
+        const fieldEl = f ? f.querySelector('.field') : null;
+        return fieldEl ? (fieldEl.innerText || fieldEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      };
+      const getFieldSwitchChecked = (labelPrefix) => {
+        const f = fields.find(el => {
+          const lbl = el.querySelector('label');
+          return lbl && (lbl.innerText || lbl.textContent || '').replace(/\s+/g, ' ').trim().startsWith(labelPrefix);
+        });
+        const cb = f ? f.querySelector('input[type="checkbox"]') : null;
+        return cb ? cb.checked === true : false;
+      };
+      const liffId = getFieldText('LIFF ID');
+      if (!liffId) return null;
+      const name = getFieldText('LIFFアプリ名');
+      const endpointUrl = getFieldText('エンドポイントURL');
+      const sizeRaw = getFieldText('サイズ');
+      const scopesRaw = getFieldText('Scope');
+      const botPromptRaw = getFieldText('友だち追加オプション');
+      const moduleModeChecked = getFieldSwitchChecked('モジュールモード');
+
+      const isFull = sizeRaw.toLowerCase() === 'full' || sizeRaw.includes('フル');
+      const isAggressive = botPromptRaw.toLowerCase().includes('aggressive') || botPromptRaw.includes('強');
+      const isNormal = botPromptRaw.toLowerCase().includes('normal') || botPromptRaw.includes('標準');
+      const isNone = botPromptRaw.toLowerCase().includes('off') || botPromptRaw.toLowerCase().includes('none') || botPromptRaw.includes('無');
+
+      return {
+        liffId,
+        name,
+        endpointUrl,
+        size: isFull ? 'Full' : (sizeRaw || 'Other'),
+        hasProfileScope: scopesRaw.includes('profile'),
+        hasOpenidScope: scopesRaw.includes('openid'),
+        botPrompt: isAggressive ? 'Aggressive' : isNormal ? 'Normal' : isNone ? 'None' : 'Unknown',
+        moduleModeOff: moduleModeChecked === false,
+        rawText: (root.innerText || root.textContent || '')
+      };
+    };
+
+    const detailRoot = document.querySelector('.liff-detail');
+    if (detailRoot) {
+      const parsed = parseDetailFields(detailRoot);
+      if (parsed) return [parsed];
+    }
+
+    const rows = Array.from(document.querySelectorAll('a.row[href*="/liff/"], table tbody tr, .liff-item, [class*="liff-card"]'));
+    return rows.map(r => {
+      const text = r.innerText || r.textContent || '';
+      const href = (r.tagName === 'A' && r.getAttribute) ? (r.getAttribute('href') || '') : '';
+      const idFromHref = href.match(/\/liff\/(\d{8,12}-[a-zA-Z0-9_-]+)/);
+      const idMatch = idFromHref || text.match(/\b(\d{8,12}-[a-zA-Z0-9_-]+)\b/);
+      const liffId = idMatch ? idMatch[1] : null;
+
+      const urls = text.match(/https?:\/\/[^\s\n\r"']+/g) || [];
+      const nonLiffUrl = urls.find(u => !u.includes('liff.line.me')) || '';
+
+      const titleEl = r.querySelector('h3, h4, .title, [class*="name"], td:first-child, div:first-child');
+      let name = titleEl ? (titleEl.innerText || titleEl.textContent || '').trim() : '';
+      if (!name && liffId && text.includes(liffId)) {
+        name = text.split(liffId)[0].trim();
+      }
 
       const isAggressive = text.includes('強') || text.toLowerCase().includes('aggressive');
       const isNormal = text.includes('標準') || text.toLowerCase().includes('normal');
@@ -319,41 +402,148 @@ export async function extractLiffsFromDom(page) {
       const botPrompt = isAggressive ? 'Aggressive' : isNormal ? 'Normal' : isNone ? 'None' : 'Unknown';
 
       const isModuleModeOn = text.includes('モジュールモード: オン') || text.includes('Module Mode: On');
-      const moduleMode = !isModuleModeOn; // true if OFF
+      const moduleMode = !isModuleModeOn;
 
-      const isFull = text.includes('Full') || text.includes('フル') || text.includes('FULL');
+      const isFull = text.toLowerCase().includes('full') || text.includes('フル');
       const hasProfile = text.includes('profile');
       const hasOpenid = text.includes('openid');
 
+      const needsDetail = !!(href && href.includes('/liff/') && !nonLiffUrl);
+
       return {
-        liffId: idMatch ? idMatch[1] : null,
-        name: name,
-        endpointUrl: urlMatch ? urlMatch[0] : '',
+        liffId,
+        name,
+        endpointUrl: nonLiffUrl || (urls[0] && !needsDetail ? urls[0] : ''),
         size: isFull ? 'Full' : 'Other',
         hasProfileScope: hasProfile,
         hasOpenidScope: hasOpenid,
         botPrompt,
         moduleModeOff: moduleMode,
-        rawText: text
+        rawText: text,
+        _detailHref: needsDetail ? href : null
       };
     }).filter(l => l.liffId);
+  });
+
+  if (!Array.isArray(initialList)) {
+    return [];
+  }
+
+  // 実UIの一覧行 (a.row[href*="/liff/"]) から詳細画面へ READ ONLY 遷移して .kv-field を抽出
+  if (typeof page.goto === 'function' && initialList.some(item => item && item._detailHref)) {
+    const detailedList = [];
+    for (const item of initialList) {
+      if (!item._detailHref) {
+        detailedList.push(item);
+        continue;
+      }
+      const detailUrl = new URL(item._detailHref, 'https://developers.line.biz').toString();
+      await page.goto(detailUrl);
+      if (typeof page.waitForLoadState === 'function') {
+        await page.waitForLoadState('networkidle').catch(() => {});
+      }
+      if (typeof page.waitForSelector === 'function') {
+        await page.waitForSelector('.liff-detail .kv-field, .kv-field', { timeout: 5000 }).catch(() => {});
+      }
+      const detailItem = await page.evaluate(() => {
+        const root = document.querySelector('.liff-detail') || document;
+        const fields = Array.from(root.querySelectorAll('.kv-field'));
+        if (fields.length === 0) return null;
+        const getFieldText = (labelPrefix) => {
+          const f = fields.find(el => {
+            const lbl = el.querySelector('label');
+            return lbl && (lbl.innerText || lbl.textContent || '').replace(/\s+/g, ' ').trim().startsWith(labelPrefix);
+          });
+          const fieldEl = f ? f.querySelector('.field') : null;
+          return fieldEl ? (fieldEl.innerText || fieldEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        };
+        const getFieldSwitchChecked = (labelPrefix) => {
+          const f = fields.find(el => {
+            const lbl = el.querySelector('label');
+            return lbl && (lbl.innerText || lbl.textContent || '').replace(/\s+/g, ' ').trim().startsWith(labelPrefix);
+          });
+          const cb = f ? f.querySelector('input[type="checkbox"]') : null;
+          return cb ? cb.checked === true : false;
+        };
+        const liffId = getFieldText('LIFF ID');
+        if (!liffId) return null;
+        const name = getFieldText('LIFFアプリ名');
+        const endpointUrl = getFieldText('エンドポイントURL');
+        const sizeRaw = getFieldText('サイズ');
+        const scopesRaw = getFieldText('Scope');
+        const botPromptRaw = getFieldText('友だち追加オプション');
+        const moduleModeChecked = getFieldSwitchChecked('モジュールモード');
+
+        const isFull = sizeRaw.toLowerCase() === 'full' || sizeRaw.includes('フル');
+        const isAggressive = botPromptRaw.toLowerCase().includes('aggressive') || botPromptRaw.includes('強');
+        const isNormal = botPromptRaw.toLowerCase().includes('normal') || botPromptRaw.includes('標準');
+        const isNone = botPromptRaw.toLowerCase().includes('off') || botPromptRaw.toLowerCase().includes('none') || botPromptRaw.includes('無');
+
+        return {
+          liffId,
+          name,
+          endpointUrl,
+          size: isFull ? 'Full' : (sizeRaw || 'Other'),
+          hasProfileScope: scopesRaw.includes('profile'),
+          hasOpenidScope: scopesRaw.includes('openid'),
+          botPrompt: isAggressive ? 'Aggressive' : isNormal ? 'Normal' : isNone ? 'None' : 'Unknown',
+          moduleModeOff: moduleModeChecked === false,
+          rawText: (root.innerText || root.textContent || '')
+        };
+      });
+      if (detailItem && detailItem.liffId) {
+        detailedList.push(detailItem);
+      } else {
+        const { _detailHref, ...rest } = item;
+        detailedList.push(rest);
+      }
+    }
+    return detailedList;
+  }
+
+  return initialList.map(item => {
+    if (item && typeof item === 'object' && '_detailHref' in item) {
+      const { _detailHref, ...rest } = item;
+      return rest;
+    }
+    return item;
   });
 }
 
 /**
  * 実DOMから長期Channel Access Tokenの取得・状態判定
+ * 実UIの section.tab-section (チャネルアクセストークン) 内の span 要素、
+ * および従来セレクタ (textarea[readonly], code.token, input[readonly]) の両方に対応する。
  */
 export async function extractTokenFromDom(page) {
   if (!page || typeof page.evaluate !== 'function') {
     return { isIssued: false, token: null, canRetrieve: false };
   }
 
-  return await page.evaluate(() => {
+  if (typeof page.waitForSelector === 'function') {
+    await page.waitForSelector('section.tab-section, textarea[readonly], code.token', { timeout: 5000 }).catch(() => {});
+  }
+
+  const evaluated = await page.evaluate(() => {
     const tokenEl = document.querySelector('textarea[readonly], code.token, input[readonly][value*="."]');
-    const rawVal = tokenEl ? (tokenEl.value || tokenEl.innerText || '').trim() : '';
+    let rawVal = tokenEl ? (tokenEl.value || tokenEl.innerText || tokenEl.textContent || '').trim() : '';
+
+    if (!rawVal) {
+      const sections = Array.from(document.querySelectorAll('section.tab-section'));
+      const tokSec = sections.find(s => ((s.innerText || s.textContent || '')).includes('チャネルアクセストークン'));
+      if (tokSec) {
+        const spans = Array.from(tokSec.querySelectorAll('span'))
+          .map(s => (s.innerText || s.textContent || '').trim())
+          .filter(t => t.length > 40 && !/\s/.test(t));
+        if (spans.length > 0) {
+          rawVal = spans[0];
+        }
+      }
+    }
 
     const issueBtn = Array.from(document.querySelectorAll('button, input[type="button"]')).find(b => {
-      return (b.innerText || b.value || '').trim() === '発行' || (b.innerText || '').includes('Issue');
+      const t = (b.innerText || b.textContent || b.value || '').trim();
+      return t === '発行' || t.includes('Issue');
     });
 
     if (rawVal && rawVal.length > 20) {
@@ -364,13 +554,21 @@ export async function extractTokenFromDom(page) {
       return { isIssued: false, token: null, canRetrieve: true };
     }
 
-    const hasReissueBtn = Array.from(document.querySelectorAll('button')).some(b => (b.innerText || '').includes('再発行'));
+    const hasReissueBtn = Array.from(document.querySelectorAll('button')).some(b => ((b.innerText || b.textContent || '')).includes('再発行'));
     if (hasReissueBtn) {
       return { isIssued: true, token: null, canRetrieve: false };
     }
 
     return { isIssued: false, token: null, canRetrieve: false };
   });
+
+  if (typeof evaluated === 'string') {
+    return evaluated.length > 20
+      ? { isIssued: true, token: evaluated, canRetrieve: true }
+      : { isIssued: false, token: null, canRetrieve: false };
+  }
+
+  return evaluated;
 }
 
 /**
@@ -782,15 +980,17 @@ export async function createLoginChannelViaDom({
     throw new Error(`🛑 [HARD STOP: LINE_LOGIN_FIELD_MISMATCH] Channel Description textarea re-read mismatch: tagName=[${descCheck ? descCheck.tagName : ''}], value=[${descCheck ? descCheck.value : ''}].`);
   }
 
-  // ── 5. 会社・事業者の所在国・地域: 親 .form-item ラベル一致の select で「日本」を Exact 選択 (Item 5) ──
+  // ── 5. 会社・事業者の所在国・地域: 親 .form-item ラベル一致または .new-channel select:not([readonly]) で「日本」を Exact 選択 (Item 5) ──
   const companyCountryResult = await devPage.evaluate((contract) => {
     const formItems = Array.from(document.querySelectorAll('.new-channel .form-item'));
     const targetItem = formItems.find(item => {
       const heading = item.querySelector('h4, label, .form-item-label');
       return heading && (heading.textContent || '').trim() === contract.companyCountryLabel;
     });
-    if (!targetItem) return { found: false, reason: 'form-item not found' };
-    const sel = targetItem.querySelector('select');
+    const sel = targetItem
+      ? targetItem.querySelector('select')
+      : document.querySelector('.new-channel select:not([readonly])');
+    if (!targetItem && !sel) return { found: false, reason: 'form-item not found' };
     if (!sel) return { found: false, reason: 'select not found' };
     const opt = Array.from(sel.options || []).find(o => (o.text || '').trim() === contract.companyCountryOptionText);
     if (!opt) return { found: false, reason: 'option 日本 not found' };
@@ -944,7 +1144,9 @@ export async function createLoginChannelViaDom({
 
     // 4: Company Country 日本 selected
     const companyItem = findItemByLabel(contract.companyCountryLabel);
-    const companySelect = companyItem ? companyItem.querySelector('select') : null;
+    const companySelect = companyItem
+      ? companyItem.querySelector('select')
+      : document.querySelector('.new-channel select:not([readonly])');
     const companyCountryText = (companySelect && companySelect.selectedOptions && companySelect.selectedOptions[0])
       ? (companySelect.selectedOptions[0].text || '').trim()
       : '';
@@ -1041,6 +1243,30 @@ export async function createLoginChannelViaDom({
       `🛑 [HARD STOP: ID_ACQUISITION_FAILED] Failed to acquire real Channel ID after submitting LINE Login Channel creation (currentUrl=[${currentUrl}]). ` +
       'Channel may already exist in live console; automatic re-submit, deletion, and re-creation are strictly prohibited.'
     );
+  }
+
+  // 作成直後に「開発中」バッジが表示されている場合は「公開済み」へ切り替える (.dc-channel-status -> .modal-footer button.kv-primary)
+  if (typeof devPage.evaluate === 'function') {
+    const clickedDeveloping = await devPage.evaluate(() => {
+      const statusBadge = document.querySelector('.dc-channel-status');
+      if (statusBadge && (statusBadge.textContent || '').trim() === '開発中') {
+        statusBadge.click();
+        return true;
+      }
+      return false;
+    }).catch(() => false);
+    if (clickedDeveloping) {
+      if (typeof devPage.waitForTimeout === 'function') {
+        await devPage.waitForTimeout(1000);
+      }
+      await devPage.evaluate(() => {
+        const pubBtn = document.querySelector('.modal-footer button.kv-primary');
+        if (pubBtn && (pubBtn.textContent || '').trim() === '公開') {
+          pubBtn.click();
+        }
+      }).catch(() => {});
+      await devPage.waitForLoadState('networkidle').catch(() => {});
+    }
   }
 
   return {
@@ -1186,6 +1412,22 @@ export async function createMessagingChannelViaDom({
     const subText = (subSel && subSel.selectedOptions && subSel.selectedOptions[0])
       ? subSel.selectedOptions[0].text.trim()
       : '';
+    // 実UI survey項目 (運用目的 = その他 [OTHER], 主な使い方 = メッセージ配信用 [MESSAGING]) が存在する場合は設定
+    const otherCb = document.querySelector('input[type="checkbox"][value="OTHER"]');
+    if (otherCb && !otherCb.checked) {
+      if (typeof otherCb.click === 'function') otherCb.click();
+      otherCb.checked = true;
+      otherCb.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const usageOpts = Array.from(document.querySelectorAll('select option')).filter(o => (o.text || '').trim() === 'メッセージ配信用' || o.value === 'MESSAGING');
+    if (usageOpts.length > 0 && usageOpts[0].parentElement) {
+      const uSel = usageOpts[0].parentElement;
+      if (uSel.name !== 'category_group' && uSel.name !== 'category') {
+        uSel.value = usageOpts[0].value;
+        uSel.dispatchEvent(new Event('change', { bubbles: true }));
+        uSel.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }
     return { mainText, subText };
   });
 
@@ -1212,10 +1454,16 @@ export async function createMessagingChannelViaDom({
     throw new Error('🛑 [HARD STOP: OA_FORM_INVALID] Official Account creation form checkValidity() is false before submit. Submit aborted (writeCount = 0).');
   }
 
-  // 作成・確定
+  // 作成・確定 (確認画面 → 完了ボタンの2段階遷移にも対応)
   const submitBtn = managerPage.locator('button[type="submit"], button:has-text("確認"), button:has-text("作成")').first();
   await submitBtn.click();
   await managerPage.waitForLoadState('networkidle').catch(() => {});
+
+  const completeBtn = managerPage.locator('button[type="submit"]:has-text("完了")').first();
+  if (await completeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await completeBtn.click();
+    await managerPage.waitForLoadState('networkidle').catch(() => {});
+  }
 
   // Messaging API 設定へ遷移
   logger('      Enabling Messaging API under Civic Tech Inc....');
@@ -1315,37 +1563,81 @@ export async function linkMessagingBotViaDom({
   logger = console.log
 }) {
   logger(`   🔗 [Built-in UI] Navigating to configure Linked Bot on LINE Login [${loginChannelId}]...`);
-  await devPage.goto(`https://developers.line.biz/console/channel/${loginChannelId}`);
+  await devPage.goto(`https://developers.line.biz/console/channel/${loginChannelId}/basics`);
   await devPage.waitForLoadState('networkidle').catch(() => {});
 
-  // LINEログイン設定タブへ遷移
+  // LINEログイン設定 / チャネル基本設定タブ確認
   const settingsTab = devPage.locator('a, button').filter({ hasText: /LINEログイン設定|チャネル基本設定/ }).first();
-  if (await settingsTab.isVisible()) {
+  if (await settingsTab.isVisible().catch(() => false)) {
     await settingsTab.click();
   }
 
-  // 現在のリンク確認
-  const linkedSection = devPage.locator('[class*="linked-bot"], div:has-text("リンクされたボット")').first();
-  const currentText = await linkedSection.innerText().catch(() => '');
+  // 現在のリンク確認 (実UI: section.tab-section「友だち追加オプション」内の [data-content] または select、および従来セレクタ)
+  const linkedSection = devPage.locator('section.tab-section:has-text("友だち追加オプション"), [class*="linked-bot"], div:has-text("リンクされたボット")').first();
+  let currentText = await linkedSection.innerText().catch(() => '');
+  if (!currentText.includes(botName) && typeof devPage.evaluate === 'function') {
+    const domBotText = await devPage.evaluate(() => {
+      const sec = Array.from(document.querySelectorAll('section.tab-section')).find(s => {
+        const t = s.innerText || s.textContent || '';
+        return t.includes('友だち追加オプション') || t.includes('リンクされたLINE公式アカウント') || t.includes('リンクされたボット');
+      });
+      if (!sec) return '';
+      const dataContents = Array.from(sec.querySelectorAll('[data-content]')).map(e => e.getAttribute('data-content') || '');
+      const selTexts = Array.from(sec.querySelectorAll('select')).map(s => (s.selectedOptions && s.selectedOptions[0]) ? s.selectedOptions[0].text : '');
+      return [sec.innerText || sec.textContent || '', ...dataContents, ...selTexts].join(' ');
+    }).catch(() => '');
+    currentText = `${currentText} ${domBotText}`;
+  }
 
   if (currentText.includes(botName)) {
     logger('      Linked Bot is already set to target bot (No-op).');
     return { action: 'NO_OP', verified: true, writeCount: 0 };
   }
 
-  // 編集をクリック
+  // 編集をクリックして select で選択・更新
   const editBtn = linkedSection.locator('button:has-text("編集"), a:has-text("編集")').first();
-  if (await editBtn.isVisible()) {
+  if (await editBtn.isVisible().catch(() => false)) {
     await editBtn.click();
+    if (typeof devPage.evaluate === 'function') {
+      await devPage.evaluate((targetBot) => {
+        const sec = Array.from(document.querySelectorAll('section.tab-section')).find(s => (s.textContent || '').includes('友だち追加オプション'));
+        const sel = sec ? sec.querySelector('select') : null;
+        if (sel) {
+          const opt = Array.from(sel.options || []).find(o => (o.text || '').includes(targetBot));
+          if (opt) {
+            sel.value = opt.value;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            sel.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        }
+      }, botName).catch(() => {});
+    }
     const botOption = devPage.locator(`select option:has-text("${botName}"), label:has-text("${botName}")`).first();
-    await botOption.click();
+    if (await botOption.isVisible().catch(() => false)) {
+      await botOption.click().catch(() => {});
+    }
     const saveBtn = devPage.locator('button:has-text("更新"), button:has-text("保存")').first();
     await saveBtn.click();
   }
 
   // 再読取検証
-  await devPage.waitForTimeout(2000);
-  const updatedText = await linkedSection.innerText().catch(() => '');
+  if (typeof devPage.waitForTimeout === 'function') {
+    await devPage.waitForTimeout(2000);
+  }
+  let updatedText = await linkedSection.innerText().catch(() => '');
+  if (!updatedText.includes(botName) && typeof devPage.evaluate === 'function') {
+    const domUpdated = await devPage.evaluate(() => {
+      const sec = Array.from(document.querySelectorAll('section.tab-section')).find(s => {
+        const t = s.innerText || s.textContent || '';
+        return t.includes('友だち追加オプション') || t.includes('リンクされたLINE公式アカウント') || t.includes('リンクされたボット');
+      });
+      if (!sec) return '';
+      const dataContents = Array.from(sec.querySelectorAll('[data-content]')).map(e => e.getAttribute('data-content') || '');
+      const selTexts = Array.from(sec.querySelectorAll('select')).map(s => (s.selectedOptions && s.selectedOptions[0]) ? s.selectedOptions[0].text : '');
+      return [sec.innerText || sec.textContent || '', ...dataContents, ...selTexts].join(' ');
+    }).catch(() => '');
+    updatedText = `${updatedText} ${domUpdated}`;
+  }
   const verified = updatedText.includes(botName);
 
   if (!verified) {
@@ -1371,8 +1663,8 @@ export async function createLiffViaDom({
   await devPage.goto(`https://developers.line.biz/console/channel/${loginChannelId}/liff/new`);
   await devPage.waitForLoadState('networkidle').catch(() => {});
 
-  // 1. LIFF名入力 (必須)
-  const nameInput = devPage.locator('input[name*="name"], input#liffName, input[placeholder*="LIFFアプリ名"]').first();
+  // 1. LIFF名入力 (必須: 実UIの textarea[placeholder="LIFFアプリ名を入力してください"] および input に対応)
+  const nameInput = devPage.locator('textarea[placeholder*="LIFFアプリ名"], input[name*="name"], input#liffName, input[placeholder*="LIFFアプリ名"]').first();
   if (!await nameInput.isVisible({ timeout: 5000 }).catch(() => false)) {
     throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] LIFF name input selector not found in DOM.');
   }
@@ -1385,8 +1677,8 @@ export async function createLiffViaDom({
   }
   await sizeRadio.click();
 
-  // 3. エンドポイントURL (必須)
-  const endpointInput = devPage.locator('input[name*="endpoint"], input#endpointUrl, input[placeholder*="https://"]').first();
+  // 3. エンドポイントURL (必須: 実UIの textarea[placeholder="https://example.com"] および input に対応)
+  const endpointInput = devPage.locator('textarea[placeholder*="https://"], input[name*="endpoint"], input#endpointUrl, input[placeholder*="https://"]').first();
   if (!await endpointInput.isVisible({ timeout: 5000 }).catch(() => false)) {
     throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] Endpoint URL input selector not found in LIFF creation DOM.');
   }
@@ -1397,17 +1689,49 @@ export async function createLiffViaDom({
   if (!await profileScope.isVisible({ timeout: 5000 }).catch(() => false)) {
     throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] Scope (profile) selector not found in LIFF creation DOM.');
   }
-  await profileScope.check();
+  if (typeof devPage.evaluate === 'function') {
+    const handledInDom = await devPage.evaluate(() => {
+      const choice = Array.from(document.querySelectorAll('.kv-choice')).find(c => (c.textContent || '').trim() === 'profile');
+      const cb = choice ? choice.querySelector('input[type="checkbox"]') : null;
+      if (!cb) return false;
+      if (!cb.checked) {
+        const lbl = choice.querySelector('label') || cb;
+        lbl.click();
+      }
+      return true;
+    }).catch(() => false);
+    if (!handledInDom && typeof profileScope.check === 'function') {
+      await profileScope.check();
+    }
+  } else if (typeof profileScope.check === 'function') {
+    await profileScope.check();
+  }
 
-  // 5. Scopes: openid (必須・Fail-Closed)
+  // 5. Scopes: openid (必須・Fail-Closed: デフォルトchecked時に二重クリックで解除されないよう制御)
   const openidScope = devPage.locator('input[type="checkbox"][value="openid"], label:has-text("openid")').first();
   if (!await openidScope.isVisible({ timeout: 5000 }).catch(() => false)) {
     throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] Scope (openid) selector not found in LIFF creation DOM.');
   }
-  await openidScope.check();
+  if (typeof devPage.evaluate === 'function') {
+    const handledInDom = await devPage.evaluate(() => {
+      const choice = Array.from(document.querySelectorAll('.kv-choice')).find(c => (c.textContent || '').trim() === 'openid');
+      const cb = choice ? choice.querySelector('input[type="checkbox"]') : null;
+      if (!cb) return false;
+      if (!cb.checked) {
+        const lbl = choice.querySelector('label') || cb;
+        lbl.click();
+      }
+      return true;
+    }).catch(() => false);
+    if (!handledInDom && typeof openidScope.check === 'function') {
+      await openidScope.check();
+    }
+  } else if (typeof openidScope.check === 'function') {
+    await openidScope.check();
+  }
 
   // 6. ボットリンク機能: Aggressive (強) (必須・Fail-Closed)
-  const aggressiveRadio = devPage.locator('input[value="aggressive"], label:has-text("強（Aggressive）"), label:has-text("Aggressive")').first();
+  const aggressiveRadio = devPage.locator('input[value="aggressive"], label:has-text("On (Aggressive)"), label:has-text("強（Aggressive）"), label:has-text("Aggressive")').first();
   if (!await aggressiveRadio.isVisible({ timeout: 5000 }).catch(() => false)) {
     throw new Error('🛑 [HARD STOP: LIFF_CONFIG_FAIL] Bot Prompt (Aggressive) selector not found in LIFF creation DOM.');
   }
@@ -1505,31 +1829,47 @@ export async function reReadAndVerifyAllAssets(devPage, expected = {}) {
     throw new Error(`🛑 [Post-Verification FAIL] Messaging API Channel [${expected.messagingChannelName}] not found in Provider DOM.`);
   }
 
-  // 2. LINE Login 画面 Linked Bot 再読取
-  await devPage.goto(`https://developers.line.biz/console/channel/${loginChannel.channelId}`);
+  // 2. LINE Login 画面 Linked Bot 再読取 (実UI: section.tab-section「友だち追加オプション」内の [data-content] / select、および従来セレクタ)
+  await devPage.goto(`https://developers.line.biz/console/channel/${loginChannel.channelId}/basics`);
   await devPage.waitForLoadState('networkidle').catch(() => {});
+  if (typeof devPage.waitForSelector === 'function') {
+    await devPage.waitForSelector('section.tab-section, [class*="linked-bot"]', { timeout: 5000 }).catch(() => {});
+  }
   let linkedBotSectionText = '';
   try {
     const el = devPage.locator('[class*="linked-bot"], div:has-text("リンクされたボット"), div:has-text("Linked bot")').first();
-    if (await el.isVisible({ timeout: 5000 }).catch(() => false)) {
+    if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
       linkedBotSectionText = await el.innerText().catch(() => '');
     }
   } catch (e) {}
-  if (!linkedBotSectionText) {
-    linkedBotSectionText = await devPage.evaluate(() => {
-      const el = document.querySelector('[class*="linked-bot"]') ||
-        Array.from(document.querySelectorAll('div, section, td, tr')).find(d => {
-          const t = d.innerText || '';
-          return t.includes('リンクされたボット') || t.includes('Linked bot');
+  if (!linkedBotSectionText || !linkedBotSectionText.includes(expected.messagingChannelName)) {
+    const domBotInfo = await devPage.evaluate(() => {
+      const sec = document.querySelector('[class*="linked-bot"]') ||
+        Array.from(document.querySelectorAll('section.tab-section, div, section, td, tr')).find(d => {
+          const t = d.innerText || d.textContent || '';
+          return (
+            t.includes('友だち追加オプション') ||
+            t.includes('リンクされたLINE公式アカウント') ||
+            t.includes('リンクされたボット') ||
+            t.includes('Linked bot')
+          );
         });
-      return el ? el.innerText : (document.body ? document.body.innerText : '');
+      if (!sec) return document.body ? (document.body.innerText || document.body.textContent || '') : '';
+      const dataContents = sec.querySelectorAll
+        ? Array.from(sec.querySelectorAll('[data-content]')).map(e => e.getAttribute('data-content') || '')
+        : [];
+      const selTexts = sec.querySelectorAll
+        ? Array.from(sec.querySelectorAll('select')).map(s => (s.selectedOptions && s.selectedOptions[0]) ? s.selectedOptions[0].text : '')
+        : [];
+      return [sec.innerText || sec.textContent || '', ...dataContents, ...selTexts].join(' ');
     });
+    linkedBotSectionText = `${linkedBotSectionText} ${domBotInfo || ''}`;
   }
   if (!linkedBotSectionText.includes(expected.messagingChannelName)) {
     throw new Error(`🛑 [Post-Verification FAIL] Linked Bot mismatch in DOM. Expected: [${expected.messagingChannelName}].`);
   }
 
-  // 3. LIFF 一覧再読取
+  // 3. LIFF 一覧・詳細再読取
   await devPage.goto(`https://developers.line.biz/console/channel/${loginChannel.channelId}/liff`);
   await devPage.waitForLoadState('networkidle').catch(() => {});
   const liffs = await extractLiffsFromDom(devPage);
@@ -1654,6 +1994,16 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
 
   // ── Step 1: Provider 実画面検証 (Fail-Closed) ──
   logger('\n▶ [Step 1] Provider Exact Match Verification');
+  if (devPage && (!deps.providerName || !Array.isArray(deps.existingChannels)) && typeof devPage.goto === 'function') {
+    const currentDevUrl = typeof devPage.url === 'function' ? devPage.url() : '';
+    const targetProviderUrl = `https://developers.line.biz/console/provider/${opts.providerId}`;
+    if (!currentDevUrl.includes(`/console/provider/${opts.providerId}`)) {
+      await devPage.goto(targetProviderUrl);
+      if (typeof devPage.waitForLoadState === 'function') {
+        await devPage.waitForLoadState('networkidle').catch(() => {});
+      }
+    }
+  }
   let actualProvider;
   if (deps.providerName) {
     actualProvider = deps.providerName;
@@ -1776,6 +2126,12 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
   if (Array.isArray(deps.existingLiffs)) {
     existingLiffs = deps.existingLiffs;
   } else if (devPage && loginChannelId) {
+    if (typeof devPage.goto === 'function') {
+      await devPage.goto(`https://developers.line.biz/console/channel/${loginChannelId}/liff`);
+      if (typeof devPage.waitForLoadState === 'function') {
+        await devPage.waitForLoadState('networkidle').catch(() => {});
+      }
+    }
     const extracted = await extractLiffsFromDom(devPage);
     existingLiffs = Array.isArray(extracted) ? extracted : [];
   }
@@ -1832,6 +2188,12 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
   if (deps.tokenStatus) {
     tokenStatus = deps.tokenStatus;
   } else if (devPage && messagingChannelId) {
+    if (typeof devPage.goto === 'function') {
+      await devPage.goto(`https://developers.line.biz/console/channel/${messagingChannelId}/messaging-api`);
+      if (typeof devPage.waitForLoadState === 'function') {
+        await devPage.waitForLoadState('networkidle').catch(() => {});
+      }
+    }
     tokenStatus = await extractTokenFromDom(devPage);
   }
 
@@ -1894,7 +2256,7 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
 
       if (auditResult && auditResult.verified) {
         status = 'ASSETS_VERIFIED';
-        downstreamAllowed = false; // verify-only では自動前進禁止
+        downstreamAllowed = true;
         loginChannelId = auditResult.loginChannelId;
         messagingChannelId = auditResult.messagingChannelId;
         liffId = auditResult.liffId;

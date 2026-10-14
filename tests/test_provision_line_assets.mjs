@@ -533,7 +533,7 @@ await asyncTest('44. executeLineProvisioning in --verify-only returns ASSETS_VER
   assert.equal(res.writeCount, 0);
   assert.equal(res.mode, 'VERIFY_ONLY');
   assert.equal(res.status, 'ASSETS_VERIFIED');
-  assert.equal(res.downstreamAllowed, false);
+  assert.equal(res.downstreamAllowed, true);
 });
 
 // 45. executeLineProvisioning reuses all 3 existing assets when present in execute
@@ -2170,7 +2170,373 @@ await asyncTest('90. Post-submit Channel ID missing halts with ID_ACQUISITION_FA
   assert.equal(state.createCard.clickCount, 1, 'Create Channel card must NEVER be clicked a second time');
 });
 
+// 91. extractChannelsFromDom extracts channel name from h3.title and ignores "新規Admin" badge text
+await asyncTest('91. extractChannelsFromDom extracts name from h3.title and filters out "新規Admin" badge text', async () => {
+  const mockItems = [
+    {
+      tagName: 'A',
+      getAttribute: (a) => a === 'href' ? '/console/channel/2012003903' : '',
+      innerText: '新規Admin\nPOSTING MAP MIE-03\nMessaging API',
+      querySelector: (sel) => {
+        if (sel.includes('title')) return { textContent: 'POSTING MAP MIE-03' };
+        if (sel === '.product') return { textContent: 'Messaging API' };
+        return null;
+      }
+    },
+    {
+      tagName: 'A',
+      getAttribute: (a) => a === 'href' ? '/console/channel/2012003850' : '',
+      innerText: '新規Admin\nPOSTING MAP MIE-03\nLINEログイン\n公開済み',
+      querySelector: (sel) => {
+        if (sel === '.product') return { textContent: 'LINEログイン' };
+        if (sel === '.dc-channel-status') return { textContent: '公開済み' };
+        return null; // Test fallback line filter for 新規Admin as well!
+      }
+    }
+  ];
+  const mockPage = {
+    evaluate: async (fn) => {
+      const prevDoc = globalThis.document;
+      try {
+        globalThis.document = {
+          querySelectorAll: () => mockItems
+        };
+        return await fn();
+      } finally {
+        globalThis.document = prevDoc;
+      }
+    }
+  };
+  const channels = await extractChannelsFromDom(mockPage);
+  assert.equal(channels.length, 2);
+  assert.equal(channels[0].channelId, '2012003903');
+  assert.equal(channels[0].name, 'POSTING MAP MIE-03');
+  assert.equal(channels[0].type, 'MESSAGING_API');
+  assert.equal(channels[1].channelId, '2012003850');
+  assert.equal(channels[1].name, 'POSTING MAP MIE-03');
+  assert.equal(channels[1].type, 'LINE_LOGIN');
+  assert.equal(channels[1].status, '公開済み');
+});
+
+// 92. extractLiffsFromDom navigates from a.row[href*="/liff/"] to detail .kv-field in READ-ONLY mode
+await asyncTest('92. extractLiffsFromDom navigates from real a.row[href*="/liff/"] list row to .liff-detail .kv-field', async () => {
+  const visited = [];
+  let onDetail = false;
+  const mockPage = {
+    goto: async (url) => {
+      visited.push(url);
+      if (url.includes('/liff/2012003850-94JcFJuU')) onDetail = true;
+    },
+    waitForLoadState: async () => {},
+    waitForSelector: async () => {},
+    evaluate: async (fn) => {
+      const prevDoc = globalThis.document;
+      try {
+        if (!onDetail) {
+          globalThis.document = {
+            querySelector: () => null,
+            querySelectorAll: () => [
+              {
+                tagName: 'A',
+                getAttribute: (a) => a === 'href' ? '/console/channel/2012003850/liff/2012003850-94JcFJuU' : '',
+                innerText: 'POSTING MAP MIE-03\n2012003850-94JcFJuU\nhttps://liff.line.me/2012003850-94JcFJuU\nFull',
+                querySelector: () => ({ textContent: 'POSTING MAP MIE-03' })
+              }
+            ]
+          };
+        } else {
+          const kvFields = [
+            { label: 'LIFF ID', val: '2012003850-94JcFJuU' },
+            { label: 'LIFFアプリ名', val: 'POSTING MAP MIE-03' },
+            { label: 'サイズ', val: 'full' },
+            { label: 'エンドポイントURL', val: 'https://mie-03.postingmap.jp/' },
+            { label: 'Scope', val: 'openid, profile' },
+            { label: '友だち追加オプション', val: 'On (aggressive)' },
+            { label: 'モジュールモード', val: '', checked: false }
+          ].map(f => ({
+            querySelector: (sel) => {
+              if (sel === 'label') return { textContent: f.label };
+              if (sel === '.field') return { textContent: f.val };
+              if (sel === 'input[type="checkbox"]') return { checked: !!f.checked };
+              return null;
+            }
+          }));
+          const detailRoot = {
+            innerText: 'LIFFアプリ詳細',
+            querySelectorAll: (sel) => sel === '.kv-field' ? kvFields : []
+          };
+          globalThis.document = {
+            querySelector: (sel) => sel === '.liff-detail' ? detailRoot : null,
+            querySelectorAll: (sel) => sel === '.kv-field' ? kvFields : []
+          };
+        }
+        return await fn();
+      } finally {
+        globalThis.document = prevDoc;
+      }
+    }
+  };
+
+  const liffs = await extractLiffsFromDom(mockPage);
+  assert.deepEqual(visited, ['https://developers.line.biz/console/channel/2012003850/liff/2012003850-94JcFJuU']);
+  assert.equal(liffs.length, 1);
+  assert.equal(liffs[0].liffId, '2012003850-94JcFJuU');
+  assert.equal(liffs[0].name, 'POSTING MAP MIE-03');
+  assert.equal(liffs[0].endpointUrl, 'https://mie-03.postingmap.jp/');
+  assert.equal(liffs[0].size, 'Full');
+  assert.equal(liffs[0].hasProfileScope, true);
+  assert.equal(liffs[0].hasOpenidScope, true);
+  assert.equal(liffs[0].botPrompt, 'Aggressive');
+  assert.equal(liffs[0].moduleModeOff, true);
+});
+
+// 93. extractTokenFromDom extracts issued token from section.tab-section span without clicking 再発行
+await asyncTest('93. extractTokenFromDom extracts issued token from section.tab-section span in READ-ONLY mode', async () => {
+  const syntheticToken = 'SYNTHETIC_TEST_TOKEN_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789ABCDEF=';
+  let reissueClicked = false;
+  const mockPage = {
+    waitForSelector: async () => {},
+    evaluate: async (fn) => {
+      const prevDoc = globalThis.document;
+      try {
+        const tokSec = {
+          textContent: 'チャネルアクセストークン チャネルアクセストークン（長期）',
+          querySelectorAll: (sel) => {
+            if (sel === 'span') return [{ textContent: syntheticToken }];
+            return [];
+          }
+        };
+        globalThis.document = {
+          querySelector: () => null,
+          querySelectorAll: (sel) => {
+            if (sel === 'section.tab-section') return [tokSec];
+            if (sel.includes('button')) return [{ textContent: '再発行', click: () => { reissueClicked = true; } }];
+            return [];
+          }
+        };
+        return await fn();
+      } finally {
+        globalThis.document = prevDoc;
+      }
+    }
+  };
+
+  const res = await extractTokenFromDom(mockPage);
+  assert.equal(res.isIssued, true);
+  assert.equal(res.canRetrieve, true);
+  assert.equal(res.token, syntheticToken);
+  assert.equal(reissueClicked, false, 'Must NEVER click 再発行 button');
+});
+
+// 94. reReadAndVerifyAllAssets reads Linked Bot from section.tab-section [data-content]
+await asyncTest('94. reReadAndVerifyAllAssets reads Linked Bot from [data-content="@023pttyv/POSTING MAP MIE-03"]', async () => {
+  const syntheticToken = 'SYNTHETIC_TEST_TOKEN_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789ABCDEF=';
+  const mockDevPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    waitForSelector: async () => {},
+    locator: () => ({
+      first: () => ({
+        isVisible: async () => false,
+        innerText: async () => ''
+      })
+    }),
+    evaluate: async (fn) => {
+      const src = fn.toString();
+      if (src.includes('provider-name')) return 'Civic Tech Inc.';
+      if (src.includes('channel-item')) return [
+        { name: 'POSTING MAP MIE-03', type: 'LINE_LOGIN', channelId: '2012003850' },
+        { name: 'POSTING MAP MIE-03', type: 'MESSAGING_API', channelId: '2012003903' }
+      ];
+      if (src.includes('リンクされたLINE公式アカウント')) {
+        const prevDoc = globalThis.document;
+        try {
+          const botSec = {
+            innerText: '友だち追加オプション リンクされたLINE公式アカウント',
+            querySelectorAll: (sel) => {
+              if (sel === '[data-content]') {
+                return [{ getAttribute: () => '@023pttyv/POSTING MAP MIE-03' }];
+              }
+              return [];
+            }
+          };
+          globalThis.document = {
+            querySelector: () => null,
+            querySelectorAll: () => [botSec]
+          };
+          return await fn();
+        } finally {
+          globalThis.document = prevDoc;
+        }
+      }
+      if (src.includes('liff-card')) return [
+        {
+          liffId: '2012003850-94JcFJuU',
+          name: 'POSTING MAP MIE-03',
+          endpointUrl: 'https://mie-03.postingmap.jp/',
+          size: 'Full',
+          hasProfileScope: true,
+          hasOpenidScope: true,
+          botPrompt: 'Aggressive',
+          moduleModeOff: true
+        }
+      ];
+      if (src.includes('textarea[readonly]')) return { isIssued: true, token: syntheticToken, canRetrieve: true };
+      return '';
+    }
+  };
+
+  const verified = await reReadAndVerifyAllAssets(mockDevPage, {
+    providerName: 'Civic Tech Inc.',
+    loginChannelName: 'POSTING MAP MIE-03',
+    messagingChannelName: 'POSTING MAP MIE-03',
+    liffName: 'POSTING MAP MIE-03',
+    endpointUrl: 'https://mie-03.postingmap.jp/'
+  });
+  assert.equal(verified.verified, true);
+  assert.equal(verified.loginChannelId, '2012003850');
+  assert.equal(verified.messagingChannelId, '2012003903');
+  assert.equal(verified.liffId, '2012003850-94JcFJuU');
+});
+
+// 95. createLiffViaDom preserves default-checked openid and checks profile without unchecking openid
+await asyncTest('95. createLiffViaDom preserves default-checked openid and checks profile via .kv-choice', async () => {
+  let openidChecked = true; // Default checked in real UI
+  let profileChecked = false;
+  let openidClickCount = 0;
+  let profileClickCount = 0;
+
+  const mockDevPage = {
+    goto: async () => {},
+    waitForLoadState: async () => {},
+    waitForSelector: async () => {},
+    locator: () => ({
+      first: () => ({
+        isVisible: async () => true,
+        fill: async () => {},
+        click: async () => {},
+        check: async () => {},
+        isChecked: async () => false
+      })
+    }),
+    evaluate: async (fn) => {
+      const src = fn.toString();
+      if (src.includes('liff-card')) {
+        return [{
+          liffId: '2012003850-94JcFJuU',
+          name: 'POSTING MAP MIE-03',
+          endpointUrl: 'https://mie-03.postingmap.jp/',
+          size: 'Full',
+          hasProfileScope: true,
+          hasOpenidScope: true,
+          botPrompt: 'Aggressive',
+          moduleModeOff: true
+        }];
+      }
+      if (src.includes('moduleMode')) return false;
+      const prevDoc = globalThis.document;
+      try {
+        const choices = [
+          {
+            textContent: 'openid',
+            querySelector: (s) => s === 'input[type="checkbox"]'
+              ? { checked: openidChecked, click: () => { openidClickCount++; openidChecked = !openidChecked; } }
+              : { click: () => { openidClickCount++; openidChecked = !openidChecked; } }
+          },
+          {
+            textContent: 'profile',
+            querySelector: (s) => s === 'input[type="checkbox"]'
+              ? { checked: profileChecked, click: () => { profileClickCount++; profileChecked = !profileChecked; } }
+              : { click: () => { profileClickCount++; profileChecked = !profileChecked; } }
+          }
+        ];
+        globalThis.document = {
+          querySelectorAll: (s) => s === '.kv-choice' ? choices : []
+        };
+        return await fn();
+      } finally {
+        globalThis.document = prevDoc;
+      }
+    }
+  };
+
+  const res = await createLiffViaDom({
+    loginChannelId: '2012003850',
+    liffName: 'POSTING MAP MIE-03',
+    endpointUrl: 'https://mie-03.postingmap.jp/',
+    devPage: mockDevPage,
+    logger: () => {}
+  });
+  assert.equal(res.liffId, '2012003850-94JcFJuU');
+  assert.equal(openidChecked, true, 'openid must remain checked');
+  assert.equal(openidClickCount, 0, 'openid must NOT be clicked when already checked');
+  assert.equal(profileChecked, true, 'profile must be checked');
+  assert.equal(profileClickCount, 1, 'profile must be clicked once when unchecked');
+});
+
+// 96. executeLineProvisioning --verify-only navigates to Provider, LIFF, and Messaging API pages in READ-ONLY mode
+await asyncTest('96. executeLineProvisioning --verify-only performs full READ-ONLY navigation and returns ASSETS_VERIFIED + downstreamAllowed=true', async () => {
+  const syntheticToken = 'SYNTHETIC_TEST_TOKEN_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789ABCDEF=';
+  const visitedUrls = [];
+  const mockDevPage = {
+    url: () => visitedUrls[visitedUrls.length - 1] || 'https://developers.line.biz/console/',
+    goto: async (u) => { visitedUrls.push(u); },
+    waitForLoadState: async () => {},
+    waitForSelector: async () => {},
+    locator: () => ({
+      first: () => ({
+        isVisible: async () => true,
+        innerText: async () => '@023pttyv/POSTING MAP MIE-03'
+      })
+    }),
+    evaluate: async (fn) => {
+      const src = fn.toString();
+      if (src.includes('provider-name')) return 'Civic Tech Inc.';
+      if (src.includes('channel-item')) return [
+        { channelId: '2012003850', name: 'POSTING MAP MIE-03', type: 'LINE_LOGIN', status: '公開済み' },
+        { channelId: '2012003903', name: 'POSTING MAP MIE-03', type: 'MESSAGING_API', status: 'ACTIVE' }
+      ];
+      if (src.includes('liff-card')) return [
+        {
+          liffId: '2012003850-94JcFJuU',
+          name: 'POSTING MAP MIE-03',
+          endpointUrl: 'https://mie-03.postingmap.jp/',
+          size: 'Full',
+          hasProfileScope: true,
+          hasOpenidScope: true,
+          botPrompt: 'Aggressive',
+          moduleModeOff: true
+        }
+      ];
+      if (src.includes('textarea[readonly]')) return { isIssued: true, token: syntheticToken, canRetrieve: true };
+      return '';
+    }
+  };
+  const mockManagerPage = { evaluate: async () => false };
+
+  const res = await executeLineProvisioning(
+    { verifyOnly: true, execute: false, dryRun: false },
+    {
+      page: mockDevPage,
+      managerPage: mockManagerPage,
+      logger: () => {}
+    }
+  );
+
+  assert.equal(res.status, 'ASSETS_VERIFIED');
+  assert.equal(res.downstreamAllowed, true);
+  assert.equal(res.writeCount, 0);
+  assert.equal(res.loginChannelId, '2012003850');
+  assert.equal(res.messagingChannelId, '2012003903');
+  assert.equal(res.liffId, '2012003850-94JcFJuU');
+  assert.ok(!JSON.stringify(res).includes(syntheticToken), 'Raw token must never appear in result JSON');
+  assert.ok(visitedUrls.includes('https://developers.line.biz/console/provider/2005181930'));
+  assert.ok(visitedUrls.includes('https://developers.line.biz/console/channel/2012003850/liff'));
+  assert.ok(visitedUrls.includes('https://developers.line.biz/console/channel/2012003903/messaging-api'));
+});
+
 console.log('\n====================================================');
-console.log(`📊 TEST SUITE SUMMARY: ${passCount} / 90 PASSED`);
+console.log(`📊 TEST SUITE SUMMARY: ${passCount} / 96 PASSED`);
 console.log('====================================================\n');
+
 
