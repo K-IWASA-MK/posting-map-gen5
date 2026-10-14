@@ -1,10 +1,10 @@
 window.PMS_CLIENT_CONFIG = {
   version: "1.0.1",
-  districtId: "KUWANA",
+  districtId: "MIE-03",
   status: "ACTIVE",
   environment: "production",
   api: {
-    gasWebAppUrl: "https://script.google.com/macros/s/AKfycbyjeoNc8CeTT6AyNdTSBTqLFGHs23vUaQiavSlsPKjVmMBZ5hE_KlJqN8RI12cgb7S-/exec"
+    gasWebAppUrl: "https://script.google.com/macros/s/AKfycbz8fVdYYDFQIcDA4j-e06iTaZhEGp4qFNEaZXZfCFYI5xIMNKLbHADaTjV4tF-QfmNx/exec"
   },
   staticMaster: {
     addressCsvFilename: "address_master.csv",
@@ -12,7 +12,7 @@ window.PMS_CLIENT_CONFIG = {
     electionHistoryFilename: "election_history.json"
   },
   line: {
-    liffId: "2010941735-x29F8IQ3"
+    liffId: "2012003850-94JcFJuU"
   },
   features: {
     photoUpload: true,
