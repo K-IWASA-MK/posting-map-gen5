@@ -49,7 +49,7 @@ description: 地区プロビジョニング規範。国勢調査小地域単位�
 
 ### 4.2 Branding 画像正本契約
 1. **LINE Login 公式ロゴ正本**: [icon180-v2.png](../../../active/h-app/assets/icon180-v2.png) (`active/h-app/assets/icon180-v2.png`, 180×180 PNG)
-2. **Rich Message 画像正本**: [richmenu_default.png](../../../assets/richmenu_default.png) (`assets/richmenu_default.png`)
+2. **Rich Message 画像正本**: `assets/richmenu_default.png` (`assets/richmenu_default.png`)
    - ファイル名に `richmenu` が含まれていても、LINE機能上は **Rich Message（リッチメッセージ）画像正本** として扱う。
    - **LINE Rich Menu (`/richmenu`) は作成対象ではない**。
    - 新規画像生成・再デザイン・類似画像代用は禁止。
@@ -152,7 +152,7 @@ description: 地区プロビジョニング規範。国勢調査小地域単位�
 3. 以下を設定（Canonical Contract）：
    - **アイテム名 (`input[name="title"]`)**: `posting area map`
    - **テンプレート**: `変更` ➔ `縦長` ➔ `figure[data-type="26"]`（縦長上下2分割 A/B、`1040 × 1850`）を選択。
-   - **背景画像 (`input[type="file"][name="image"]`)**: `1040 × 1850` キャンバス（上段 Area A `1040 × 925` = 白背景、下段 Area B `1040 × 925` = 正本 [richmenu_default.png](../../../assets/richmenu_default.png) 配置）をアップロード。
+   - **背景画像 (`input[type="file"][name="image"]`)**: `1040 × 1850` キャンバス（上段 Area A `1040 × 925` = 白背景、下段 Area B `1040 × 925` = 正本 `assets/richmenu_default.png` 配置）をアップロード。
    - **Area A アクション**:
      - `select[name="linkTypeA"]` = `テキスト` (`TEXT`)
      - `textarea[name="textA"]`:
@@ -191,4 +191,4 @@ description: 地区プロビジョニング規範。国勢調査小地域単位�
    - **Token Existence**: 長期トークン存在確認（マスク値のみ記録、再発行 `0`）
    - **Rich Message**: `<RICH_MESSAGE_ID>`, `contentsType === 26`, Area A = `TEXT`（正本文言完全一致）, Area B = `URL` (`https://liff.line.me/<LIFF_ID>`, ラベル `"リンクに移動"`)
    - **Welcome Message**: `balloons.length === 2`、Bubble 1 = `TEXT` (`"下の「📱 H-Appを開く」から\nご利用ください。"`), Bubble 2 = `RICH` (`originalId === <RICH_MESSAGE_ID>`), `sendOnlyFirstTime === false`、プレビュー表示順序 `TEXT → Rich Message`
-2. 対象地区向けに [provision-line-assets.mjs](../../../scripts/provision-line-assets.mjs) `--verify-only` が実行可能な状態では、追加の READ ONLY 検証として実行し、`status === "ASSETS_VERIFIED"`, `downstreamAllowed === true`, `writeCount === 0` を確認する（Verify処理から External Mutation を一切発生させない）。
+2. 対象地区向けに `scripts/provision-line-assets.mjs` `--verify-only` が実行可能な状態では、追加の READ ONLY 検証として実行し、`status === "ASSETS_VERIFIED"`, `downstreamAllowed === true`, `writeCount === 0` を確認する（Verify処理から External Mutation を一切発生させない）。
