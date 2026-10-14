@@ -1,5 +1,4 @@
 [
   ".agents/current-scope.json",
-  "scripts/provision-domain.mjs",
-  "scripts/provision-line-assets.mjs"
+  "scripts/acquire-liff-id.mjs"
 ]
