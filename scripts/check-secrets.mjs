@@ -38,9 +38,6 @@ const ALLOWED_TEST_DUMMIES = new Set([
   'super-secret-provisioning-token-123456',
   'dummy-provisioning-token',
   'INVALID_DUMMY_TOKEN_FOR_AUDIT',
-  'KUWANA_DASHBOARD_PASS_CHECK',
-  'DUMMY_GOOGLE_MAPS_API_KEY_KAMEYAMA_VALID_39_CHARS',
-  'DUMMY_GOOGLE_MAPS_API_KEY_KURASHIKI_VALID_39_CHAR',
   'mock-jwt-signature-token-1234567890'
 ]);
 

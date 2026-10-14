@@ -47,7 +47,7 @@ let hasMismatch = false;
 
 const activeConfigPath = path.join(rootDir, 'data', 'config.js');
 if (!fs.existsSync(activeConfigPath)) {
-  console.error(`❌ Missing data/config.js! Run 'npm run sync:config' first.`);
+  console.error(`❌ Missing data/config.js!`);
   hasMismatch = true;
 } else {
   const configContent = fs.readFileSync(activeConfigPath, 'utf8');
@@ -126,21 +126,6 @@ if (fs.existsSync(rootIndexPath)) {
     hasMismatch = true;
   } else {
     console.log(`✅ PASS: index.html has no hardcoded LIFF ID.`);
-  }
-}
-
-const clientsDir = path.join(rootDir, 'clients');
-if (fs.existsSync(clientsDir)) {
-  const clients = fs.readdirSync(clientsDir);
-  for (const client of clients) {
-    const configPath = path.join(clientsDir, client, 'config.js');
-    if (fs.existsSync(configPath)) {
-      const content = fs.readFileSync(configPath, 'utf8');
-      if (!content.includes(ssotUrl)) {
-        console.error(`❌ Mismatch in clients/${client}/config.js: gasWebAppUrl does not match SSOT!`);
-        hasMismatch = true;
-      }
-    }
   }
 }
 

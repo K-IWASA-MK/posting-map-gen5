@@ -16,7 +16,6 @@ scratch/
 .env.*
 .clasp.json
 deployment.json
-.quarantine_kuwana_snapshot/
 .secrets/
 
 # External Raw Archives
