@@ -175,9 +175,7 @@
 
 | スクリプト | 分類 | 分類理由・現物根拠 |
 |---|---|---|
-| `scripts/verify-gate-minus-1.mjs` | 🟢 継承 | Gate -1 環境分離・接続遮断の恒久自動検証スクリプト。 |
 | `scripts/serve.mjs` | 🟢 継承 | ローカル開発・検証用HTTPサーバー。 |
-| `scripts/certify-universal-engine.mjs` | 🟢 継承 | Universal Engine 認証テスト。 |
 | `scripts/safe-deploy.mjs` | 🟡 再構築 | 安全デプロイスクリプト。Universal専用デプロイへ改定。 |
 | `scripts/generate-boundaries-geojson.py` | 🟢 継承 | e-Stat ShapefileからGeoJSONを生成するパイプライン。 |
 | `scripts/sort-address-master.py` | 🟢 継承 | 住所マスターの正規化・ソートツール。 |

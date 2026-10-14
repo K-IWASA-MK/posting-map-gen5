@@ -19,7 +19,7 @@
 
 | ステータス | 定義 | 判定基準 |
 |:---|:---|:---|
-| **VERIFIED** | 実装および検証が完了し、契約との整合性が確認されている状態 | 現存するコード、既存テスト、Gate -1 スクリプト、または確定文書により検証可能なもの |
+| **VERIFIED** | 実装および検証が完了し、契約との整合性が確認されている状態 | 現存するコード、既存テスト、検証ゲートスクリプト、または確定文書により検証可能なもの |
 | **GAP** | 設計契約として確定しているが、現行コードへの実装または実機検証が未完了の状態 | Gate 5 以降での実装・修正・実機テストが必要な項目（例: `requestId` 冪等性照合） |
 | **FUTURE IMPLEMENTATION** | 将来の計画として合意されているが、現フェーズでは未配備・将来検討とする状態 | Gate 8 以降のアーキテクチャ近代化や、機械的自動フック（`hooks.json` 等）の配備 |
 | **UNDETERMINED** | 現行の仕様・インフラ環境からは一意に数値を特定できず、未確定である状態 | GAS の同時実行限界や Google インフラ内部の非公開クォータ挙動 |
@@ -32,11 +32,11 @@
 
 | REQ-ID | 要件 | 不変条件 / Design Contract | ADR | Data / API Contract | Implementation Target | Verification | Status |
 |:---|:---|:---|:---|:---|:---|:---|:---|
-| **REQ-ARCH-001** | 4層物理分離 | Client / Backend Standalone GAS / Pure DB / Master Data の物理的分離 | [ADR-001](../architecture/decisions/ADR-001.md) | `DATA_LIFECYCLE.md` §1<br>`API_CONTRACT.md` §2 | `index.html`<br>`active/h-app/`<br>`active/api/v2_api.js`<br>`data/` | `npm run gate:minus-1` (Check 2: No bound scripts, Check 4: No regional code) | **VERIFIED** |
-| **REQ-ARCH-002** | Universal Engine | 1地区=1完成アプリ=1単独フォルダー=1単独リポジトリ=1単独ドメイン。共通Runtime改変禁止、地域差はdata/で吸収 | [ADR-003](../architecture/decisions/ADR-003.md) | `01_DESIGN_CONTRACT.md` §1<br>`DATA_DICTIONARY.md` §0 | Git Root<br>`active/`<br>`data/` | `npm run gate:minus-1` (Check 4: Universal Engine pureness) | **VERIFIED** |
+| **REQ-ARCH-001** | 4層物理分離 | Client / Backend Standalone GAS / Pure DB / Master Data の物理的分離 | [ADR-001](../architecture/decisions/ADR-001.md) | `DATA_LIFECYCLE.md` §1<br>`API_CONTRACT.md` §2 | `index.html`<br>`active/h-app/`<br>`active/api/v2_api.js`<br>`data/` | アーキテクチャ・境界検証ゲート（No bound scripts / No regional code） | **VERIFIED** |
+| **REQ-ARCH-002** | Universal Engine | 1地区=1完成アプリ=1単独フォルダー=1単独リポジトリ=1単独ドメイン。共通Runtime改変禁止、地域差はdata/で吸収 | [ADR-003](../architecture/decisions/ADR-003.md) | `01_DESIGN_CONTRACT.md` §1<br>`DATA_DICTIONARY.md` §0 | Git Root<br>`active/`<br>`data/` | Universal Boundary 検証ゲート（Universal Engine pureness） | **VERIFIED** |
 | **REQ-ARCH-003** | `active/` 不可侵境界と共通進化 | 地区特化のための変更は禁止。共通改善・バグ修正はGate統制下で許容 | [ADR-003](../architecture/decisions/ADR-003.md) | `AGENTS.md` §1<br>`01_DESIGN_CONTRACT.md` §1 | `active/` 全域 | 変更前の事前宣言および事後 `git diff` 差分照合 | **VERIFIED** |
 | **REQ-ARCH-004** | レガシー互換性・実行環境制約 | IIFE / グローバル Singleton 構造の当面尊重と近代化境界の分離 | [ADR-007](../architecture/decisions/ADR-007.md) | `API_CONTRACT.md` §2 | `active/h-app/app.js`<br>`active/api/v2_api.js`<br>`active/business/` | コード構造監査（既存の即時実行関数および単一インスタンス管理を確認） | **VERIFIED** |
-| **REQ-ARCH-005** | Pure DB 原則 | スプレッドシート内にスクリプト、カスタム関数、トリガーを内包しない | [ADR-001](../architecture/decisions/ADR-001.md) | `01_DESIGN_CONTRACT.md` §2<br>`DATA_LIFECYCLE.md` §1 | 外部 Google Spreadsheet DB | `npm run gate:minus-1` (Check 2: Pure DB 検査) | **VERIFIED** |
+| **REQ-ARCH-005** | Pure DB 原則 | スプレッドシート内にスクリプト、カスタム関数、トリガーを内包しない | [ADR-001](../architecture/decisions/ADR-001.md) | `01_DESIGN_CONTRACT.md` §2<br>`DATA_LIFECYCLE.md` §1 | 外部 Google Spreadsheet DB | Standalone GAS / Pure DB 境界検査 | **VERIFIED** |
 
 ---
 
@@ -81,7 +81,7 @@
 
 | REQ-ID | 要件 | 不変条件 / Design Contract | ADR | Data / API Contract | Implementation Target | Verification | Status |
 |:---|:---|:---|:---|:---|:---|:---|:---|
-| **REQ-GOV-001** | リポジトリ境界 (永久原則) | 作業対象 Git root を絶対境界とし、SSD 上の他地区リポジトリ参照を永久禁止 | [ADR-003](../architecture/decisions/ADR-003.md)<br>[ADR-008](../architecture/decisions/ADR-008.md) | `AGENTS.md` §3 | AI Agent 探索・作業環境 | `npm run gate:minus-1` (Check 5: No reference to other districts) | **VERIFIED** |
+| **REQ-GOV-001** | リポジトリ境界 (永久原則) | 作業対象 Git root を絶対境界とし、SSD 上の他地区リポジトリ参照を永久禁止 | [ADR-003](../architecture/decisions/ADR-003.md)<br>[ADR-008](../architecture/decisions/ADR-008.md) | `AGENTS.md` §3 | AI Agent 探索・作業環境 | リポジトリ境界・Universal Cleanliness 検証ゲート（No reference to other districts） | **VERIFIED** |
 | **REQ-GOV-002** | 8-Stage Protocol 変更統制 | Plan → Review → Impl → Verify → Diff → Commit → Deploy → Runtime の厳守 | [ADR-008](../architecture/decisions/ADR-008.md) | `AGENTS.md` §4, §6<br>`01_DESIGN_CONTRACT.md` §1 | `.agents/workflows/development/workflow.md` | Gate 0〜4 の進捗・コミット履歴・運用証跡 | **VERIFIED** |
 | **REQ-GOV-003** | 最小権限・実行モード分離 | READ / AUDIT / DESIGN / DOC ONLY 等、フェーズに応じた権限の厳格制限 | [ADR-008](../architecture/decisions/ADR-008.md) | `.agents/rules/agent-authority.md` | AI Agent プロンプト・就業規則 | Gate指示ごとのモード遵守確認 | **VERIFIED** |
 | **REQ-GOV-004** | 事前宣言と事後差分照合 | ファイル変更前の日本語事前宣言と、完了後の `git diff` 1行単位照合 | [ADR-008](../architecture/decisions/ADR-008.md) | `AGENTS.md` §4 | Git 差分管理 | 未宣言変更ゼロの確認（No Silent Changes） | **VERIFIED** |

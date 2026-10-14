@@ -6,7 +6,6 @@
 - **Supreme Authority**: [AGENTS.md](../../AGENTS.md)
 - **Release Baseline**: [UNIVERSAL_RELEASE_BASELINE.md](../architecture/UNIVERSAL_RELEASE_BASELINE.md)
 - **Security Baseline**: [SECURITY_BASELINE.md](../security/SECURITY_BASELINE.md)
-- **Parent GAS Routing**: [UNIVERSAL_PARENT_GAS_ROUTING_DESIGN.md](../architecture/UNIVERSAL_PARENT_GAS_ROUTING_DESIGN.md)
 
 ---
 

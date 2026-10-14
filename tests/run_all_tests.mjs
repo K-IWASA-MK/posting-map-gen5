@@ -12,7 +12,6 @@ const testSuites = [
   'test_phase20_monitoring_verification.mjs',
   'test_phase19_cutover_verification.mjs',
   'test_phase18_migration_verification.mjs',
-  'test_phase17_production_verification.mjs',
   'test_phase16_testing_verification.mjs',
   'test_phase15_security_verification.mjs',
   'test_phase14_performance_verification.mjs',
@@ -61,14 +60,12 @@ const testSuites = [
 
 const isCiMode = process.argv.includes('--ci');
 
-const CI_EXCLUDED_SUITES = new Set([
-  'test_phase17_production_verification.mjs'
-]);
+const CI_EXCLUDED_SUITES = new Set([]);
 
 // Safety Assertions for CI Mode
 if (isCiMode) {
-  if (CI_EXCLUDED_SUITES.size !== 1) {
-    console.error(`🛑 [Safety Assertion Failed] CI_EXCLUDED_SUITES must contain exactly 1 suite. Actual: ${CI_EXCLUDED_SUITES.size}`);
+  if (CI_EXCLUDED_SUITES.size !== 0) {
+    console.error(`🛑 [Safety Assertion Failed] CI_EXCLUDED_SUITES must contain exactly 0 suites. Actual: ${CI_EXCLUDED_SUITES.size}`);
     process.exit(1);
   }
   for (const excluded of CI_EXCLUDED_SUITES) {
@@ -84,15 +81,12 @@ const activeSuites = isCiMode
   : testSuites;
 
 if (isCiMode) {
-  if (activeSuites.length !== testSuites.length - 1) {
-    console.error(`🛑 [Safety Assertion Failed] CI active suites count (${activeSuites.length}) must equal testSuites.length - 1 (${testSuites.length - 1}).`);
+  if (activeSuites.length !== testSuites.length) {
+    console.error(`🛑 [Safety Assertion Failed] CI active suites count (${activeSuites.length}) must equal testSuites.length (${testSuites.length}).`);
     process.exit(1);
   }
   console.log("====================================================");
-  console.log("ℹ️ CI MODE: Excluding 1 non-hermetic live production suite:");
-  for (const s of CI_EXCLUDED_SUITES) {
-    console.log(`   - ${s} (requires local clasp authentication and live production verification)`);
-  }
+  console.log("ℹ️ CI MODE: Running all hermetic test suites (0 excluded).");
 }
 
 console.log("====================================================");

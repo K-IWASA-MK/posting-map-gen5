@@ -10,7 +10,6 @@
   - API契約: [API_CONTRACT.md](../api/API_CONTRACT.md)
   - データ辞書: [DATA_DICTIONARY.md](../data/DATA_DICTIONARY.md)
   - セキュリティ基準: [SECURITY_BASELINE.md](../security/SECURITY_BASELINE.md)
-  - 親GAS動的ルーティング設計: [UNIVERSAL_PARENT_GAS_ROUTING_DESIGN.md](UNIVERSAL_PARENT_GAS_ROUTING_DESIGN.md)
 
 ---
 
@@ -36,7 +35,7 @@ Universal Engine v1.0 における各コンポーネントのベースライン�
 | **Data Schema (Pure DB)** | `v1.0.0` | スプレッドシート 13シート標準スキーマ（初期11 Core複製+現場2オンデマンド生成、DATA_DICTIONARY.md準拠）、カラム定義、数式注入防御 | `docs/data/DATA_DICTIONARY.md`<br>`active/business/` |
 | **Provisioning Spec** | `v1.0.0` | 新地区プロビジョニング仕様、マスターデータ構造（住所・境界・自治体）、DISTRICT_REGISTRY規約 | `docs/operations/DISTRICT_PROVISIONING_RUNBOOK.md` |
 | **Security Baseline** | `v1.0.0` | SEC-001〜SEC-007 セキュリティ境界（セッション、サニタイズ、テナント分離、PIN秘匿等） | `docs/security/SECURITY_BASELINE.md` |
-| **Deployment Baseline** | `v1.0.0` | 単一親GASプロジェクト、Head固定Web App公開、動的Spreadsheetルーティング | `docs/architecture/UNIVERSAL_PARENT_GAS_ROUTING_DESIGN.md` |
+| **Deployment Baseline** | `v1.0.0` | 単一親GASプロジェクト、Head固定Web App公開、動的Spreadsheetルーティング | `docs/operations/DISTRICT_PROVISIONING_RUNBOOK.md` |
 
 ---
 
