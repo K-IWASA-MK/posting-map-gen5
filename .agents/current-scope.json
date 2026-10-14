@@ -1,5 +1,4 @@
 [
   ".agents/current-scope.json",
-  "scripts/provision-line-assets.mjs",
-  "tests/test_provision_line_assets.mjs"
+  ".agents/skills/district-data-provisioning/SKILL.md"
 ]
