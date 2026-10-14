@@ -2,7 +2,7 @@
 /**
  * POSTING MAP - Autonomous LINE Assets Provisioning & Verification Engine
  *
- * MIE-03 向け LINE 3資産 (LINE Login Channel, LINE Official Account / Messaging API Channel, LIFF)
+ * 対象地区向け LINE 3資産 (LINE Login Channel, LINE Official Account / Messaging API Channel, LIFF)
  * の自動プロビジョニングおよび厳格検証を行う。
  *
  * 【最高設計原則 & ガバナンス規程】
@@ -71,19 +71,106 @@ export const LOGIN_CREATE_CONTRACT = {
   formErrorTimesSelector: '.new-channel .form-error i.las.la-times'
 };
 
+/**
+ * リポジトリ内の SSOT (data/config.js, CNAME, git remote) から LINE プロビジョニングの既定値を動的解決する。
+ */
+export function resolveLineDefaults({ rootDir = process.cwd(), gitRemoteUrl } = {}) {
+  let districtId = '';
+  try {
+    const configContent = fs.readFileSync(path.join(rootDir, 'data', 'config.js'), 'utf8');
+    const match = configContent.match(/districtId\s*:\s*["']([^"']+)["']/);
+    if (match) districtId = match[1].trim();
+  } catch { /* ignore */ }
+
+  let cnameDomain = '';
+  try {
+    cnameDomain = fs.readFileSync(path.join(rootDir, 'CNAME'), 'utf8').trim();
+  } catch { /* ignore */ }
+
+  let repo = '';
+  let repoSlug = '';
+  try {
+    const rawRemote = typeof gitRemoteUrl === 'string'
+      ? gitRemoteUrl.trim()
+      : execSync('git config --get remote.origin.url', { cwd: rootDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const m = rawRemote.match(/github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?$/);
+    if (m) repo = m[1];
+    const slugMatch = (repo || rawRemote).match(/posting-map-([a-z0-9-]+?)(?:\.git)?$/i);
+    if (slugMatch) repoSlug = slugMatch[1].toLowerCase();
+  } catch { /* ignore */ }
+
+  const targetDomain = districtId ? `${districtId.toLowerCase()}.postingmap.jp` : cnameDomain;
+  const endpointUrl = targetDomain ? `https://${targetDomain}/` : '';
+  const appName = districtId ? `POSTING MAP ${districtId}` : '';
+
+  return {
+    districtId,
+    targetDomain,
+    cnameDomain,
+    endpointUrl,
+    repo,
+    repoSlug,
+    appName,
+    loginChannelName: appName,
+    messagingChannelName: appName,
+    liffName: appName,
+    description: districtId ? `POSTING MAP ${districtId} 配布員認証アプリ` : ''
+  };
+}
+
+/**
+ * LINE プロビジョニング実行前の 4者 Identity 整合検証ゲート (Fail-Closed)
+ * Domain Provisioning 完了後にのみ実行される契約として、
+ * districtId / targetDomain (endpointUrl) / local CNAME / git remote repo slug の完全一致を検証する。
+ */
+export function verifyLineIdentityPrecondition({ districtId, endpointUrl, cnameDomain, repoSlug } = {}) {
+  const normalizedId = String(districtId || '').trim();
+  if (!normalizedId || !/^[A-Z0-9-]+$/.test(normalizedId)) {
+    throw new Error(`🛑 [HARD STOP: LINE_IDENTITY_PRECONDITION_FAILED] Invalid or missing districtId: [${districtId}].`);
+  }
+  const expectedSlug = normalizedId.toLowerCase();
+  const expectedDomain = `${expectedSlug}.postingmap.jp`;
+  const expectedEndpoint = `https://${expectedDomain}/`;
+
+  if (String(endpointUrl || '').trim() !== expectedEndpoint) {
+    throw new Error(
+      `🛑 [HARD STOP: LINE_IDENTITY_PRECONDITION_FAILED] Endpoint URL [${endpointUrl}] does not match expected [${expectedEndpoint}] for districtId [${normalizedId}].`
+    );
+  }
+  if (String(cnameDomain || '').trim() !== expectedDomain) {
+    throw new Error(
+      `🛑 [HARD STOP: LINE_IDENTITY_PRECONDITION_FAILED] Local CNAME [${cnameDomain}] does not match expected targetDomain [${expectedDomain}] for districtId [${normalizedId}]. Complete Domain Provisioning first.`
+    );
+  }
+  const normalizedSlug = String(repoSlug || '').trim().toLowerCase();
+  if (!normalizedSlug || normalizedSlug !== expectedSlug) {
+    throw new Error(
+      `🛑 [HARD STOP: LINE_IDENTITY_PRECONDITION_FAILED] Git remote repo slug [${repoSlug}] does not match districtId [${normalizedId}] (expected: posting-map-${expectedSlug}).`
+    );
+  }
+  return {
+    aligned: true,
+    districtId: normalizedId,
+    targetDomain: expectedDomain,
+    endpointUrl: expectedEndpoint
+  };
+}
+
+const RESOLVED_DEFAULTS = resolveLineDefaults();
+
 export const DEFAULT_CONFIG = {
   providerName: 'Civic Tech Inc.',
   providerId: '2005181930',
-  districtId: 'MIE-03',
-  appName: 'POSTING MAP MIE-03',
-  loginChannelName: 'POSTING MAP MIE-03',
-  messagingChannelName: 'POSTING MAP MIE-03',
-  liffName: 'POSTING MAP MIE-03',
-  endpointUrl: 'https://mie-03.postingmap.jp/',
+  districtId: RESOLVED_DEFAULTS.districtId,
+  appName: RESOLVED_DEFAULTS.appName,
+  loginChannelName: RESOLVED_DEFAULTS.loginChannelName,
+  messagingChannelName: RESOLVED_DEFAULTS.messagingChannelName,
+  liffName: RESOLVED_DEFAULTS.liffName,
+  endpointUrl: RESOLVED_DEFAULTS.endpointUrl,
   botPrompt: 'Aggressive',
   moduleMode: false,
   cdpUrl: 'http://127.0.0.1:9222',
-  repo: 'K-IWASA-MK/posting-map-mie-03',
+  repo: RESOLVED_DEFAULTS.repo,
   contactEmail: 'postingareamap@gmail.com',
   oaCategoryMain: OA_CATEGORY_CONTRACT.categoryMain,
   oaCategorySub: OA_CATEGORY_CONTRACT.categorySub
@@ -92,20 +179,23 @@ export const DEFAULT_CONFIG = {
 /**
  * コマンドライン引数パーサー
  */
-export function parseArgs(argv = process.argv.slice(2)) {
+export function parseArgs(argv = process.argv.slice(2), context = {}) {
+  const baseDefaults = (context.rootDir || context.gitRemoteUrl)
+    ? resolveLineDefaults(context)
+    : RESOLVED_DEFAULTS;
   const options = {
     providerName: DEFAULT_CONFIG.providerName,
     providerId: DEFAULT_CONFIG.providerId,
-    districtId: DEFAULT_CONFIG.districtId,
-    appName: DEFAULT_CONFIG.appName,
-    loginChannelName: DEFAULT_CONFIG.loginChannelName,
-    messagingChannelName: DEFAULT_CONFIG.messagingChannelName,
-    liffName: DEFAULT_CONFIG.liffName,
-    endpointUrl: DEFAULT_CONFIG.endpointUrl,
+    districtId: baseDefaults.districtId,
+    appName: baseDefaults.appName,
+    loginChannelName: baseDefaults.loginChannelName,
+    messagingChannelName: baseDefaults.messagingChannelName,
+    liffName: baseDefaults.liffName,
+    endpointUrl: baseDefaults.endpointUrl,
     botPrompt: DEFAULT_CONFIG.botPrompt,
     moduleMode: DEFAULT_CONFIG.moduleMode,
     cdpUrl: DEFAULT_CONFIG.cdpUrl,
-    repo: DEFAULT_CONFIG.repo,
+    repo: baseDefaults.repo,
     contactEmail: DEFAULT_CONFIG.contactEmail,
     oaCategoryMain: DEFAULT_CONFIG.oaCategoryMain,
     oaCategorySub: DEFAULT_CONFIG.oaCategorySub,
@@ -113,6 +203,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
     verifyOnly: false,
     dryRun: true
   };
+  let explicitEndpoint = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -132,8 +223,12 @@ export function parseArgs(argv = process.argv.slice(2)) {
       options.loginChannelName = `POSTING MAP ${options.districtId}`;
       options.messagingChannelName = `POSTING MAP ${options.districtId}`;
       options.liffName = `POSTING MAP ${options.districtId}`;
+      if (!explicitEndpoint && options.districtId) {
+        options.endpointUrl = `https://${options.districtId.toLowerCase()}.postingmap.jp/`;
+      }
     } else if (arg === '--endpoint' && argv[i + 1]) {
       options.endpointUrl = argv[++i];
+      explicitEndpoint = true;
     } else if (arg === '--provider' && argv[i + 1]) {
       options.providerName = argv[++i];
     } else if (arg === '--cdp-url' && argv[i + 1]) {
@@ -723,7 +818,7 @@ export function verifyBotSettings(settings = {}) {
 /**
  * GitHub Pages & CNAME 前提条件検証
  */
-export function verifyPagesAndCnamePrecondition(repo = DEFAULT_CONFIG.repo, expectedCname = 'mie-03.postingmap.jp', execRunner = execSync) {
+export function verifyPagesAndCnamePrecondition(repo = DEFAULT_CONFIG.repo, expectedCname = RESOLVED_DEFAULTS.targetDomain, execRunner = execSync) {
   try {
     const rawPages = execRunner(`gh api repos/${repo}/pages`, { encoding: 'utf8' });
     const pages = JSON.parse(rawPages);
@@ -872,7 +967,7 @@ export async function createLoginChannelViaDom({
   providerId = DEFAULT_CONFIG.providerId,
   providerName = DEFAULT_CONFIG.providerName,
   appName = DEFAULT_CONFIG.loginChannelName,
-  description = 'POSTING MAP MIE-03 配布員認証アプリ',
+  description = RESOLVED_DEFAULTS.description,
   email = DEFAULT_CONFIG.contactEmail,
   devPage,
   logger = console.log
@@ -1924,7 +2019,22 @@ export async function reReadAndVerifyAllAssets(devPage, expected = {}) {
  * LINE プロビジョニング主執行エンジン
  */
 export async function executeLineProvisioning(options = {}, deps = {}) {
-  const opts = { ...DEFAULT_CONFIG, ...options };
+  const customContext = (options.rootDir || options.gitRemoteUrl)
+    ? resolveLineDefaults({ rootDir: options.rootDir, gitRemoteUrl: options.gitRemoteUrl })
+    : null;
+  const baseConfig = customContext
+    ? {
+        ...DEFAULT_CONFIG,
+        districtId: customContext.districtId,
+        appName: customContext.appName,
+        loginChannelName: customContext.loginChannelName,
+        messagingChannelName: customContext.messagingChannelName,
+        liffName: customContext.liffName,
+        endpointUrl: customContext.endpointUrl,
+        repo: customContext.repo
+      }
+    : DEFAULT_CONFIG;
+  const opts = { ...baseConfig, ...options };
   const rawLogger = deps.logger || console.log;
   const knownSecrets = deps.knownSecrets || [];
   const logger = createSanitizedLogger(rawLogger, knownSecrets);
@@ -1942,6 +2052,17 @@ export async function executeLineProvisioning(options = {}, deps = {}) {
   let browser = null;
   let devPage = deps.page || null;
   let managerPage = deps.managerPage || null;
+
+  // ── Precondition Gate: Domain Provisioning 収束 (districtId / endpointUrl / CNAME / git remote) 検証 ──
+  const refDefaults = customContext || RESOLVED_DEFAULTS;
+  if (customContext || (opts.districtId === refDefaults.districtId && opts.endpointUrl === refDefaults.endpointUrl)) {
+    verifyLineIdentityPrecondition({
+      districtId: opts.districtId,
+      endpointUrl: opts.endpointUrl,
+      cnameDomain: refDefaults.cnameDomain,
+      repoSlug: refDefaults.repoSlug
+    });
+  }
 
   // ── Preflight Gate: Chrome CDP 接続 & ログイン実査 ──
   if (opts.execute || opts.verifyOnly) {

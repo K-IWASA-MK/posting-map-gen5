@@ -2,12 +2,12 @@
 /**
  * POSTING MAP - Autonomous Domain Provisioning & Verification Engine
  *
- * MIE-03 独自ドメイン (mie-03.postingmap.jp) のプロビジョニングおよび
+ * 対象地区独自ドメイン (<district-id>.postingmap.jp) のプロビジョニングおよび
  * Dual-Stage 状態遷移機械による厳格検証を行う。
  *
  * 【厳格運用原則】
  * 1. デフォルト Dry Run (--execute 明示時のみ外部書込許可)
- * 2. 実行順序: CDP/XServer Preflight ➔ GitHub Pages 先行 ➔ XServer DNS CNAME 後続 (DNS先行禁止)
+ * 2. 実行順序: Identity & CNAME Precheck ➔ CDP/XServer Preflight ➔ GitHub Pages 先行 ➔ XServer DNS CNAME 後続 ➔ Local CNAME Convergence
  * 3. Exact Match Confirmation Gate: 文字列 includes() 禁止、各フィールド・Zone の完全一致判定
  * 4. Dual-Stage 状態遷移機械 & 終了コード規程:
  *    - Exit 0: PASS (HTTP 200完全一致), DNS_PENDING, CERT_PENDING のみ
@@ -15,32 +15,264 @@
  *    - PENDING 状態時は downstreamAllowed: false (後続工程への遷移禁止)
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import dns from 'node:dns/promises';
 import { execSync } from 'node:child_process';
 import { chromium } from 'playwright';
 
+const DEFAULT_ZONE = 'postingmap.jp';
+
+/**
+ * data/config.js (districtId) および git remote から Target Domain / Repository を導出する。
+ * CNAME は出力側 (収束対象) であるため、入力 SSOT として参照してはならない。
+ */
+export function resolveDomainDefaults({
+  rootDir = process.cwd(),
+  zone = DEFAULT_ZONE,
+  gitRemoteUrl = null,
+  execRunner = execSync,
+  fsModule = fs
+} = {}) {
+  let districtId = '';
+  try {
+    const configPath = path.join(rootDir, 'data', 'config.js');
+    if (fsModule.existsSync(configPath)) {
+      const content = fsModule.readFileSync(configPath, 'utf8');
+      const match = content.match(/\bdistrictId\s*:\s*['"]([^'"]+)['"]/);
+      if (match && match[1]) {
+        districtId = match[1].trim();
+      }
+    }
+  } catch (_) {}
+
+  const normalizedZone = (zone || DEFAULT_ZONE).trim().toLowerCase();
+  const derivedDomain = districtId ? `${districtId.toLowerCase()}.${normalizedZone}` : '';
+
+  let remoteRaw = gitRemoteUrl ? String(gitRemoteUrl).trim() : '';
+  if (!remoteRaw) {
+    try {
+      remoteRaw = String(
+        execRunner('git remote get-url origin', {
+          cwd: rootDir,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }) || ''
+      ).trim();
+    } catch (_) {}
+  }
+
+  let repo = '';
+  let repoSlug = '';
+  const repoMatch = remoteRaw.match(/(?:github\.com[:/]|^)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/);
+  if (repoMatch && repoMatch[1]) {
+    repo = repoMatch[1];
+  } else if (/^posting-map-[A-Za-z0-9_-]+$/i.test(remoteRaw)) {
+    repo = remoteRaw;
+  }
+
+  const slugMatch = (repo || remoteRaw).match(/posting-map-([A-Za-z0-9_-]+?)(?:\.git|$)/i);
+  if (slugMatch && slugMatch[1]) {
+    const candidate = slugMatch[1];
+    if (!/^gen\d+$/i.test(candidate) && candidate.toLowerCase() !== 'universal') {
+      repoSlug = candidate;
+    }
+  }
+
+  return {
+    districtId,
+    domain: derivedDomain,
+    repo,
+    repoSlug,
+    zone: normalizedZone
+  };
+}
+
+/**
+ * 外部書込前の Identity 整合検証 (Fail-Closed)
+ * data/config.js districtId と git remote repo slug の一致を検証する。
+ */
+export function verifyDomainIdentityAlignment({
+  districtId,
+  domain,
+  repo,
+  repoSlug = '',
+  zone = DEFAULT_ZONE
+} = {}) {
+  const normZone = (zone || DEFAULT_ZONE).trim().toLowerCase();
+  const normDomain = (domain || '').trim().toLowerCase();
+  const normDistrictId = (districtId || '').trim();
+
+  if (!normDomain || !normDomain.endsWith(`.${normZone}`)) {
+    throw new Error(`🛑 [HARD STOP: INVALID_TARGET_DOMAIN] Target domain [${domain}] is missing or outside zone [${normZone}].`);
+  }
+
+  if (normDistrictId) {
+    if (!/^[A-Z0-9-]+$/.test(normDistrictId)) {
+      throw new Error(`🛑 [HARD STOP: INVALID_DISTRICT_ID] Invalid districtId format: [${normDistrictId}].`);
+    }
+    const expectedDomain = `${normDistrictId.toLowerCase()}.${normZone}`;
+    if (normDomain !== expectedDomain) {
+      throw new Error(`🛑 [HARD STOP: IDENTITY_MISMATCH] Target domain [${normDomain}] does not match districtId [${normDistrictId}] (expected [${expectedDomain}]).`);
+    }
+  }
+
+  const resolvedSlug = repoSlug || (() => {
+    const m = String(repo || '').match(/posting-map-([A-Za-z0-9_-]+?)(?:\.git|$)/i);
+    if (m && m[1] && !/^gen\d+$/i.test(m[1]) && m[1].toLowerCase() !== 'universal') {
+      return m[1];
+    }
+    return '';
+  })();
+
+  if (resolvedSlug && normDistrictId && resolvedSlug.toLowerCase() !== normDistrictId.toLowerCase()) {
+    throw new Error(
+      `🛑 [HARD STOP: IDENTITY_MISMATCH] District Identity mismatch between data/config.js (${normDistrictId}) and git remote slug (${resolvedSlug} in ${repo}). Aborting before external write.`
+    );
+  }
+
+  if (resolvedSlug && !normDistrictId) {
+    const expectedFromSlug = `${resolvedSlug.toLowerCase()}.${normZone}`;
+    if (normDomain !== expectedFromSlug) {
+      throw new Error(
+        `🛑 [HARD STOP: IDENTITY_MISMATCH] Target domain (${normDomain}) does not match git remote slug (${resolvedSlug}). Aborting before external write.`
+      );
+    }
+  }
+
+  return true;
+}
+
+/**
+ * ローカル CNAME ファイルの状態検証および収束計画判定 (Fail-Closed)
+ * - Current CNAME === Target Domain -> NO_OP
+ * - Current CNAME === 旧地区ドメイン (<old>.postingmap.jp) -> UPDATE_NEEDED
+ * - 欠損・複数行・プロトコル混入・別ゾーン等の異常形式 -> Fail-Closed HARD STOP
+ */
+export function validateAndPlanCnameSync({
+  rootDir = process.cwd(),
+  domain,
+  zone = DEFAULT_ZONE,
+  fsModule = fs
+} = {}) {
+  const normZone = (zone || DEFAULT_ZONE).trim().toLowerCase();
+  const escapedZone = normZone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const validDomainRegex = new RegExp(`^[a-z0-9-]+\\.${escapedZone}$`, 'i');
+
+  const normTarget = (domain || '').trim().toLowerCase();
+  if (!validDomainRegex.test(normTarget)) {
+    throw new Error(`🛑 [HARD STOP: INVALID_CNAME_STATE] Target domain [${domain}] is invalid for zone [${normZone}].`);
+  }
+
+  const cnamePath = path.join(rootDir, 'CNAME');
+  if (!fsModule.existsSync(cnamePath)) {
+    throw new Error(`🛑 [HARD STOP: INVALID_CNAME_STATE] Local CNAME file does not exist at ${cnamePath}.`);
+  }
+
+  const rawContent = fsModule.readFileSync(cnamePath, 'utf8');
+  const lines = rawContent.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length !== 1 || !validDomainRegex.test(lines[0])) {
+    throw new Error(
+      `🛑 [HARD STOP: INVALID_CNAME_STATE] Local CNAME contains unexpected or malformed content: [${rawContent.trim()}]. Expected single-line <district>.${normZone}.`
+    );
+  }
+
+  const currentCname = lines[0].toLowerCase();
+  if (currentCname === normTarget) {
+    return {
+      action: 'NO_OP',
+      currentCname,
+      targetCname: normTarget,
+      cnamePath
+    };
+  }
+
+  return {
+    action: 'UPDATE_NEEDED',
+    currentCname,
+    targetCname: normTarget,
+    cnamePath
+  };
+}
+
+/**
+ * ローカル CNAME ファイルを Target Domain へ収束させる
+ */
+export function syncLocalCnameFile({
+  rootDir = process.cwd(),
+  domain,
+  zone = DEFAULT_ZONE,
+  execute = false,
+  fsModule = fs,
+  logger = console.log
+} = {}) {
+  const plan = validateAndPlanCnameSync({ rootDir, domain, zone, fsModule });
+
+  if (plan.action === 'NO_OP') {
+    logger(`   ✅ [Local CNAME] Already aligned to ${plan.targetCname} (NO_OP).`);
+    return {
+      action: 'NO_OP',
+      currentCname: plan.currentCname,
+      targetCname: plan.targetCname
+    };
+  }
+
+  if (!execute) {
+    logger(`   ℹ️ [Dry Run] Local CNAME convergence simulated: ${plan.currentCname} -> ${plan.targetCname}.`);
+    return {
+      action: 'SIMULATED_UPDATE',
+      currentCname: plan.currentCname,
+      targetCname: plan.targetCname
+    };
+  }
+
+  fsModule.writeFileSync(plan.cnamePath, `${plan.targetCname}\n`, 'utf8');
+  const verified = fsModule.readFileSync(plan.cnamePath, 'utf8').trim().toLowerCase();
+  if (verified !== plan.targetCname) {
+    throw new Error(`🛑 [HARD STOP: CNAME_SYNC_FAILED] Local CNAME verification failed after write! Expected [${plan.targetCname}], Got [${verified}].`);
+  }
+
+  logger(`   💾 [Local CNAME] Updated local CNAME from ${plan.currentCname} to ${plan.targetCname}.`);
+  return {
+    action: 'UPDATED',
+    currentCname: plan.currentCname,
+    targetCname: plan.targetCname
+  };
+}
+
+const RESOLVED_DOMAIN_DEFAULTS = resolveDomainDefaults();
+
 export const DEFAULT_CONFIG = {
-  domain: 'mie-03.postingmap.jp',
+  districtId: RESOLVED_DOMAIN_DEFAULTS.districtId,
+  domain: RESOLVED_DOMAIN_DEFAULTS.domain,
   target: 'k-iwasa-mk.github.io',
   ttl: 3600,
-  zone: 'postingmap.jp',
+  zone: DEFAULT_ZONE,
   timeoutMs: 180000,
   intervalMs: 10000,
   cdpUrl: 'http://[::1]:9222',
-  repo: 'K-IWASA-MK/posting-map-mie-03'
+  repo: RESOLVED_DOMAIN_DEFAULTS.repo,
+  repoSlug: RESOLVED_DOMAIN_DEFAULTS.repoSlug
 };
 
 /**
  * コマンドライン引数パーサー
  */
-export function parseArgs(argv = process.argv.slice(2)) {
+export function parseArgs(argv = process.argv.slice(2), context = {}) {
+  const base = (context.rootDir || context.gitRemoteUrl)
+    ? { ...DEFAULT_CONFIG, ...resolveDomainDefaults(context) }
+    : DEFAULT_CONFIG;
+
   const options = {
-    domain: DEFAULT_CONFIG.domain,
-    target: DEFAULT_CONFIG.target,
-    ttl: DEFAULT_CONFIG.ttl,
-    zone: DEFAULT_CONFIG.zone,
-    timeoutMs: DEFAULT_CONFIG.timeoutMs,
-    intervalMs: DEFAULT_CONFIG.intervalMs,
+    districtId: base.districtId,
+    domain: base.domain,
+    target: base.target,
+    ttl: base.ttl,
+    zone: base.zone,
+    timeoutMs: base.timeoutMs,
+    intervalMs: base.intervalMs,
+    repo: base.repo,
+    repoSlug: base.repoSlug,
     execute: false,
     verifyOnly: false,
     dryRun: true
@@ -58,8 +290,17 @@ export function parseArgs(argv = process.argv.slice(2)) {
     } else if (arg === '--dry-run') {
       options.dryRun = true;
       options.execute = false;
+    } else if (arg === '--district-id' && argv[i + 1]) {
+      options.districtId = argv[++i].trim();
+      options.domain = `${options.districtId.toLowerCase()}.${options.zone}`;
     } else if (arg === '--domain' && argv[i + 1]) {
       options.domain = argv[++i];
+      if (!argv.includes('--district-id')) {
+        options.districtId = '';
+      }
+    } else if (arg === '--repo' && argv[i + 1]) {
+      options.repo = argv[++i];
+      options.repoSlug = '';
     } else if (arg === '--target' && argv[i + 1]) {
       options.target = argv[++i];
     } else if (arg === '--ttl' && argv[i + 1]) {
@@ -495,8 +736,21 @@ export async function syncXserverDnsRecord({
  * メイン実行エントリーポイント
  */
 export async function executeDomainProvisioning(options = {}, deps = {}) {
-  const opts = { ...DEFAULT_CONFIG, ...options };
+  const baseDefaults = (options.rootDir || options.gitRemoteUrl)
+    ? {
+        ...DEFAULT_CONFIG,
+        ...resolveDomainDefaults({
+          rootDir: options.rootDir,
+          zone: options.zone || DEFAULT_CONFIG.zone,
+          gitRemoteUrl: options.gitRemoteUrl,
+          fsModule: deps.fs || fs
+        })
+      }
+    : DEFAULT_CONFIG;
+  const opts = { ...baseDefaults, ...options };
   const logger = deps.logger || console.log;
+  const fsModule = deps.fs || fs;
+  const rootDir = opts.rootDir || process.cwd();
 
   logger('====================================================');
   logger('🚀 POSTING MAP - Autonomous Domain Provisioning');
@@ -506,8 +760,30 @@ export async function executeDomainProvisioning(options = {}, deps = {}) {
   logger('====================================================');
 
   let writeCount = 0;
+  let cnameSync = null;
   let page = deps.page || null;
   let browser = null;
+
+  // ── Pre-Execution Identity & CNAME Precheck Gate (MUST PASS BEFORE ANY EXTERNAL OR LOCAL WRITE) ──
+  if (!opts.verifyOnly) {
+    verifyDomainIdentityAlignment({
+      districtId: opts.districtId,
+      domain: opts.domain,
+      repo: opts.repo,
+      repoSlug: opts.repoSlug,
+      zone: opts.zone
+    });
+
+    const cnamePlan = validateAndPlanCnameSync({
+      rootDir,
+      domain: opts.domain,
+      zone: opts.zone,
+      fsModule
+    });
+    if (opts.execute && cnamePlan.action === 'UPDATE_NEEDED' && typeof fsModule.accessSync === 'function') {
+      fsModule.accessSync(cnamePlan.cnamePath, fs.constants.W_OK);
+    }
+  }
 
   // ── Preflight Gate: CDP & XServer Tab Validation (MUST PASS BEFORE GITHUB PAGES) ──
   // In execute mode, we MUST acquire and validate the XServer tab BEFORE any mutation to GitHub Pages.
@@ -592,6 +868,17 @@ export async function executeDomainProvisioning(options = {}, deps = {}) {
     } else {
       logger('   ℹ️ [Dry Run] No page attached; XServer DNS CNAME simulated (writeCount = 0).');
     }
+
+    // ── Phase 2b: Local Repository CNAME Convergence ──
+    logger('\n▶ [Phase 2b] Local Repository CNAME Convergence');
+    cnameSync = syncLocalCnameFile({
+      rootDir,
+      domain: opts.domain,
+      zone: opts.zone,
+      execute: opts.execute,
+      fsModule,
+      logger
+    });
   }
 
   // ── Phase 3: Dual-Stage 状態遷移機械検証 ──
@@ -609,6 +896,7 @@ export async function executeDomainProvisioning(options = {}, deps = {}) {
   return {
     ...result,
     writeCount,
+    cnameSync,
     mode: opts.execute ? 'EXECUTE' : opts.verifyOnly ? 'VERIFY_ONLY' : 'DRY_RUN'
   };
 }
