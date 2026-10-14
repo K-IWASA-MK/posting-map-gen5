@@ -1,6 +1,5 @@
 [
   ".agents/current-scope.json",
-  ".gitignore",
-  "scripts/check-secrets.mjs",
-  "scripts/validate-gas-endpoint-ssot.mjs"
+  "scripts/provision-domain.mjs",
+  "scripts/provision-line-assets.mjs"
 ]
