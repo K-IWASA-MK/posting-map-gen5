@@ -1,11 +1,13 @@
 [
   ".agents/current-scope.json",
   ".agents/os-registry.json",
-  ".agents/rules/district-data-transition-rule.md",
-  ".agents/skills/district-data-provisioning/SKILL.md",
-  ".agents/skills/official-data-audit/SKILL.md",
-  "docs/architecture/ADDRESS_EXTRACTION_RULE.md",
-  "docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md",
-  "docs/data/DATA_DICTIONARY.md",
-  "docs/operations/DISTRICT_PROVISIONING_RUNBOOK.md"
+  ".agents/rules/verification-gates.md",
+  ".agents/workflows/development/workflow.md",
+  "AGENTS.md",
+  "docs/ai-foundation.md",
+  "package.json",
+  "scripts/check-auditor-gate.mjs",
+  "scripts/check-entrance-gate.mjs",
+  "scripts/check-scope.mjs",
+  "tests/test_auditor_gate.mjs"
 ]
