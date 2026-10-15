@@ -12,6 +12,13 @@ AI社員の作業は、必ず以下の「9-Stage Execution Protocol」と「Veri
 ## 9-Stage Execution Protocol (正式開発フロー)
 ※ AI役職定義およびツール統制の詳細は Canonical SSOT である [docs/ai-foundation.md](../../../docs/ai-foundation.md) を参照すること。
 
+### Stage 0: Entrance Gatekeeper (入口検問) — [主担当: Execution AI / Design & Direction AI (`architect`)]
+- **発火条件**: Mission開始時の最初の指示受領後（および新Mission開始・Scope変更指示時）、Stage 0判定に必要なSSOT読取りを除く調査・外部通信・変更を開始する前に実行する（同一Mission内の通常のやり取りでは毎回再検問しない）。
+- **検問執行**: Execution AI は指示原文（Verbatim Instruction）をそのまま Fresh Isolated READ ONLY の `architect`（Entrance Gatekeeper）へ `invoke_subagent` で渡し、検問AIが毎回 [docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md](../../../docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md) および [AGENTS.md](../../../AGENTS.md) を実読して照合する。
+- **判定と分岐 (`[GATEKEEPER VERDICT]`)**:
+  - **`PASS`**: 原則違反なし ➔ 現行Mission Flow（Stage 1 以降）へ進行する（※Stage 0 `PASS` 自体は実装承認ではないため、ファイル変更には別途 Stage 2 の MASTER `Proceed` が必須）。
+  - **`REJECT`**: 原則違反あり ➔ **一切の調査・外部通信・変更を開始せず、その場で即 HARD STOP・差し戻し** とする。
+
 ### Stage 1: Plan (調査・計画策定 & Knowledge Impact Analysis) — [主担当: Execution AI]
 - READ ONLYで対象範囲と既存実装を調査（ファイル改変禁止）。
 - **Knowledge Impact Analysis**: 変更予定の Canonical Source が `.agents/os-registry.json` のどの Capability Pack に影響するかを事前に特定・宣言。

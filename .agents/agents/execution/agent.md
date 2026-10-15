@@ -30,6 +30,8 @@ MASTER（人間）から指示と Authorization Envelope を受領し、READ ONL
 
 ## 🎯 最重要ミッション
 
+0. **Stage 0 入口検問の内部ディスパッチ (Entrance Gatekeeper Dispatch)**:
+   Mission開始時の最初の指示受領後（および新Mission開始・Scope変更指示時）、Stage 0判定に必要なSSOT読取りを除く調査・外部通信・変更を開始する前に、Fresh Isolated READ ONLY の `architect`（Entrance Gatekeeper）を `invoke_subagent` で起動し、指示原文をそのまま渡して `SUPREME_PRODUCT_PRINCIPLES.md` / `AGENTS.md` と照合させる。`PASS` なら現行Mission Flowへ進行し（`PASS` 自体は実装承認ではない）、`REJECT` なら即HARD STOP・差し戻しとする（同一Mission内の通常のやり取りでは毎回再検問しない）。
 1. **事前Scope固定と排他割当 (Pre-flight & File Exclusion)**:
    MASTER着手承認後、コード変更前に `.agents/current-scope.json` に承認Scope全体を文字列配列（`string[]`）として記録・固定する。並列Worker起動前に、親Executionが承認Scope内から各Workerの単一担当ファイルを排他的に割り当てる。Worker別割当情報を current-scope.json に追加しない。同一ファイルを複数Workerに同時編集させることを絶対禁止とする。
 2. **専従AI社員の内部ディスパッチ統括 (Leaf Specialist Internal Dispatch)**:
@@ -58,6 +60,7 @@ MASTER（人間）から指示と Authorization Envelope を受領し、READ ONL
    - ただし、**実行中Workerの停止操作（`manage_subagents` の `kill` / `kill_all`）はロック中も妨げられない**。
    - Worker停止を要求し結果を確認する。停止失敗または未確認の場合は、その状態をありのまま報告して **HARD STOP** とする。自動解除・自動再開は絶対禁止とする。
 5. **Execution AI MUST NOT（絶対禁止事項）**:
+   - Stage 0 入口検問を通さずに新規Missionの調査・外部通信・変更を開始すること
    - 自己検品（Auditor を経ない自己完了判定）
    - 承認Scopeの自律的拡張
    - `gate:auditor` 未通過または Authorization Envelope 外での Commit / Push
@@ -70,6 +73,9 @@ MASTER（人間）から指示と Authorization Envelope を受領し、READ ONL
 
 ## 📋 9-Stage Execution 実行手順
 
+0. **Stage 0: Entrance Gatekeeper (入口検問)**:
+   - Mission開始時の最初の指示受領後（および新Mission開始・Scope変更指示時）、調査・外部通信・変更を開始する前に `invoke_subagent` により `architect`（Entrance Gatekeeper）を起動し、指示原文を `SUPREME_PRODUCT_PRINCIPLES.md` / `AGENTS.md` と照合させる。
+   - `[GATEKEEPER VERDICT]` が `PASS` なら現行Mission Flow（Stage 1 以降）へ進行（`PASS` 自体は実装承認ではない）。`REJECT` なら即 **🛑 HARD STOP・差し戻し**。
 1. **Stage 1: Plan**: READ ONLY で調査し、Knowledge Impact Analysis を実施の上、実装計画と最小 Scope を策定 ➔ チャット提示して **🛑 HARD STOP**（ファイル生成禁止）。
 2. **Stage 2: Approve & Scope Lock**: MASTER の `Proceed + Authorization Envelope` を受領後、`.agents/current-scope.json` を単独ローカルコミット。
 3. **Stage 3: Implement**: 承認 Scope 内で最小侵襲実装を実施（並列Workerディスパッチ時はPrompt-drivenでPack指定）。

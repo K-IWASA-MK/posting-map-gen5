@@ -4,8 +4,8 @@
   "activationState": "active",
   "principleContract": {
     "canonicalSource": "docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md",
-    "expectedVersion": "2026-10-12",
-    "sha256": "3e52d77ad774ee81b74485f139912477ad00502d0181c84b776f6bf442a61831"
+    "expectedVersion": "2026-10-15",
+    "sha256": "4ae42a8370432b4f4b6a8e637d0b71d0fe0ca59655ded5ce23363c1ba2a46a7a"
   },
   "universalContract": {
     "oneDistrictOneApp": true,
@@ -117,7 +117,7 @@
       "canonicalSources": [
         {
           "path": "docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md",
-          "sha256": "3e52d77ad774ee81b74485f139912477ad00502d0181c84b776f6bf442a61831"
+          "sha256": "4ae42a8370432b4f4b6a8e637d0b71d0fe0ca59655ded5ce23363c1ba2a46a7a"
         },
         {
           "path": "docs/architecture/UNIVERSAL_QUALITY_DOCTRINE.md",
@@ -181,7 +181,7 @@
         },
         {
           "path": ".agents/workflows/development/workflow.md",
-          "sha256": "39d32947aecf0e4a97ea161bbbb21676db6786e604d146a2be8333281c1504a9"
+          "sha256": "1385ceae61e18f491d99b686be13a3d04f8a78939d5f06ad866c4f9697c0b9a3"
         }
       ],
       "evidenceSources": [
@@ -194,11 +194,11 @@
       "canonicalSources": [
         {
           "path": "docs/ai-foundation.md",
-          "sha256": "f7aa74f6156ea7c53a5db671904ee1565c2eb6e233ac3d161102d30bce4bf0b3"
+          "sha256": "49908711f21102dc8521484ba6065c6e1c6b8abdab62ee8fc6ba3e719051fb4d"
         },
         {
           "path": "AGENTS.md",
-          "sha256": "29ccef0ea225725d5ed025a261b7ad4a9cb8e4756dcf6fa5e271e82b79a977fb"
+          "sha256": "aec87b09741415c9fcc34d05498c9c73275494205175df5eb02af260fb4a082a"
         }
       ],
       "evidenceSources": [

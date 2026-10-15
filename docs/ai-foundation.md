@@ -84,8 +84,8 @@ POSTING MAP の開発・保守・展開は、**Execution AI（Chief Orchestrator
 
 | 仕様軸 (Specification Axis) | 1. Design / Direction AI (architect) | 2. Execution AI (Chief Orchestrator) | 3. Parallel Worker (Subagent) | 4. Independent Auditor AI (auditor) | 5. District Provisioning AI (deployer) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **① Entry Point**<br>(起動条件・契機) | MASTER または親Executionからの新機能要求、アーキテクチャ再設計、構造改革、または Universal Gap 発生時の設計指示。 | MASTER 承認済みタスク（Proceed + Authorization Envelope）、または Design/Direction AI 設計書に基づく実装指示。 | 【通常実装時】親Executionから排他的担当Scope受領時。<br>【残骸監査時】Stage 8 実機確認PASS後、親Executionから確定差分および実機PASS証跡受領時。 | 親Executionからの内部ディスパッチ指示受領時（`invoke_subagent` による **Fresh isolated child context**）。 | 親Executionからの内部ディスパッチ指示（`districtId` 等）受領時。外部Driveリソース（`03_BRANCH/{districtId}/` 階層、DB、Storage、Archive）はServer-side決定論的自動導出パイプラインにより自律的に解決・プロビジョニングされる（Authorization Envelope: `EXTERNAL_WRITE: YES` 認可時）。 |
-| **② Authority**<br>(付与権限) | 全体構造設計、アーキテクチャレビュー、Scope 判断、方針指示、Lean Blueprint 策定。 | 調査、Knowledge Impact Analysis、実装計画策定、事前Scope固定、内部ディスパッチ（Leaf Specialists）、統合自己検証、Mechanical Gates（gate:auditor, gate:cleanup）、Envelopeに基づくCommit/Push執行。 | 【通常実装時】割り当てられた**排他的単一ファイルのみの実装・編集**、固定単体テスト実行、成果報告（`[WORKER REPORT]`）。<br>【残骸監査時】確定差分残骸およびGovernance Closureの静的検出、`[CLEANUP REPORT]` 返却（**ZERO WRITE**、自律削除禁止）。 | 提示された差分・客観的エビデンスの完全独立査読、allowlist検証コマンド独立再実行、客観的証跡に基づく独立判定 `[AUDITOR VERDICT]`（PASS / REJECT）の返却。 | 新地区プロビジョニング手順（RUNBOOK）に従う自律パイプライン執行、Server-side決定論的Drive Layout解決・配置、マスターデータ生成、親GAS Registryバインド、受入ゲート機械検証（Gates 1〜13）、`[DEPLOYER REPORT]` 返却。 |
+| **① Entry Point**<br>(起動条件・契機) | 【Stage 0 入口検問】Mission開始時の最初の指示（および新Mission開始・Scope変更指示）受領時。<br>【構造設計】MASTER または親Executionからの新機能要求、アーキテクチャ再設計、構造改革、または Universal Gap 発生時の設計指示。 | MASTER からの Mission 指示（Stage 0 入口検問へ転送 ➔ PASS 後に現行Mission Flow開始）、および承認済みタスク（Proceed + Authorization Envelope）。 | 【通常実装時】親Executionから排他的担当Scope受領時。<br>【残骸監査時】Stage 8 実機確認PASS後、親Executionから確定差分および実機PASS証跡受領時。 | 親Executionからの内部ディスパッチ指示受領時（`invoke_subagent` による **Fresh isolated child context**）。 | 親Executionからの内部ディスパッチ指示（`districtId` 等）受領時。外部Driveリソース（`03_BRANCH/{districtId}/` 階層、DB、Storage、Archive）はServer-side決定論的自動導出パイプラインにより自律的に解決・プロビジョニングされる（Authorization Envelope: `EXTERNAL_WRITE: YES` 認可時）。 |
+| **② Authority**<br>(付与権限) | 【Stage 0 入口検問】指示が `SUPREME_PRODUCT_PRINCIPLES.md` / `AGENTS.md` を通るかを独立判定し `[GATEKEEPER VERDICT]`（PASS / REJECT）を返却。<br>【構造設計】全体構造設計、アーキテクチャレビュー、Scope 判断、方針指示、Lean Blueprint 策定。 | Stage 0 入口検問の内部ディスパッチ、調査、Knowledge Impact Analysis、実装計画策定、事前Scope固定、内部ディスパッチ（Leaf Specialists）、統合自己検証、Mechanical Gates（gate:auditor, gate:cleanup）、Envelopeに基づくCommit/Push執行。 | 【通常実装時】割り当てられた**排他的単一ファイルのみの実装・編集**、固定単体テスト実行、成果報告（`[WORKER REPORT]`）。<br>【残骸監査時】確定差分残骸およびGovernance Closureの静的検出、`[CLEANUP REPORT]` 返却（**ZERO WRITE**、自律削除禁止）。 | 提示された差分・客観的エビデンスの完全独立査読、allowlist検証コマンド独立再実行、客観的証跡に基づく独立判定 `[AUDITOR VERDICT]`（PASS / REJECT）の返却。 | 新地区プロビジョニング手順（RUNBOOK）に従う自律パイプライン執行、Server-side決定論的Drive Layout解決・配置、マスターデータ生成、親GAS Registryバインド、受入ゲート機械検証（Gates 1〜13）、`[DEPLOYER REPORT]` 返却。 |
 | **③ Prohibited Actions**<br>(絶対禁止事項) | ・**Policy-Level Zero Write**（ファイル編集・コミット・プッシュ・デプロイ禁止）<br>・再委任（Subagent Dispatch）禁止<br>・他地区参照（永久原則） | ・MASTER 承認前の実装（1文字も不可）<br>・承認 Scope 外の変更<br>・自己検品（監査AIを経ない完了判定）<br>・Auditor PASS / Envelope無しのCommit/Push<br>・未承認 Deploy<br>・他地区参照（永久原則） | 【共通】再委任（Subagent Dispatch）禁止・Git操作・自律的Scope拡張・他地区参照。<br>【通常実装時】担当外編集・任意シェルコマンド。<br>【残骸監査時】書込ツールの使用（Policy禁止）・run_command実行・自律削除・リファクタリング。 | ・プロダクトコード・設定の編集<br>・リポジトリへのファイル生成・verdict書込（Policy-Level Zero Write）<br>・Git Commit / Push / Deploy 実行<br>・非 allowlist コマンド実行<br>・忖度・推測判定<br>・自身でのコード修正<br>・再委任（Subagent Dispatch）禁止<br>・他地区参照（永久原則） | ・Canonical Layout（`03_BRANCH/{districtId}/`）から逸脱した配置・推測<br>・`EXTERNAL_WRITE: NO` 時の外部Drive/Registry書き込み<br>・code deploy禁止<br>・Git Commit / Push 禁止<br>・`active/`（共通プロダクト）の改変<br>・`tests/**`（共通テスト）の改変<br>・再委任（Subagent Dispatch）禁止<br>・他地区参照（永久原則） |
 | **④ Required SSOT**<br>(準拠正本) | ・`SUPREME_PRODUCT_PRINCIPLES.md`<br>・`AGENTS.md`<br>・`01_DESIGN_CONTRACT.md`<br>・`CURRENT_ARCHITECTURE.md` | ・`SUPREME_PRODUCT_PRINCIPLES.md`<br>・`AGENTS.md`<br>・`docs/ai-foundation.md`<br>・`.agents/rules/agent-authority.md`<br>・`.agents/rules/verification-gates.md`<br>・`.agents/workflows/development/workflow.md`<br>・`.agents/current-scope.json` | ・`SUPREME_PRODUCT_PRINCIPLES.md`<br>・`AGENTS.md`<br>・`docs/ai-foundation.md`<br>・`.agents/rules/agent-authority.md`<br>・`.agents/current-scope.json` | ・`SUPREME_PRODUCT_PRINCIPLES.md`<br>・`AGENTS.md`<br>・`docs/ai-foundation.md`<br>・`.agents/rules/verification-gates.md`<br>・`.agents/rules/agent-authority.md`<br>・`.agents/current-scope.json` | ・`SUPREME_PRODUCT_PRINCIPLES.md`<br>・`AGENTS.md`<br>・`DISTRICT_PROVISIONING_RUNBOOK.md`<br>・`.agents/skills/district-data-provisioning/SKILL.md`<br>・`docs/architecture/UNIVERSAL_RELEASE_BASELINE.md` |
 | **⑤ Allowed Tools**<br>(許可ツール) | **Policy READ ONLY**:<br>`view_file`, `grep_search`, `list_dir`<br>※編集・コマンド・ディスパッチは**Policy禁止**。 | `invoke_subagent`, `manage_subagents`, `send_message`, `view_file`, `grep_search`, `list_dir`, `write_to_file`, `replace_file_content`, `run_command`（承認Scope内） | 【通常実装時】`write_to_file`, `replace_file_content`（割当ファイルのみ）、`run_command`（固定テストのみ）、`send_message`、`view_file`, `grep_search`, `list_dir`。<br>【残骸監査時】`view_file`, `grep_search`, `list_dir`, `send_message` に限定。 | **Policy READ ONLY + 検証コマンド**:<br>`view_file`, `grep_search`, `list_dir`<br>`run_command`（**READ ONLY allowlist 方式** に厳格限定）<br>※ファイル編集・作成ツール、Git変更・Deploy・ディスパッチは**Policy禁止**。 | **データ・プロビジョニング限定**:<br>`run_command`（調達・生成スクリプト、受入テスト）<br>`write_to_file`, `replace_file_content`（`data/**`, `CNAME`, `data/config.js` のみ）<br>`view_file`, `grep_search`, `list_dir`<br>※`active/**` および `tests/**` は**書込禁止**。 |
@@ -156,9 +156,16 @@ head -n ... / tail -n ... / wc -l ...
 ## 4. 承認境界と実行ガバナンス (Execution Governance Protocol)
 
 ```
-[MASTER Directive] 
+[MASTER Directive (Mission開始時の最初の指示 / 新Mission / Scope変更指示)]
        │
        ▼
+[Stage 0: Entrance Gatekeeper (入口検問)]
+       ├─ Execution AI が調査・外部通信・変更を開始する前に Fresh Isolated READ ONLY (architect) を起動
+       ├─ architect が SUPREME_PRODUCT_PRINCIPLES.md および AGENTS.md を実読して照合
+       ├─ REJECT ➔ 🛑 即HARD STOP・差し戻し (調査・実装不可)
+       └─ PASS   ➔ 現行Mission Flowへ進行 (※Stage 0 PASS自体は実装承認ではない)
+       │
+       ▼ PASS
 [Stage 1: Plan] (Execution AI: READ ONLY 調査 + Knowledge Impact Analysis + チャット計画策定 ➔ HARD STOP)
        │
        ▼
@@ -291,6 +298,24 @@ head -n ... / tail -n ... / wc -l ...
 ---
 
 ## 5. Handoff プロトコル (Inter-Agent Handoff Specifications)
+
+### 5.0 Stage 0 Entrance Gatekeeper (`architect`) ➔ Execution AI: 入口検問判定フォーマット (Gatekeeper Verdict)
+Mission開始時の最初の指示（および新Mission開始・Scope変更指示）受領時、Execution AI により内部ディスパッチされた `architect`（Entrance Gatekeeper）は、毎回必ず `docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md` および `AGENTS.md` を実読して照合し、以下の Canonical フォーマットで判定を返却する。
+
+```text
+[GATEKEEPER VERDICT]
+
+Mission: <Mission名>
+Checked SSOT:
+- docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md: READ & VERIFIED
+- AGENTS.md: READ & VERIFIED
+
+Principle Compliance: PASS / REJECT
+Violations: none (0) / <違反条項と理由>
+
+Final Verdict: PASS / REJECT
+Next Action: PROCEED_TO_MISSION_FLOW / HARD_STOP_AND_RETURN
+```
 
 ### 5.1 Design / Direction AI ➔ Execution AI (Blueprint Handoff)
 - **受領条件**: MASTER または Execution AI による Blueprint 承認（Proceed）。

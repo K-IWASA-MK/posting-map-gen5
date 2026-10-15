@@ -55,9 +55,10 @@
     8. 本例外を一般的なリポジトリ外読み取り許可へ拡大・解釈してはならない。
 
 ## 6. Execution Governance & Approval Gates — ABSOLUTE
-1. **Implementation Approval Gate**:
-   - **調査 ➔ 実装計画提出（Execution AI） ➔ HARD STOP ➔ MASTER明示承認 (Proceed) ➔ 実装** のシーケンスを絶対厳守する。
-   - 「調査」「計画」「レビュー」「確認」「相談」の依頼を実装承認（Proceed）として解釈してはならない。
+1. **Stage 0 Entrance Gatekeeper & Implementation Approval Gate**:
+   - **Stage 0 Entrance Gatekeeper（入口検問）**: Mission開始時の最初の指示受領後（および新Mission開始・Scope変更指示時）、Stage 0判定に必要なSSOT読取りを除く調査・外部通信・変更を開始する前に、Fresh Isolated READ ONLY の検問AI社員（`architect`）が `SUPREME_PRODUCT_PRINCIPLES.md` および `AGENTS.md` と照合する。原則を通れば `PASS`（現行Mission Flowへ進行 ※Stage 0 PASSは実装承認ではない）、違反があれば `REJECT`（即HARD STOP・差し戻し）とする。同一Mission内の通常のやり取りでは毎回再検問しない。
+   - **Implementation Approval Gate**: **Stage 0 PASS ➔ 調査 ➔ 実装計画提出（Execution AI） ➔ HARD STOP ➔ MASTER明示承認 (Proceed) ➔ 実装** のシーケンスを絶対厳守する。
+   - 「調査」「計画」「レビュー」「確認」「相談」の依頼、および Stage 0 `PASS` を実装承認（Proceed）として解釈してはならない。
    - MASTERからの明示的な着手承認（Proceed）を受領するまで、1文字たりともファイル変更を行ってはならない。
 2. **Internal Dispatch, Independent Audit & Authorization Envelope**:
    - **Chief Orchestrator 内部ディスパッチ原則**: Execution AI は実装の唯一の窓口であり、必要なAI社員（architect, worker, auditor, deployer, cleanup worker）を内部ディスパッチ（`invoke_subagent`）により振り分ける。MASTER がAI社員ごとに手動でチャットを切り替える運用は廃止する。
@@ -103,10 +104,10 @@
 各AI役職の仕様、ツール統制、Handoffプロトコルの詳細契約は、Canonical SSOT である [docs/ai-foundation.md](docs/ai-foundation.md) を唯一の正本とする。各役職の絶対境界は以下の通りである。
 
 - **Chief Orchestrator (Execution AI)**:
-  - *Authority*: 実装窓口の一元管理、調査、Knowledge Impact Analysis、実装計画策定・チャット提示、事前Scope固定（`current-scope.json`）、内部ディスパッチ（architect, worker, auditor, deployer, cleanup worker）、統合自己検証、Mechanical Gates（gate:auditor, gate:cleanup）執行、Authorization Envelopeに基づくCommit/Push執行。
-  - *Prohibition*: 承認Scope外変更、仕様の勝手な追加・変更、自己検品（Auditorを経ない完了判定）、Auditor PASS前のコミット、未承認Deploy、他地区参照（永久原則）。
-- **Leaf Specialist: Design / Direction AI (architect)**:
-  - *Authority*: 全体構造設計、アーキテクチャレビュー、スコープ判断、方針指示、Lean Blueprint 策定。
+  - *Authority*: 実装窓口の一元管理、Stage 0 入口検問の内部ディスパッチ、調査、Knowledge Impact Analysis、実装計画策定・チャット提示、事前Scope固定（`current-scope.json`）、内部ディスパッチ（architect, worker, auditor, deployer, cleanup worker）、統合自己検証、Mechanical Gates（gate:auditor, gate:cleanup）執行、Authorization Envelopeに基づくCommit/Push執行。
+  - *Prohibition*: Stage 0 未通過での調査・実装開始、承認Scope外変更、仕様の勝手な追加・変更、自己検品（Auditorを経ない完了判定）、Auditor PASS前のコミット、未承認Deploy、他地区参照（永久原則）。
+- **Leaf Specialist: Design / Direction AI & Entrance Gatekeeper (architect)**:
+  - *Authority*: **Stage 0 Entrance Gatekeeper（入口検問：Mission開始時の最初の指示を `SUPREME_PRODUCT_PRINCIPLES.md` / `AGENTS.md` と照合し `[GATEKEEPER VERDICT]` PASS / REJECT を返却）**、全体構造設計、アーキテクチャレビュー、スコープ判断、方針指示、Lean Blueprint 策定。
   - *Prohibition*: **常時 READ ONLY（Policy-Level Zero Write）**。ファイル編集・Commit・Push・Deploy禁止、再委任（Subagent Dispatch）禁止、他地区参照（永久原則）。
 - **Leaf Specialist: Parallel Worker (worker)**:
   - *Authority*: 親Executionから排他割当された単一ファイルの実装・編集、または Stage 9 確定差分残骸・Governance Closure 監査（Cleanup Profile）。
