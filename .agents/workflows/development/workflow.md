@@ -26,9 +26,15 @@ AI社員の作業は、必ず以下の「9-Stage Execution Protocol」と「Veri
 - チャット画面上で実装計画・完了条件・Verification Plan を提示（`implementation_plan.md` 等のリポジトリ内ファイル生成は禁止）。
 - **🛑 HARD STOP**: 実装計画提示後、直ちに作業を停止し MASTER の着手承認（Proceed + Authorization Envelope）を待つ。
 
-### Stage 2: Approve & Scope Lock (MASTER承認 & 事前Scope固定)
+### Stage 2: Approve, Mechanical Entrance Gate & Scope Lock (MASTER承認 & 機械入口検問 & 事前Scope固定)
 - MASTERから明示的な着手承認（`Proceed`）および Authorization Envelope を受領する（取得前の実装・コミット等は絶対禁止）。
-- **事前Scope固定**: Proceed受領後、コード変更前に `.agents/current-scope.json` にMASTER承認Scope全体（文字列配列: `string[]`）を記録・固定する（既存 `scripts/check-scope.mjs` との完全互換を維持）。
+- **Mechanical Entrance Gate (`npm run gate:entrance`)**: Proceed受領後、`.agents/current-scope.json` 書込および一切のファイル変更に入る前に、以下を実行して Stage 0 入口検問の通過証跡を機械検証する：
+  ```bash
+  npm run gate:entrance -- --mission "<MISSION>"
+  ```
+  - `transcript.jsonl` 内に ① `architect` 起動証跡、② `[GATEKEEPER VERDICT]` 存在、③ `Final Verdict = PASS`、④ 現在Missionとの一致（過去MissionのPASS流用禁止）の4条件が揃っていることを確認する（1つでも欠ければ Fail-Closed / Exit 1 / HARD STOP）。
+  - ※Bootstrap Rule: `check-entrance-gate.mjs` を新設する Bootstrap Mission（`Stage 0 Entrance Gate Mechanical Enforcement`）自身は、既存 Stage 0 手続き上の PASS を根拠に着手し、Stage 2 で既存 `string[]` 形式で Scope Lock した上で Stage 3 で構造化形式へ移行する。Scope Lock 前の `npm run gate:entrance` 強制適用は当該 Bootstrap Mission の実装 Commit / Push 完了後の次 Mission から開始する。
+- **事前Scope固定**: `gate:entrance` 通過後、コード変更前に `.agents/current-scope.json` に Mission Binding と MASTER 承認 Scope 全体を構造化オブジェクト形式 `{ "mission": "<MISSION>", "files": ["..."] }` で記録・固定する（`scripts/check-scope.mjs` は既存 `string[]` 形式との後方互換も維持、擬似パス `@mission:...` は禁止）。
 - `node scripts/check-scope.mjs --scope-only` を通過後、**単独ローカルコミット** を行う。
 
 ### Stage 3: Implement (承認Scope内最小侵襲実装・並列ディスパッチ) — [主担当: Execution AI / Parallel Workers]
@@ -56,8 +62,8 @@ AI社員の作業は、必ず以下の「9-Stage Execution Protocol」と「Veri
   ```bash
   npm run gate:auditor -- --base <BASE_COMMIT> --target <HEAD_COMMIT>
   ```
-  - Gate は Event A ➔ Event B ➔ Event C 相関チェーンおよび **Post-Audit Zero Mutation**（監査PASS後の改変遮断）を機械検証。
-  - 監査PASS後にファイル変更が1件でも検出された場合、PASS即時VOID / Exit 1 で HARD STOP。
+  - Gate は `.agents/current-scope.json` の `mission` を正本とした **Stage 0 Entrance Gate 二重防御**、Event A ➔ Event B ➔ Event C 相関チェーン、および **Post-Audit Zero Mutation**（監査PASS後の改変遮断）を機械検証。
+  - Stage 0 PASS 証跡欠落または監査PASS後にファイル変更が1件でも検出された場合、PASS即時VOID / Exit 1 で HARD STOP。
 
 ### Stage 6: Commit Gate (認可エンベロープ執行関門) — [主担当: Execution AI]
 - `gate:auditor` Exit 0 確認後、Authorization Envelope において `COMMIT: YES` が付与されている場合、親Executionは手動Resumeを挟まず `git commit` を自律執行する。
@@ -108,7 +114,7 @@ AI社員の作業は、必ず以下の「9-Stage Execution Protocol」と「Veri
 - 「ユーザーに実機確認してもらう」「検証は別途行う」状態。
 - 「問題ないと思われる」「コード上は正しいはず」という推測状態。
 - 報告時点で未解決のエラーが存在する状態。
-- Stage 5 で `npm run gate:auditor` を実行・通過していない状態。
+- Stage 0 Entrance Gate（`npm run gate:entrance`）および Stage 5（`npm run gate:auditor`）を実行・通過していない状態。
 - 監査PASS後にファイルを改変した状態（Post-Audit Mutation）。
 - Stage 8 実機PASS後に Stage 9 Cleanup Worker（Residual & Governance Closure Auditor Profile）を起動していない状態。
 - Cleanup Worker からの正式な `[CLEANUP REPORT]` を受領していない状態。

@@ -31,6 +31,7 @@ AI社員の作業は、必ず以下の「Verification Gate」と「客観的証�
   [AUDITOR VERDICT] 返却 (PASS / REJECT)
          ↓
   Execution AI が Mechanical Gate 執行: npm run gate:auditor -- --base <BASE> --target <HEAD>
+         ├─ Stage 0 Entrance Gate 二重防御 (.agents/current-scope.json の mission を正本として再検証)
          ├─ Event A ➔ Event B ➔ Event C 相関チェーン検証
          └─ Post-Audit Zero Mutation 検証 (監査PASS後のファイル改変を検出した場合は即時 VOID / Exit 1)
          ↓ PASS (Exit 0)
@@ -50,8 +51,9 @@ AI社員の作業は、必ず以下の「Verification Gate」と「客観的証�
   5. **観点⑤: 公式データ確定品質ゲート**（一次資料整合・不純物排除）
 
 ### Mechanical Governance Gate
+- `npm run gate:entrance -- --mission "<MISSION>"` を Scope Lock（`.agents/current-scope.json` 書込）およびファイル変更前に実行し、`transcript.jsonl` 内の ① `architect` 起動証跡、② `[GATEKEEPER VERDICT]` 存在、③ `Final Verdict = PASS`、④ 現在Mission一致（過去MissionのPASS流用禁止）の4条件を通過する（通過後、`.agents/current-scope.json` に `{ "mission": "<MISSION>", "files": ["..."] }` を記録・固定 ※本 `check-entrance-gate.mjs` 導入 Bootstrap Mission のみ既存 Stage 0 手続き PASS で着手し、実装 Commit / Push 完了後の次 Mission から Scope Lock 前強制適用を開始）。
 - `npm run audit:gate` を実行し、Scope Guard（`scripts/check-scope.mjs`）による機械監査を通過する（既存ゲートとして完全維持・必須）。
-- `npm run gate:auditor -- --base <BASE> --target <HEAD>` を実行し、独立監査相関チェーンおよび Post-Audit Zero Mutation の機械検証を通過する（必須関門）。
+- `npm run gate:auditor -- --base <BASE> --target <HEAD>` を実行し、Stage 0 Entrance Gate 二重防御、独立監査相関チェーンおよび Post-Audit Zero Mutation の機械検証を通過する（必須関門）。
 
 ### Commit Gate & Push Gate (Authorization Envelope 執行関門)
 - **Commit Gate**: V1〜V3自己検証のPASS、Independent Auditor による `[AUDITOR VERDICT]` PASS、および `npm run gate:auditor` Exit 0 が揃い、かつ MASTER の Authorization Envelope（`COMMIT: YES`）が有効な場合に限り、Execution AI は Commit を執行する。
@@ -101,10 +103,10 @@ AI社員の作業は、必ず以下の「Verification Gate」と「客観的証�
    - `git push --force-with-lease`
    - その他履歴破壊型rollback（`rebase`, `commit --amend` 等の既出コミット改変）は永久に禁止する。
 
-### Repository Boundary 専用極小例外 (Stage 5 Auditor & Stage 9 Cleanup Evidence Verification)
-- `scripts/check-auditor-gate.mjs` および `scripts/check-cleanup-gate.mjs` による機械検証可能証跡ゲートに限り、`ANTIGRAVITY_CONVERSATION_ID` で特定される「現在Conversation自身」の `.system_generated/logs/transcript.jsonl` 1ファイルのみに対する READ ONLY アクセスを限定的に認める。
+### Repository Boundary 専用極小例外 (Stage 0 Entrance, Stage 5 Auditor & Stage 9 Cleanup Evidence Verification)
+- `scripts/check-entrance-gate.mjs`、`scripts/check-auditor-gate.mjs` および `scripts/check-cleanup-gate.mjs` による機械検証可能証跡ゲートに限り、`ANTIGRAVITY_CONVERSATION_ID` で特定される「現在Conversation自身」の `.system_generated/logs/transcript.jsonl` 1ファイルのみに対する READ ONLY アクセスを限定的に認める。
 - 許可条件:
-  1. 目的は Stage 5 Auditor Gate および Stage 9 Cleanup Gate の証跡検証のみ。
+  1. 目的は Stage 0 Entrance Gate、Stage 5 Auditor Gate および Stage 9 Cleanup Gate の証跡検証のみ。
   2. 対象は現在Conversation自身の `transcript.jsonl` 1ファイルのみ（READ ONLY）。
   3. 親ディレクトリの探索・列挙（`list_dir` 等）の禁止。
   4. 他Conversationのbrain/log参照の禁止。

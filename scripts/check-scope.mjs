@@ -1,5 +1,5 @@
 import { execSync, execFileSync } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { resolve, normalize } from 'path';
 
 const rootDir = process.cwd();
@@ -7,6 +7,66 @@ const rootDir = process.cwd();
 function exitFail(message) {
   console.error(`\n🛑 [Hard Stop] Scope Guard Failed: ${message}`);
   process.exit(1);
+}
+
+/**
+ * Parse .agents/current-scope.json supporting both:
+ * - Canonical structured object: { mission: string, files: string[] }
+ * - Legacy backward-compatible array: string[]
+ */
+function parseScopePayload(rawText, label = 'current-scope.json') {
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch (e) {
+    exitFail(`Invalid JSON in ${label}: ${e.message}`);
+  }
+
+  let format = null;
+  let mission = null;
+  let files = null;
+
+  if (Array.isArray(parsed)) {
+    format = 'legacy-array';
+    files = parsed;
+  } else if (typeof parsed === 'object' && parsed !== null) {
+    if (typeof parsed.mission !== 'string' || !parsed.mission.trim()) {
+      exitFail(`${label} structured object must contain a non-empty string "mission".`);
+    }
+    if (!Array.isArray(parsed.files)) {
+      exitFail(`${label} structured object must contain an array "files".`);
+    }
+    format = 'structured-object';
+    mission = parsed.mission.trim();
+    files = parsed.files;
+  } else {
+    exitFail(`${label} must be a structured object { mission, files } or a legacy string[] array.`);
+  }
+
+  for (const item of files) {
+    if (typeof item !== 'string' || !item.trim()) {
+      exitFail(`${label} files list must contain only non-empty strings.`);
+    }
+    if (item.trim().startsWith('@mission:')) {
+      exitFail(`${label} contains prohibited pseudo-path "${item}". Use structured object { mission, files }.`);
+    }
+  }
+
+  return { format, mission, files };
+}
+
+function isPureSchemaMigration(priorPayload, nextPayload) {
+  if (!priorPayload || !nextPayload) return false;
+  if (priorPayload.format !== 'legacy-array' || nextPayload.format !== 'structured-object') {
+    return false;
+  }
+  const priorSet = new Set(priorPayload.files.map(p => normalize(p)));
+  const nextSet = new Set(nextPayload.files.map(p => normalize(p)));
+  if (priorSet.size !== nextSet.size) return false;
+  for (const f of priorSet) {
+    if (!nextSet.has(f)) return false;
+  }
+  return true;
 }
 
 // 1. Parse arguments (--scope-only or --base <BASE> --target <TARGET>)
@@ -75,6 +135,8 @@ if (isScopeOnlyMode) {
   if (!hasScopeJsonChanged) {
     exitFail('Scope Transaction Warning: No changes detected in .agents/current-scope.json.');
   }
+  const workingScopeText = readFileSync(resolve(rootDir, scopeFilePath), 'utf8');
+  parseScopePayload(workingScopeText, 'Working Tree current-scope.json');
   console.log('🟢 [Scope-Only Mode] PASSED: Scope definition update isolated with zero code changes.');
   process.exit(0);
 }
@@ -97,7 +159,19 @@ if (isCommitRangeMode) {
       const commitHasScope = commitFiles.includes(scopeFilePath);
       const commitHasOther = commitFiles.some(f => f !== scopeFilePath);
       if (commitHasScope && commitHasOther) {
-        exitFail(`Unauthorized Scope Tampering in commit ${commitHash.substring(0, 7)}: .agents/current-scope.json cannot be modified alongside code changes in the same commit. Use 2-phase scope commit.`);
+        let migrationAllowed = false;
+        try {
+          const parentScopeRaw = execSync(`git show "${commitHash}~1":.agents/current-scope.json`, { cwd: rootDir }).toString('utf8');
+          const curScopeRaw = execSync(`git show "${commitHash}":.agents/current-scope.json`, { cwd: rootDir }).toString('utf8');
+          const parentScope = parseScopePayload(parentScopeRaw, `${commitHash.substring(0, 7)}~1:current-scope.json`);
+          const curScope = parseScopePayload(curScopeRaw, `${commitHash.substring(0, 7)}:current-scope.json`);
+          migrationAllowed = isPureSchemaMigration(parentScope, curScope);
+        } catch (_) {
+          migrationAllowed = false;
+        }
+        if (!migrationAllowed) {
+          exitFail(`Unauthorized Scope Tampering in commit ${commitHash.substring(0, 7)}: .agents/current-scope.json cannot be modified alongside code changes in the same commit. Use 2-phase scope commit.`);
+        }
       }
     }
   } catch (e) {
@@ -107,10 +181,8 @@ if (isCommitRangeMode) {
   // targetCommit 上の current-scope.json を読み込み
   try {
     const targetScopeJson = execSync(`git show "${targetCommit}":.agents/current-scope.json`, { cwd: rootDir }).toString('utf8');
-    allowedScope = JSON.parse(targetScopeJson);
-    if (!Array.isArray(allowedScope)) {
-      exitFail(`current-scope.json at ${targetCommit} must be an array.`);
-    }
+    const parsedTargetScope = parseScopePayload(targetScopeJson, `current-scope.json at ${targetCommit}`);
+    allowedScope = parsedTargetScope.files;
   } catch (e) {
     exitFail(`Failed to load approved Scope from ${targetCommit}: ${e.message}`);
   }
@@ -124,20 +196,29 @@ if (isCommitRangeMode) {
     exitFail(`${violations.length} file(s) outside allowed scope in range ${baseCommit}..${targetCommit}.`);
   }
 } else {
-  // Working Tree モード: コード変更と同時に Scope 定義を変更することは禁止 (自己承認の遮断)
-  if (hasScopeJsonChanged) {
-    exitFail('Unauthorized Scope Tampering: .agents/current-scope.json cannot be modified alongside code changes. Use 2-phase scope commit.');
-  }
-
   // Git HEAD 上の current-scope.json を読み込み、実装変更がすべてその範囲内か検証
+  let headScopePayload;
   try {
     const headScopeJson = execSync('git show HEAD:.agents/current-scope.json', { cwd: rootDir }).toString('utf8');
-    allowedScope = JSON.parse(headScopeJson);
-    if (!Array.isArray(allowedScope)) {
-      exitFail('Git HEAD current-scope.json must be an array.');
-    }
+    headScopePayload = parseScopePayload(headScopeJson, 'Git HEAD current-scope.json');
+    allowedScope = headScopePayload.files;
   } catch (e) {
     exitFail(`Failed to load approved Scope from Git HEAD: ${e.message}`);
+  }
+
+  // Working Tree モード: コード変更と同時に Scope 定義を変更することは禁止 (自己承認の遮断)
+  if (hasScopeJsonChanged) {
+    let migrationAllowed = false;
+    try {
+      const workingScopeRaw = readFileSync(resolve(rootDir, scopeFilePath), 'utf8');
+      const workingScopePayload = parseScopePayload(workingScopeRaw, 'Working Tree current-scope.json');
+      migrationAllowed = isPureSchemaMigration(headScopePayload, workingScopePayload);
+    } catch (_) {
+      migrationAllowed = false;
+    }
+    if (!migrationAllowed) {
+      exitFail('Unauthorized Scope Tampering: .agents/current-scope.json cannot be modified alongside code changes. Use 2-phase scope commit.');
+    }
   }
 
   const normalizedAllowed = new Set(allowedScope.map(p => normalize(p)));
@@ -155,6 +236,8 @@ console.log('🟢 Scope Validation PASSED: All code changes are within the appro
 // [防衛 3] Governance & Protected Test Separation Control (改ざん耐性)
 const governanceFiles = new Set([
   normalize('scripts/check-scope.mjs'),
+  normalize('scripts/check-entrance-gate.mjs'),
+  normalize('scripts/check-auditor-gate.mjs'),
   normalize('scripts/check-architecture-gate.mjs'),
   normalize('scripts/check-knowledge-gate.mjs'),
   normalize('.agents/os-registry.schema.json'),

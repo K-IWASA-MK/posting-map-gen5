@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { verifyEntranceGate, resolveScopeMission } from './check-entrance-gate.mjs';
 
 const rootDir = process.cwd();
 
@@ -63,6 +64,8 @@ export function isMutatingCommand(commandLine) {
     'git diff',
     'git show',
     'git branch',
+    'node scripts/check-entrance-gate.mjs',
+    'npm run gate:entrance',
     'node scripts/check-auditor-gate.mjs',
     'npm run gate:auditor',
     'node scripts/check-scope.mjs',
@@ -102,7 +105,9 @@ export function verifyAuditorGate({
   baseCommit,
   targetCommit,
   transcriptLines,
-  gitResolver = null
+  gitResolver = null,
+  mission = null,
+  enforceEntranceGate = false
 }) {
   if (!baseCommit || typeof baseCommit !== 'string') {
     return { pass: false, error: 'Missing required baseCommit (--base <BASE>)' };
@@ -322,6 +327,27 @@ export function verifyAuditorGate({
     return { pass: false, error: `Event C [AUDITOR VERDICT] Final Verdict is '${latestChain.verdict}'. Expected PASS.` };
   }
 
+  // 3.5. STAGE 0 ENTRANCE GATE DUAL DEFENSE 検証 (取り逃し防止)
+  if (enforceEntranceGate || (mission && typeof mission === 'string' && mission.trim())) {
+    if (!mission || typeof mission !== 'string' || !mission.trim()) {
+      return {
+        pass: false,
+        error: 'Stage 0 Entrance Gate check in Auditor Gate failed: Missing canonical mission from .agents/current-scope.json.'
+      };
+    }
+    const entranceCheck = verifyEntranceGate({
+      mission: mission.trim(),
+      transcriptLines,
+      maxStepIndex: latestChain.stepA
+    });
+    if (!entranceCheck.pass) {
+      return {
+        pass: false,
+        error: `Stage 0 Entrance Gate verification failed in Auditor Gate: ${entranceCheck.error}`
+      };
+    }
+  }
+
   // 4. POST-AUDIT ZERO MUTATION 検証 (Event C 直後から末尾までのtranscript走査)
   for (let idx = 0; idx < transcriptLines.length; idx++) {
     const rawLine = transcriptLines[idx].trim();
@@ -369,12 +395,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
   const args = process.argv.slice(2);
   let baseCommit = null;
   let targetCommit = null;
+  let missionArg = null;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--base' && args[i + 1]) {
       baseCommit = args[++i];
     } else if (args[i] === '--target' && args[i + 1]) {
       targetCommit = args[++i];
+    } else if (args[i] === '--mission' && args[i + 1]) {
+      missionArg = args[++i];
     }
   }
 
@@ -383,6 +412,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
   }
   if (!targetCommit) {
     exitFail('Missing required argument: --target <TARGET>');
+  }
+
+  if (!missionArg) {
+    try {
+      missionArg = resolveScopeMission(rootDir);
+    } catch (e) {
+      exitFail(e.message);
+    }
   }
 
   // Preflight Gate: Static Secret Scanner must PASS across all tracked files
@@ -409,7 +446,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
   const result = verifyAuditorGate({
     baseCommit,
     targetCommit,
-    transcriptLines: lines
+    transcriptLines: lines,
+    mission: missionArg,
+    enforceEntranceGate: true
   });
 
   if (!result.pass) {

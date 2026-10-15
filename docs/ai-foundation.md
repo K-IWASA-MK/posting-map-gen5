@@ -70,8 +70,9 @@ POSTING MAP の開発・保守・展開は、**Execution AI（Chief Orchestrator
         ▼              ▼               ▼               ▼               ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                        Execution AI (成果統合 & Mechanical Gates)                       │
+│  ・Stage 0 Mechanical Entrance Gate (`npm run gate:entrance -- --mission "<MISSION>"`)  │
 │  ・自己検証 (V1〜V3) & Scope Guard                                                      │
-│  ・Mechanical Auditor Gate (`npm run gate:auditor`) ➔ Post-Audit Zero Mutation 検証     │
+│  ・Mechanical Auditor Gate (`npm run gate:auditor`) ➔ Stage 0 二重防御 & Zero Mutation   │
 │  ・Authorization Envelope 照合 ➔ Commit & Push 執行                                     │
 │  ・Stage 8 本番稼働検証 & Stage 9 Cleanup Gate (`npm run gate:cleanup`)                 │
 │  ・[MISSION COMPLETION REPORT] 提出 ➔ Wave CLOSED                                      │
@@ -85,12 +86,12 @@ POSTING MAP の開発・保守・展開は、**Execution AI（Chief Orchestrator
 | 仕様軸 (Specification Axis) | 1. Design / Direction AI (architect) | 2. Execution AI (Chief Orchestrator) | 3. Parallel Worker (Subagent) | 4. Independent Auditor AI (auditor) | 5. District Provisioning AI (deployer) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **① Entry Point**<br>(起動条件・契機) | 【Stage 0 入口検問】Mission開始時の最初の指示（および新Mission開始・Scope変更指示）受領時。<br>【構造設計】MASTER または親Executionからの新機能要求、アーキテクチャ再設計、構造改革、または Universal Gap 発生時の設計指示。 | MASTER からの Mission 指示（Stage 0 入口検問へ転送 ➔ PASS 後に現行Mission Flow開始）、および承認済みタスク（Proceed + Authorization Envelope）。 | 【通常実装時】親Executionから排他的担当Scope受領時。<br>【残骸監査時】Stage 8 実機確認PASS後、親Executionから確定差分および実機PASS証跡受領時。 | 親Executionからの内部ディスパッチ指示受領時（`invoke_subagent` による **Fresh isolated child context**）。 | 親Executionからの内部ディスパッチ指示（`districtId` 等）受領時。外部Driveリソース（`03_BRANCH/{districtId}/` 階層、DB、Storage、Archive）はServer-side決定論的自動導出パイプラインにより自律的に解決・プロビジョニングされる（Authorization Envelope: `EXTERNAL_WRITE: YES` 認可時）。 |
-| **② Authority**<br>(付与権限) | 【Stage 0 入口検問】指示が `SUPREME_PRODUCT_PRINCIPLES.md` / `AGENTS.md` を通るかを独立判定し `[GATEKEEPER VERDICT]`（PASS / REJECT）を返却。<br>【構造設計】全体構造設計、アーキテクチャレビュー、Scope 判断、方針指示、Lean Blueprint 策定。 | Stage 0 入口検問の内部ディスパッチ、調査、Knowledge Impact Analysis、実装計画策定、事前Scope固定、内部ディスパッチ（Leaf Specialists）、統合自己検証、Mechanical Gates（gate:auditor, gate:cleanup）、Envelopeに基づくCommit/Push執行。 | 【通常実装時】割り当てられた**排他的単一ファイルのみの実装・編集**、固定単体テスト実行、成果報告（`[WORKER REPORT]`）。<br>【残骸監査時】確定差分残骸およびGovernance Closureの静的検出、`[CLEANUP REPORT]` 返却（**ZERO WRITE**、自律削除禁止）。 | 提示された差分・客観的エビデンスの完全独立査読、allowlist検証コマンド独立再実行、客観的証跡に基づく独立判定 `[AUDITOR VERDICT]`（PASS / REJECT）の返却。 | 新地区プロビジョニング手順（RUNBOOK）に従う自律パイプライン執行、Server-side決定論的Drive Layout解決・配置、マスターデータ生成、親GAS Registryバインド、受入ゲート機械検証（Gates 1〜13）、`[DEPLOYER REPORT]` 返却。 |
+| **② Authority**<br>(付与権限) | 【Stage 0 入口検問】指示が `SUPREME_PRODUCT_PRINCIPLES.md` / `AGENTS.md` を通るかを独立判定し `[GATEKEEPER VERDICT]`（PASS / REJECT）を返却。<br>【構造設計】全体構造設計、アーキテクチャレビュー、Scope 判断、方針指示、Lean Blueprint 策定。 | Stage 0 入口検問の内部ディスパッチ、調査、Knowledge Impact Analysis、実装計画策定、事前Scope固定、内部ディスパッチ（Leaf Specialists）、統合自己検証、Mechanical Gates（`gate:entrance`, `gate:auditor`, `gate:cleanup`）、Envelopeに基づくCommit/Push執行。 | 【通常実装時】割り当てられた**排他的単一ファイルのみの実装・編集**、固定単体テスト実行、成果報告（`[WORKER REPORT]`）。<br>【残骸監査時】確定差分残骸およびGovernance Closureの静的検出、`[CLEANUP REPORT]` 返却（**ZERO WRITE**、自律削除禁止）。 | 提示された差分・客観的エビデンスの完全独立査読、allowlist検証コマンド独立再実行、客観的証跡に基づく独立判定 `[AUDITOR VERDICT]`（PASS / REJECT）の返却。 | 新地区プロビジョニング手順（RUNBOOK）に従う自律パイプライン執行、Server-side決定論的Drive Layout解決・配置、マスターデータ生成、親GAS Registryバインド、受入ゲート機械検証（Gates 1〜13）、`[DEPLOYER REPORT]` 返却。 |
 | **③ Prohibited Actions**<br>(絶対禁止事項) | ・**Policy-Level Zero Write**（ファイル編集・コミット・プッシュ・デプロイ禁止）<br>・再委任（Subagent Dispatch）禁止<br>・他地区参照（永久原則） | ・MASTER 承認前の実装（1文字も不可）<br>・承認 Scope 外の変更<br>・自己検品（監査AIを経ない完了判定）<br>・Auditor PASS / Envelope無しのCommit/Push<br>・未承認 Deploy<br>・他地区参照（永久原則） | 【共通】再委任（Subagent Dispatch）禁止・Git操作・自律的Scope拡張・他地区参照。<br>【通常実装時】担当外編集・任意シェルコマンド。<br>【残骸監査時】書込ツールの使用（Policy禁止）・run_command実行・自律削除・リファクタリング。 | ・プロダクトコード・設定の編集<br>・リポジトリへのファイル生成・verdict書込（Policy-Level Zero Write）<br>・Git Commit / Push / Deploy 実行<br>・非 allowlist コマンド実行<br>・忖度・推測判定<br>・自身でのコード修正<br>・再委任（Subagent Dispatch）禁止<br>・他地区参照（永久原則） | ・Canonical Layout（`03_BRANCH/{districtId}/`）から逸脱した配置・推測<br>・`EXTERNAL_WRITE: NO` 時の外部Drive/Registry書き込み<br>・code deploy禁止<br>・Git Commit / Push 禁止<br>・`active/`（共通プロダクト）の改変<br>・`tests/**`（共通テスト）の改変<br>・再委任（Subagent Dispatch）禁止<br>・他地区参照（永久原則） |
 | **④ Required SSOT**<br>(準拠正本) | ・`SUPREME_PRODUCT_PRINCIPLES.md`<br>・`AGENTS.md`<br>・`01_DESIGN_CONTRACT.md`<br>・`CURRENT_ARCHITECTURE.md` | ・`SUPREME_PRODUCT_PRINCIPLES.md`<br>・`AGENTS.md`<br>・`docs/ai-foundation.md`<br>・`.agents/rules/agent-authority.md`<br>・`.agents/rules/verification-gates.md`<br>・`.agents/workflows/development/workflow.md`<br>・`.agents/current-scope.json` | ・`SUPREME_PRODUCT_PRINCIPLES.md`<br>・`AGENTS.md`<br>・`docs/ai-foundation.md`<br>・`.agents/rules/agent-authority.md`<br>・`.agents/current-scope.json` | ・`SUPREME_PRODUCT_PRINCIPLES.md`<br>・`AGENTS.md`<br>・`docs/ai-foundation.md`<br>・`.agents/rules/verification-gates.md`<br>・`.agents/rules/agent-authority.md`<br>・`.agents/current-scope.json` | ・`SUPREME_PRODUCT_PRINCIPLES.md`<br>・`AGENTS.md`<br>・`DISTRICT_PROVISIONING_RUNBOOK.md`<br>・`.agents/skills/district-data-provisioning/SKILL.md`<br>・`docs/architecture/UNIVERSAL_RELEASE_BASELINE.md` |
 | **⑤ Allowed Tools**<br>(許可ツール) | **Policy READ ONLY**:<br>`view_file`, `grep_search`, `list_dir`<br>※編集・コマンド・ディスパッチは**Policy禁止**。 | `invoke_subagent`, `manage_subagents`, `send_message`, `view_file`, `grep_search`, `list_dir`, `write_to_file`, `replace_file_content`, `run_command`（承認Scope内） | 【通常実装時】`write_to_file`, `replace_file_content`（割当ファイルのみ）、`run_command`（固定テストのみ）、`send_message`、`view_file`, `grep_search`, `list_dir`。<br>【残骸監査時】`view_file`, `grep_search`, `list_dir`, `send_message` に限定。 | **Policy READ ONLY + 検証コマンド**:<br>`view_file`, `grep_search`, `list_dir`<br>`run_command`（**READ ONLY allowlist 方式** に厳格限定）<br>※ファイル編集・作成ツール、Git変更・Deploy・ディスパッチは**Policy禁止**。 | **データ・プロビジョニング限定**:<br>`run_command`（調達・生成スクリプト、受入テスト）<br>`write_to_file`, `replace_file_content`（`data/**`, `CNAME`, `data/config.js` のみ）<br>`view_file`, `grep_search`, `list_dir`<br>※`active/**` および `tests/**` は**書込禁止**。 |
 | **⑥ Approval Boundary**<br>(承認境界) | 設計書・Blueprint を MASTER/親Execution へ提示し、承認（Proceed）を得るまでが境界。実装着手は不可。 | MASTER Proceed 受領後に Scope 固定・実装。Auditor PASS + `gate:auditor` Exit 0 + Authorization Envelope（`COMMIT: YES, PUSH: YES`）にてCommit/Pushへ進む。 | 【通常実装時】親から割り当てられた単一ファイルの範囲内。Scope拡張は作業停止し親へ報告。<br>【残骸監査時】検出・証明の提示まで。削除権限は持たず、削除は別Scope・通常Workerへ分離。 | 自律的に PASS / REJECT を判定する完全独立権限。判定は `[AUDITOR VERDICT]` 返却のみとし、事前・事後の承認不要。紛争発生時のみ MASTER が調停。 | 外部リソース受領をもって着手。パイプライン完走後、`[DEPLOYER REPORT]` を返却し親Executionが統合・監査へ渡す。 |
-| **⑦ Verification Responsibility**<br>(検証責任) | 構造的整合性、Universal Engine 非侵襲性、最高位設計契約との適合性の論理的検証。 | **自己検証責任**:<br>・V1 Static Verification<br>・V2 Runtime Verification（Maps 実描画含む）<br>・V3 Regression Verification（`npm test`）<br>・Scope Guard（check-scope）<br>・Mechanical Gates 執行責任 (`gate:auditor`, `gate:cleanup`) | 【通常実装時】親指定固定単体テストのPASS確認、`[WORKER REPORT]` 返却責任。<br>【残骸監査時】確定差分残骸（DELETE/KEEP/OUT-OF-SCOPE）およびGovernance Closure（GOVERNANCE-RESIDUAL: 0）の客観的証明責任。 | **独立検品責任（5大固定観点）**:<br>1. 最上位絶対原則（Universal Engine・コピー原則）<br>2. Scope 厳守・余計な差分排除<br>3. No Evidence No PASS（独立再実行）<br>4. Zero Avoidable Manual（可避な手作業要求の排除）<br>5. 公式データ確定品質ゲート<br>※必須コマンド（git diff, npm test, check-scope.mjs）独立再実行必須。 | **受入・整合検証責任**:<br>・Drive Layout & Registry 13大受入ゲート全件 PASS（`test_registry_provisioning_gate.mjs`）<br>・公式データ品質ゲート（境界・住所・人口）<br>・実機稼働検証（HTTP 200, 認証, Maps）<br>・`active/` 差分 0 バイト検証 |
+| **⑦ Verification Responsibility**<br>(検証責任) | 構造的整合性、Universal Engine 非侵襲性、最高位設計契約との適合性の論理的検証。 | **自己検証責任**:<br>・V1 Static Verification<br>・V2 Runtime Verification（Maps 実描画含む）<br>・V3 Regression Verification（`npm test`）<br>・Scope Guard（check-scope）<br>・Mechanical Gates 執行責任 (`gate:entrance`, `gate:auditor`, `gate:cleanup`) | 【通常実装時】親指定固定単体テストのPASS確認、`[WORKER REPORT]` 返却責任。<br>【残骸監査時】確定差分残骸（DELETE/KEEP/OUT-OF-SCOPE）およびGovernance Closure（GOVERNANCE-RESIDUAL: 0）の客観的証明責任。 | **独立検品責任（5大固定観点）**:<br>1. 最上位絶対原則（Universal Engine・コピー原則）<br>2. Scope 厳守・余計な差分排除<br>3. No Evidence No PASS（独立再実行）<br>4. Zero Avoidable Manual（可避な手作業要求の排除）<br>5. 公式データ確定品質ゲート<br>※必須コマンド（git diff, npm test, check-scope.mjs）独立再実行必須。 | **受入・整合検証責任**:<br>・Drive Layout & Registry 13大受入ゲート全件 PASS（`test_registry_provisioning_gate.mjs`）<br>・公式データ品質ゲート（境界・住所・人口）<br>・実機稼働検証（HTTP 200, 認証, Maps）<br>・`active/` 差分 0 バイト検証 |
 | **⑧ Handoff**<br>(引渡し・連携) | **Input**: MASTER / Execution 指示。<br>**Output**: 承認済み Blueprint / 設計書 ➔ Execution AI へ引渡し。 | **Input**: MASTER 指示（Proceed + Envelope）。<br>**Output to Worker/Auditor/Deployer**: 内部ディスパッチ。<br>**Output to MASTER**: Mechanical Gates 合格後、Commit/Push完了報告または最終報告。 | 【通常実装時】Input: 親からの割当指示。Output: `[WORKER REPORT]`。<br>【残骸監査時】Input: 親からの確定差分・実機PASS証跡。Output: `[CLEANUP REPORT]` ➔ 待機。 | **Input**: Execution からの監査起動指示（`invoke_subagent`）。<br>**Output to Execution**: `[AUDITOR VERDICT]`（PASS または REJECT + 指摘事項）返却。 | **Input**: Execution からの地区コード・リソース情報。<br>**Output to Execution**: `[DEPLOYER REPORT]`（プロビジョニング検証証跡）。 |
 
 ---
@@ -172,7 +173,13 @@ head -n ... / tail -n ... / wc -l ...
  🛑 MASTER Proceed Gate (MASTER による明示着手承認)
        │
        ▼
-[Stage 2: Scope Commit] (.agents/current-scope.json の単独ローカルコミット・特別Governance Transaction)
+[Stage 2: Mechanical Entrance Gate & Scope Commit]
+       ├─ Execution AI が書込前に Mechanical Gate 執行: npm run gate:entrance -- --mission "<MISSION>"
+       │      ├─ 1. transcript.jsonl に architect 起動証跡がある
+       │      ├─ 2. [GATEKEEPER VERDICT] が存在する
+       │      ├─ 3. Final Verdict = PASS
+       │      └─ 4. PASS が現在Missionと一致 (過去MissionのPASS流用禁止 / 欠落時は Exit 1 HARD STOP)
+       └─ 通過後、.agents/current-scope.json に { "mission": "<MISSION>", "files": [...] } を記録・単独コミット
        │
        ▼
 [Stage 3: Implement] (Execution AI: 承認 Scope 内最小侵襲実装・Leaf Worker並列ディスパッチ)
@@ -187,6 +194,7 @@ head -n ... / tail -n ... / wc -l ...
        ├─ Auditor は Policy-Level Zero Write で独立コマンド (git diff, npm test, check-scope) を独立再実行
        ├─ Auditor が [AUDITOR VERDICT] (PASS / REJECT) を返却
        └─ Execution AI が Mechanical Gate 執行: npm run gate:auditor -- --base <BASE> --target <HEAD>
+              ├─ Stage 0 Entrance Gate 二重防御 (.agents/current-scope.json の mission に基づき再検証)
               ├─ Event A ➔ Event B ➔ Event C 相関チェーン検証
               └─ Post-Audit Zero Mutation 検証 (監査PASS後の無断変更を検出した場合は即時 VOID / Exit 1)
        │
@@ -218,9 +226,9 @@ head -n ... / tail -n ... / wc -l ...
    - **Fresh isolated child context**: 親Executionの推論ログ・思考過程・試行錯誤を引き継がない完全独立セッションで起動される。
    - **Policy-Level ZERO WRITE**: ファイル編集・生成禁止（`write_to_file`, `replace_file_content` 禁止）、Git操作禁止、Deploy禁止、invoke_subagent / manage_subagents 禁止、再委任禁止。
    - **独立コマンド実行義務**: 親Executionの主観的PASS主張や説明を一切信用せず、自ら allowlist コマンド（`git diff`, `npm test`, `node scripts/check-scope.mjs`）を独立再実行し、PASS / REJECT を独自に判定する。
-3. **Mechanical Auditor Gate (`npm run gate:auditor`)**:
-   - Execution AI は Auditor 返却後、`npm run gate:auditor -- --base <BASE> --target <TARGET>` を執行する。
-   - 現在Conversationの transcript から Event A（`invoke_subagent` with BASE/TARGET/SCOPE）➔ Event B（childConversationId）➔ Event C（childからの `[AUDITOR VERDICT]` PASS）の構造化相関、イベント順序（`stepA < stepB < stepC`）を検証する。
+3. **Mechanical Entrance Gate (`npm run gate:entrance`) & Mechanical Auditor Gate (`npm run gate:auditor`)**:
+   - **前段 Fail-Closed (`gate:entrance`)**: Scope Lock（`.agents/current-scope.json` 書込）およびファイル変更の前に、`npm run gate:entrance -- --mission "<MISSION>"` を実行し、`transcript.jsonl` 内の ① `architect` 起動、② `[GATEKEEPER VERDICT]` 存在、③ `Final Verdict = PASS`、④ 現在Missionとの一致（過去MissionのPASS流用禁止）の4条件を機械検証する。
+   - **後段二重防御 (`gate:auditor`)**: Execution AI は Auditor 返却後、`npm run gate:auditor -- --base <BASE> --target <TARGET>` を執行する。`.agents/current-scope.json` の `mission` を正本として Stage 0 Entrance Gate の PASS 証跡を再検証した上で、現在Conversationの transcript から Event A（`invoke_subagent` with BASE/TARGET/SCOPE）➔ Event B（childConversationId）➔ Event C（childからの `[AUDITOR VERDICT]` PASS）の構造化相関、イベント順序（`stepA < stepB < stepC`）を検証する。
 4. **Post-Audit Zero Mutation (監査後改変遮断原則 — CRITICAL)**:
    - Event C PASS 受領後から `gate:auditor` 実行時点までの間に、ファイル変更系操作（`write_to_file`, `replace_file_content`, mutating `run_command`）が1件でも検知された場合、Auditor PASS は即時 VOID（無効）となり、Gate は Exit 1 で FAIL する。
    - Auditor が確認していない未監査差分の混入・コミットを機械的に不可能にする。
@@ -229,12 +237,12 @@ head -n ... / tail -n ... / wc -l ...
    - `COMMIT: YES, PUSH: YES` が事前認可されている場合、Auditor PASS および `gate:auditor` Exit 0 の確認後、冗長な手動Resumeを挟まず Commit / Push を連続執行してよい。
    - **HARD STOP 条件**: Auditor REJECT、テスト失敗、Scope拡張要求、Universal Gap、Envelope外の操作、DEPLOY/EXTERNAL_WRITE未承認、破壊的操作、material blocker 発生時は即座に停止し、MASTER へ報告する。
 6. **Bootstrap Migration Rule (本移行特例 — ABSOLUTE)**:
-   - 本規程への移行コミット（AI Employee OS Rectification）自身は、旧Governanceに準拠し、MASTER手動起動による最後のFresh Independent AuditorのPASSおよびMASTER明示Proceed受領後にコミットされる。本コミット反映後の次Missionから新運用を正式適用する。
+   - 本規程への移行コミット（AI Employee OS Rectification）自身は、旧Governanceに準拠し、MASTER手動起動による最後のFresh Independent AuditorのPASSおよびMASTER明示Proceed受領後にコミットされる。また、`check-entrance-gate.mjs` を新設する Bootstrap Mission（`Stage 0 Entrance Gate Mechanical Enforcement`）自身は、既存の Stage 0 手続き上の PASS を根拠に着手し、Stage 2 で既存 `string[]` 形式で Scope Lock した上で Stage 3 で構造化形式 `{ "mission", "files" }` へ移行する。Scope Lock 前の `npm run gate:entrance` 強制適用は、当該 Bootstrap Mission の実装 Commit / Push 完了後の次 Mission から正式開始する。
 
 ### 4.2 並列ディスパッチ手順と排他原則 (Parallel Dispatch & Exclusion Protocol)
 
 1. **事前Scope固定 (Pre-flight Scope Fixation)**:
-   - 並列Worker起動前に、親Executionが `.agents/current-scope.json` にMASTER承認済みScope全体（文字列配列: `string[]`）を記録して固定する。各Workerの担当排他ファイルは親Executionが承認Scope内から単一ファイルを特定・割当管理し、子Workerに共通設定ファイル（`package.json`、`current-scope.json` 等）を触らせない。
+   - 並列Worker起動およびファイル変更前に、親Executionが `npm run gate:entrance -- --mission "<MISSION>"` を通過させた上で、`.agents/current-scope.json` に Mission Binding と MASTER 承認済み Scope 全体（構造化オブジェクト形式: `{ "mission": "<MISSION>", "files": ["..."] }` ※`scripts/check-scope.mjs` は既存 `string[]` との後方互換も維持、擬似パス `@mission:...` は禁止）を記録して固定する。各Workerの担当排他ファイルは親Executionが承認Scope内から単一ファイルを特定・割当管理し、子Workerに共通設定ファイル（`package.json`、`current-scope.json` 等）を触らせない。
 2. **排他原則 (File Exclusion Principle — ABSOLUTE)**:
    - 同一ファイルを同時に複数の Worker に担当させることを絶対禁止とする。各 Worker は親から割り当てられた単一の排他ファイルのみを変更対象とする。
 3. **動的Worker IDバインディング (Dynamic Worker ID Binding)**:

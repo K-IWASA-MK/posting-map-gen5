@@ -16,6 +16,7 @@
     "deploy:gas": "node scripts/safe-deploy.mjs",
     "stamp:assets": "node scripts/stamp-h-app-token.mjs",
     "audit:gate": "node scripts/check-scope.mjs",
+    "gate:entrance": "node scripts/check-entrance-gate.mjs",
     "gate:cleanup": "node scripts/check-cleanup-gate.mjs",
     "gate:auditor": "node scripts/check-auditor-gate.mjs",
     "check:knowledge": "node scripts/check-knowledge-gate.mjs",

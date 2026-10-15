@@ -1,13 +1,16 @@
-[
-  ".agents/current-scope.json",
-  ".agents/os-registry.json",
-  ".agents/rules/verification-gates.md",
-  ".agents/workflows/development/workflow.md",
-  "AGENTS.md",
-  "docs/ai-foundation.md",
-  "package.json",
-  "scripts/check-auditor-gate.mjs",
-  "scripts/check-entrance-gate.mjs",
-  "scripts/check-scope.mjs",
-  "tests/test_auditor_gate.mjs"
-]
+{
+  "mission": "Stage 0 Entrance Gate Mechanical Enforcement",
+  "files": [
+    ".agents/current-scope.json",
+    ".agents/os-registry.json",
+    ".agents/rules/verification-gates.md",
+    ".agents/workflows/development/workflow.md",
+    "AGENTS.md",
+    "docs/ai-foundation.md",
+    "package.json",
+    "scripts/check-auditor-gate.mjs",
+    "scripts/check-entrance-gate.mjs",
+    "scripts/check-scope.mjs",
+    "tests/test_auditor_gate.mjs"
+  ]
+}

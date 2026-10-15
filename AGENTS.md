@@ -42,10 +42,10 @@
 - SSD上に存在する他地区（OKAYAMA-02、KUWANA等）のリポジトリやフォルダーを、通常時・監査時・実装時・比較時を問わず一切参照・探索・検索・読み取りしない。
 - 「参考」「比較」「検証」の目的でも他リポジトリを見ない。他リポジトリのコード、データ、設定、Git履歴、監査結果、Runtime情報等を判断材料に使用しない。
 - リポジトリ内部だけでは判断できない事項は、他地区を見て補完・推測せず「UNDETERMINED」とする。複数リポジトリを同時に参照しない。
-- **Stage 5 / Stage 9 機械検証可能証跡ゲート専用極小例外**:
-  - `check-auditor-gate.mjs` および `check-cleanup-gate.mjs` による機械検証可能証跡ゲートに限り、`ANTIGRAVITY_CONVERSATION_ID` で特定される「現在Conversation自身」の `.system_generated/logs/transcript.jsonl` 1ファイルのみに対する READ ONLY アクセスを限定的に認める。
+- **Stage 0 / Stage 5 / Stage 9 機械検証可能証跡ゲート専用極小例外**:
+  - `check-entrance-gate.mjs`、`check-auditor-gate.mjs` および `check-cleanup-gate.mjs` による機械検証可能証跡ゲートに限り、`ANTIGRAVITY_CONVERSATION_ID` で特定される「現在Conversation自身」の `.system_generated/logs/transcript.jsonl` 1ファイルのみに対する READ ONLY アクセスを限定的に認める。
   - 許可条件:
-    1. 目的は Stage 5 Auditor Gate および Stage 9 Cleanup Gate の証跡検証のみ。
+    1. 目的は Stage 0 Entrance Gate、Stage 5 Auditor Gate および Stage 9 Cleanup Gate の証跡検証のみ。
     2. 対象は現在Conversation自身の `transcript.jsonl` 1ファイルのみ（READ ONLY）。
     3. 親ディレクトリの探索・列挙（`list_dir` 等）の禁止。
     4. 他Conversationのbrain/log参照の禁止。
@@ -57,7 +57,8 @@
 ## 6. Execution Governance & Approval Gates — ABSOLUTE
 1. **Stage 0 Entrance Gatekeeper & Implementation Approval Gate**:
    - **Stage 0 Entrance Gatekeeper（入口検問）**: Mission開始時の最初の指示受領後（および新Mission開始・Scope変更指示時）、Stage 0判定に必要なSSOT読取りを除く調査・外部通信・変更を開始する前に、Fresh Isolated READ ONLY の検問AI社員（`architect`）が `SUPREME_PRODUCT_PRINCIPLES.md` および `AGENTS.md` と照合する。原則を通れば `PASS`（現行Mission Flowへ進行 ※Stage 0 PASSは実装承認ではない）、違反があれば `REJECT`（即HARD STOP・差し戻し）とする。同一Mission内の通常のやり取りでは毎回再検問しない。
-   - **Implementation Approval Gate**: **Stage 0 PASS ➔ 調査 ➔ 実装計画提出（Execution AI） ➔ HARD STOP ➔ MASTER明示承認 (Proceed) ➔ 実装** のシーケンスを絶対厳守する。
+   - **Mechanical Entrance Gate (`npm run gate:entrance`) & 構造化 Scope Lock**: Scope Lock（`.agents/current-scope.json` 書込）およびファイル変更へ進む前に、`npm run gate:entrance -- --mission "<MISSION>"` を実行し、`transcript.jsonl` 内に ① `architect` 起動証跡、② `[GATEKEEPER VERDICT]` 存在、③ `Final Verdict = PASS`、④ 現在Missionとの一致（過去MissionのPASS流用禁止）の4条件が揃っていることを機械検証する（1つでも欠ければ Fail-Closed / Exit 1 / HARD STOP）。通過後、`.agents/current-scope.json` に `{ "mission": "<MISSION>", "files": ["..."] }` の構造化形式で Mission Binding と承認 Scope を記録・固定する。
+   - **Implementation Approval Gate**: **Stage 0 PASS ➔ 調査 ➔ 実装計画提出（Execution AI） ➔ HARD STOP ➔ MASTER明示承認 (Proceed) ➔ `gate:entrance` PASS & Scope Lock ➔ 実装** のシーケンスを絶対厳守する。
    - 「調査」「計画」「レビュー」「確認」「相談」の依頼、および Stage 0 `PASS` を実装承認（Proceed）として解釈してはならない。
    - MASTERからの明示的な着手承認（Proceed）を受領するまで、1文字たりともファイル変更を行ってはならない。
 2. **Internal Dispatch, Independent Audit & Authorization Envelope**:
@@ -69,14 +70,14 @@
      - **客観的独立再実行**: 親Executionの主張やPASS表明を信用せず、必須コマンド（`git diff`, `npm test`, `node scripts/check-scope.mjs`）を自ら独立再実行し、PASS / REJECT を独自に判定して `[AUDITOR VERDICT]` を返却する。
    - **Mechanical Auditor Gate (`npm run gate:auditor`)**:
      - Execution AI は Auditor 返却後、`npm run gate:auditor -- --base <BASE> --target <TARGET>` を実行する。
-     - Event A（invoke_subagent with BASE/TARGET/SCOPE）➔ Event B（childConversationId）➔ Event C（childからの [AUDITOR VERDICT] PASS）の相関チェーンを検証する。
+     - `.agents/current-scope.json` の `mission` を正本として Stage 0 Entrance Gate の PASS 証跡を二重防御として再検証した上で、Event A（invoke_subagent with BASE/TARGET/SCOPE）➔ Event B（childConversationId）➔ Event C（childからの [AUDITOR VERDICT] PASS）の相関チェーンを検証する。
      - **Post-Audit Zero Mutation**: Event C PASS 受領後から gate:auditor 実行までの間にファイル変更（write_to_file, replace_file_content, mutating run_command）が1件でも検知された場合、Auditor PASS は即時 VOID（無効）となり Gate は Exit 1 で FAIL する。
    - **Authorization Envelope**:
      - MASTER からの着手指示（Proceed）において付与される認可エンベロープ（`IMPLEMENT: YES, AUDIT: YES, COMMIT: YES, PUSH: YES, DEPLOY: NO, EXTERNAL_WRITE: NO`）。Default は Fail-Closed。
      - `COMMIT: YES, PUSH: YES` が事前認可されている通常Missionでは、Auditor PASS および `gate:auditor` Exit 0 確認後、冗長な手動Resumeを挟まず Commit / Push を連続執行してよい。
      - ただし以下は必ず **HARD STOP** とする：Auditor REJECT、テスト失敗、Scope拡張要求、Universal Gap、Envelope外の操作、DEPLOY/EXTERNAL_WRITE未承認、material blocker。
    - **Bootstrap Migration Rule（移行特例）**:
-     - 本規程への移行コミット（AI Employee OS Rectification）自身は、旧Governanceに準拠し、MASTER手動起動による最後のFresh Independent AuditorのPASSおよびMASTER明示Proceed受領後にコミットされる。本コミット反映後の次Missionから新運用を正式適用する。
+     - 本規程への移行コミット（AI Employee OS Rectification）自身は、旧Governanceに準拠し、MASTER手動起動による最後のFresh Independent AuditorのPASSおよびMASTER明示Proceed受領後にコミットされる。また、`check-entrance-gate.mjs` を新設する Bootstrap Mission（`Stage 0 Entrance Gate Mechanical Enforcement`）自身は、既存の Stage 0 手続き上の PASS を根拠に着手し、Stage 2 で既存 `string[]` 形式で Scope Lock した上で Stage 3 で構造化形式 `{ "mission", "files" }` へ移行する。Scope Lock 前の `npm run gate:entrance` 強制適用は、当該 Bootstrap Mission の実装 Commit / Push 完了後の次 Mission から正式開始する。
 3. **Scope Expansion Gate**:
    - 承認済み計画外の変更が必要になった場合、自己判断で勝手にコードを変更してはならない。
    - 直ちに作業を停止（HARD STOP）し、改訂計画を提出してMASTERの再承認を待つこと。
@@ -95,7 +96,7 @@
    - Deploy（本番環境への配備）は、Authorization Envelope において `DEPLOY: YES` が明示的に認可されている場合のみ実施する（Default: NO）。
    - ドキュメント改定や内部テスト追加など、実稼働環境への反映を必要としない変更は「Deployment対象外 (N/A)」と明示的に判定・記録し、Push完了をもって完了報告へ進むこと。
 3. **Definition of Done**:
-   - Proceed ➔ Implement ➔ Self Verify (`npm test`, Scope Guard) ➔ Internal Auditor Dispatch ➔ `[AUDITOR VERDICT]` PASS ➔ `npm run gate:auditor` Exit 0 ➔ Commit ➔ Push (➔ Deploy ※対象時のみ) ➔ Stage 8 実機動作検証 PASS ➔ Stage 9 Cleanup Worker 起動 ➔ `[CLEANUP REPORT]` 受領 ➔ Machine-verifiable Evidence Gate (`npm run gate:cleanup -- --base <BASE> --target <TARGET>`) Exit 0 (DELETE-CANDIDATE: 0, GOVERNANCE-RESIDUAL: 0) ➔ Mission CLOSED.
+   - Stage 0 Gatekeeper PASS ➔ Proceed ➔ `npm run gate:entrance -- --mission "<MISSION>"` Exit 0 ➔ Scope Lock (`.agents/current-scope.json` `{ mission, files }`) ➔ Implement ➔ Self Verify (`npm test`, Scope Guard) ➔ Internal Auditor Dispatch ➔ `[AUDITOR VERDICT]` PASS ➔ `npm run gate:auditor` Exit 0 ➔ Commit ➔ Push (➔ Deploy ※対象時のみ) ➔ Stage 8 実機動作検証 PASS ➔ Stage 9 Cleanup Worker 起動 ➔ `[CLEANUP REPORT]` 受領 ➔ Machine-verifiable Evidence Gate (`npm run gate:cleanup -- --base <BASE> --target <TARGET>`) Exit 0 (DELETE-CANDIDATE: 0, GOVERNANCE-RESIDUAL: 0) ➔ Mission CLOSED.
    - If any required verification FAILS: STOP.
    - Git PASS is not deployment PASS. Production deployment requires production runtime evidence.
    - Stage 8 PASS is not Mission CLOSED. Cleanup Dispatch Evidence Verification (Residual Diff & Governance Closure Dual Audit) PASS is strictly required.
@@ -104,7 +105,7 @@
 各AI役職の仕様、ツール統制、Handoffプロトコルの詳細契約は、Canonical SSOT である [docs/ai-foundation.md](docs/ai-foundation.md) を唯一の正本とする。各役職の絶対境界は以下の通りである。
 
 - **Chief Orchestrator (Execution AI)**:
-  - *Authority*: 実装窓口の一元管理、Stage 0 入口検問の内部ディスパッチ、調査、Knowledge Impact Analysis、実装計画策定・チャット提示、事前Scope固定（`current-scope.json`）、内部ディスパッチ（architect, worker, auditor, deployer, cleanup worker）、統合自己検証、Mechanical Gates（gate:auditor, gate:cleanup）執行、Authorization Envelopeに基づくCommit/Push執行。
+  - *Authority*: 実装窓口の一元管理、Stage 0 入口検問の内部ディスパッチ、調査、Knowledge Impact Analysis、実装計画策定・チャット提示、事前Scope固定（`current-scope.json`）、内部ディスパッチ（architect, worker, auditor, deployer, cleanup worker）、統合自己検証、Mechanical Gates（`gate:entrance`, `gate:auditor`, `gate:cleanup`）執行、Authorization Envelopeに基づくCommit/Push執行。
   - *Prohibition*: Stage 0 未通過での調査・実装開始、承認Scope外変更、仕様の勝手な追加・変更、自己検品（Auditorを経ない完了判定）、Auditor PASS前のコミット、未承認Deploy、他地区参照（永久原則）。
 - **Leaf Specialist: Design / Direction AI & Entrance Gatekeeper (architect)**:
   - *Authority*: **Stage 0 Entrance Gatekeeper（入口検問：Mission開始時の最初の指示を `SUPREME_PRODUCT_PRINCIPLES.md` / `AGENTS.md` と照合し `[GATEKEEPER VERDICT]` PASS / REJECT を返却）**、全体構造設計、アーキテクチャレビュー、スコープ判断、方針指示、Lean Blueprint 策定。
