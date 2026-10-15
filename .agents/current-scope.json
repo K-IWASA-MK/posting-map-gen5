@@ -1,4 +1,10 @@
 [
+  ".agents/agents/architect/agent.md",
+  ".agents/agents/execution/agent.md",
   ".agents/current-scope.json",
-  "scripts/acquire-liff-id.mjs"
+  ".agents/os-registry.json",
+  ".agents/workflows/development/workflow.md",
+  "AGENTS.md",
+  "docs/ai-foundation.md",
+  "docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md"
 ]
