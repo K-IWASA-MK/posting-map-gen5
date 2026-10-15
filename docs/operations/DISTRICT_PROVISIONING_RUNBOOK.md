@@ -79,13 +79,12 @@
 - **Preconditions**:
   - Stage 1 で自治体コードおよび境界定義が確定していること。
 - **Input**:
-  - 国土交通省 街区レベル位置参照情報（大字・町丁目・小字境界・代表点）
-  - 総務省 e-Stat 令和2年国勢調査小地域境界データ（Shapefile / 世界測地系）および人口・世帯数（JINKO / SETAI）
-  - デジタル庁 アドレス・ベース・レジストリ（住所マスター原本）
+  - Phase 1（Area Skeleton 確定用）: 全国共通の公式住所データ（公式町字・丁目）
+  - Phase 2（後段属性・境界付与用）: 総務省 e-Stat 国勢調査小地域境界データ（Shapefile / 世界測地系）および人口・世帯数（JINKO / SETAI）等の公定統計・地理データ
 - **Action**:
-  1. `scripts/fetch-district-raw-data.py` を実行し、国土交通省および e-Stat 一次データを完全自律取得（ゼロ人間介入原則：`docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md` 厳格遵守）。
-  2. `district-data-provisioning` プロトコルおよび `scripts/generate-boundaries-geojson.py` を実行し、国勢調査小地域（幾何・人口・世帯数）と国交省位置参照情報（小字・完成住所）を空間結合（Point in Polygon）。
-  3. 飛び地（MultiPolygon）の統合、水面等非居住区域の除外、丁目・小地域コードの正規化を実施し、マスター3点セット（`boundaries.geojson`, `address_master.csv`, `municipality_master.csv`）を生成。
+  1. **一次データの完全自律調達**: `docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md` に従い、対象自治体の公式一次データを完全自律取得（ゼロ人間介入原則厳守）。
+  2. **Phase 1（Area Skeleton 3列生成）**: `docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md` および `docs/architecture/ADDRESS_EXTRACTION_RULE.md` に従い、対象地区確定後、公式住所データから `city_name` / `town_name`（公式に丁目が存在する場合は丁目まで含め、それより下位の小字・方角・通称・人工的括弧名称は探索・推測・生成しない）を確定し、最終順序確定後に `rowId`（`1..N`）を採番して **3列のみの Area Skeleton（`rowId,city_name,town_name`）** を生成する（Phase 1 には e-Stat 等の後段データを一切持ち込まない）。
+  3. **Phase 2（後段属性・境界付与）**: 確定済み Area Skeleton（`rowId,city_name,town_name`）を基準として、後段責務として代表座標（`latitude`, `longitude`）、世帯数（`households`）、人口（`population`）、`e_stat_code`、および境界ポリゴン（飛び地 MultiPolygon 統合済みの `boundaries.geojson`）を付与し、マスター3点セット（`address_master.csv`, `boundaries.geojson`, `municipality_master.csv`）を完成させる。
   4. **マスター3点セット同時一括交換 (Master Triad Simultaneous Replacement)**:
      - `address_master.csv` (点), `boundaries.geojson` (面), `municipality_master.csv` (枠) は不可分の3点セットである。必ず3点同時に新地区の確定データへ一括交換し、旧地区データの混在を絶対禁止とする。
   5. **`data/area_mapping.json` の初期化 (Area Mapping Initialization)**:

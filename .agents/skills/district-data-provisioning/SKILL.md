@@ -1,27 +1,33 @@
 ---
 name: district-data-provisioning
-description: 地区プロビジョニング規範。国勢調査小地域単位のマスターデータ生成、MultiPolygon統合、新旧対応表構築手順、および実ブラウザによるLINE資産・リッチメッセージ・あいさつメッセージ構築手順。
+description: 地区プロビジョニング規範。Phase 1 Area Skeleton（rowId,city_name,town_name 3列）確定とPhase 2後段属性・MultiPolygon境界付与によるマスターデータ生成、および実ブラウザによるLINE資産・リッチメッセージ・あいさつメッセージ構築手順。
 ---
 
 # District Data & LINE Provisioning Capability Pack
 
 ## 1. 概要と適用責務
-本 Pack は、新地区の開設および既存地区のデータ移行において、以下を安全かつ再現可能に遂行するための Universal プロビジョニング規格である：
-1. 公式生データ（e-Stat Shapefile, 統計CSV）からのマスターデータ（`data/`）製造。
-2. 実ブラウザ（Chrome CDP）を使用した対象地区専用 LINE 資産一式（LINE Login、LINE公式アカウント、Messaging API、Linked Bot、LIFF、長期チャネルアクセストークン、公式ロゴ、2分割リッチメッセージ、あいさつメッセージ）の構築および READ ONLY 完全検証。
+本 Pack は、新地区の開設において、以下を安全かつ再現可能に遂行するための Universal プロビジョニング規格である：
+1. **Phase 1（Area Skeleton 確定）**: 対象地区確定 ➔ 公式住所データからの `city_name` / `town_name`（公式に丁目が存在すれば丁目まで含め、それより下位の小字・方角・通称・人工的括弧名称は探索・推測・生成しない）の確定 ➔ 最終順序確定後の `rowId`（`1..N`）採番による **3列のみの Area Skeleton（`rowId,city_name,town_name`）** 生成（e-Stat 等の後段データ非依存）。
+2. **Phase 2（後段属性・境界付与）**: 確定済み Area Skeleton に対して後段責務として e-Stat 等から代表座標・人口・世帯数・小地域コードおよび境界 GeoJSON を付与し、マスターデータ（`data/`）を完成させる。
+3. 実ブラウザ（Chrome CDP）を使用した対象地区専用 LINE 資産一式（LINE Login、LINE公式アカウント、Messaging API、Linked Bot、LIFF、長期チャネルアクセストークン、公式ロゴ、2分割リッチメッセージ、あいさつメッセージ）の構築および READ ONLY 完全検証。
 
 ## 2. 正本仕様依存 (Canonical Sources)
 - [district-data-transition-rule.md](../../../.agents/rules/district-data-transition-rule.md): 地区データ移行規則
+- [DISTRICT_DATA_ACQUISITION_RULE.md](../../../docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md): 地区データ自律調達・2段階マスター生成規程
+- [ADDRESS_EXTRACTION_RULE.md](../../../docs/architecture/ADDRESS_EXTRACTION_RULE.md): 住所抽出規範
 - [DISTRICT_PROVISIONING_RUNBOOK.md](../../../docs/operations/DISTRICT_PROVISIONING_RUNBOOK.md): 新地区標準プロビジョニング手順書
 
 ## 3. マスターデータ構築の絶対規範
 1. **Universal Engine 不可侵原則**:
    - 地区ごとの特殊事情（町名フォーマット、境界形状、世帯規模）を吸収するために共通エンジン（`active/**`）を変更してはならない。全ての地区差は `data/**` 内のマスターデータによって吸収する。
-2. **飛び地 MultiPolygon の完全統合**:
-   - 同一町丁目に複数の離れたポリゴン（飛び地・島嶼）が存在する場合、別レコードに分割せず、単一の MultiPolygon Feature として統合する。
-3. **実績データの完全継承と新旧対応表**:
-   - 既存地区のマスター改定時は、旧 `rowId` と新 `rowId` の全件対応表（マッピングテーブル）を構築し、過去の配布実績・ピン状態・在庫履歴が欠損・混同なく継承されることを担保する。
-4. **Code Deployment 権限の非保有**:
+2. **Phase 1 Area Skeleton 純粋性と後段分離原則**:
+   - 第1段階（Phase 1）の成果物は `rowId,city_name,town_name` の3列のみとし、e-Stat・`households`・`population`・`latitude`・`longitude`・`boundaries`・投票率等を Phase 1 の Skeleton 決定に一切使用してはならない。
+   - `town_name` より下位の小字・方角・通称・人工的括弧名称を探索・推測・生成・地区固有辞書補完してはならない。
+3. **飛び地 MultiPolygon の完全統合（Phase 2 後段責務）**:
+   - Phase 2 の境界付与において、同一 `rowId`（町丁目）に複数の離れたポリゴン（飛び地・島嶼）が存在する場合、別レコードに分割せず、単一の MultiPolygon Feature として統合する。
+4. **既存稼働地区データの非Migration原則と新旧対応表**:
+   - 既存稼働地区の確定済み `data/**` および既存 `rowId` は遡及的に Migration・再採番しない（新規地区では `data/area_mapping.json` を空配列 `[]` に初期化する）。
+5. **Code Deployment 権限の非保有**:
    - 本 Pack を実行する District Provisioner は、コードのデプロイ権限を持たない。データ受入ゲートが 100% PASS した後、MASTER の承認を経てプロビジョニングを完了する。
 
 ---

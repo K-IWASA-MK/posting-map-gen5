@@ -13,18 +13,19 @@
 
 ---
 
-## 2. マスター3点セットの同時交換規則（Master Triad Replacement）
+## 2. マスター3点セットの生成順序と同時交換規則（Master Triad Generation & Replacement）
 
 以下の3ファイルは「完全地区固有データ」であり、コピー元地区のデータが1文字でも残存してはならない。
 
 | 対象ファイル | 役割 | 新地区展開時の取り扱い |
 | :--- | :--- | :--- |
-| **`data/address_master.csv`** | 住所マスター (SSOT) | 新地区の確定全小地域データ（1..N）へ丸ごと差し替える |
-| **`data/boundaries.geojson`** | 境界ポリゴンデータ | 新地区の確定境界GeoJSON（Features: N）へ丸ごと差し替える |
+| **`data/address_master.csv`** | 住所マスター (SSOT) | Phase 1 Area Skeleton（`rowId,city_name,town_name` 3列確定・`1..N` 採番）に Phase 2 後段属性を付与した確定データ（1..N）へ丸ごと差し替える |
+| **`data/boundaries.geojson`** | 境界ポリゴンデータ | Phase 1 Area Skeleton（`1..N`）に対応付けられた新地区の確定境界GeoJSON（Features: N）へ丸ごと差し替える |
 | **`data/municipality_master.csv`** | 自治体マスター | 新地区の構成自治体一覧・町数へ丸ごと差し替える |
 
 ### 遵守事項
-- **同時一括交換の義務**: 上記3ファイルは「点（address）・面（boundaries）・枠（municipality）」の不可分な3点セットである。必ず3点同時に新地区の確定データへ一括交換しなければならない。一部のみの先行差し替えや旧地区データの混在は絶対禁止とする。
+- **Phase 1 Area Skeleton 先行確定の原則**: 新地区のデータ生成では、最初に対象地区を確定し、公式データから `city_name` / `town_name`（公式に丁目が存在する場合は丁目まで含め、それより下位の小字・方角・通称・人工的括弧名称は探索・推測・生成・地区固有辞書補完しない）を確定し、最終順序確定後に `rowId`（`1..N`）を採番して **3列のみの Area Skeleton（`rowId,city_name,town_name`）** を確定する。Phase 1 の Skeleton 決定に e-Stat・`households`・`population`・`latitude`・`longitude`・`boundaries`・投票率等を使用してはならない（これらはすべて Skeleton 確定後に付与する Phase 2 後段責務とする）。
+- **同時一括交換の義務**: 上記3ファイルは「点（address）・面（boundaries）・枠（municipality）」の不可分な3点セットである。Phase 2 まで完了した確定データを必ず3点同時に一括交換しなければならない。一部のみの先行差し替えや旧地区データの混在は絶対禁止とする。
 
 ---
 
