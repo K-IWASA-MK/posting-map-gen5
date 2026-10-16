@@ -1,8 +1,7 @@
 {
-  "mission": "Phase 1 Scripts Defect Rectification & Governance Hardening (Rectification of Unfulfilled Conditions)",
+  "mission": "Phase 1 Creation Date Refinement & MIE-03 Area Skeleton Generation",
   "files": [
     ".agents/current-scope.json",
-    "scripts/build-district-master.py",
     "scripts/fetch-district-raw-data.py",
     "tests/test_district_scripts_universal.mjs"
   ]
