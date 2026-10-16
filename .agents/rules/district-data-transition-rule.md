@@ -24,7 +24,7 @@
 | **`data/municipality_master.csv`** | 自治体マスター | 新地区の構成自治体一覧・町数へ丸ごと差し替える |
 
 ### 遵守事項
-- **Phase 1 Area Skeleton 先行確定の原則**: 新地区のデータ生成では、最初に対象地区を確定し、公式データから `city_name` / `town_name`（公式に丁目が存在する場合は丁目まで含め、それより下位の小字・方角・通称・人工的括弧名称は探索・推測・生成・地区固有辞書補完しない）を確定し、最終順序確定後に `rowId`（`1..N`）を採番して **3列のみの Area Skeleton（`rowId,city_name,town_name`）** を確定する。Phase 1 の Skeleton 決定に e-Stat・`households`・`population`・`latitude`・`longitude`・`boundaries`・投票率等を使用してはならない（これらはすべて Skeleton 確定後に付与する Phase 2 後段責務とする）。
+- **Phase 1 Area Skeleton 先行確定の原則**: 新地区のデータ生成では、最初に **3列のみの Area Skeleton（`rowId,city_name,town_name`）** を確定する。住所の母集合、公式区割りの確定・適用（適用法令の施行版・経過措置の確認を含む）、正規化、名称衝突、整列、`rowId` 採番、および品質ゲートの定義は、正本である `docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md`（§3.1, §4, §5）に従う。Phase 1 の Skeleton 決定に e-Stat・`households`・`population`・`latitude`・`longitude`・`boundaries`・投票率等を使用してはならない（これらはすべて Skeleton 確定後に付与する Phase 2 後段責務とする）。
 - **同時一括交換の義務**: 上記3ファイルは「点（address）・面（boundaries）・枠（municipality）」の不可分な3点セットである。Phase 2 まで完了した確定データを必ず3点同時に一括交換しなければならない。一部のみの先行差し替えや旧地区データの混在は絶対禁止とする。
 
 ---

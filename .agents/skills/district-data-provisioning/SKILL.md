@@ -7,7 +7,7 @@ description: 地区プロビジョニング規範。Phase 1 Area Skeleton（rowI
 
 ## 1. 概要と適用責務
 本 Pack は、新地区の開設において、以下を安全かつ再現可能に遂行するための Universal プロビジョニング規格である：
-1. **Phase 1（Area Skeleton 確定）**: 対象地区確定 ➔ 公式住所データからの `city_name` / `town_name`（公式に丁目が存在すれば丁目まで含め、それより下位の小字・方角・通称・人工的括弧名称は探索・推測・生成しない）の確定 ➔ 最終順序確定後の `rowId`（`1..N`）採番による **3列のみの Area Skeleton（`rowId,city_name,town_name`）** 生成（e-Stat 等の後段データ非依存）。
+1. **Phase 1（Area Skeleton 確定）**: 正本 `docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md`（§3.1, §4, §5）に従い、公式区割りの確定・適用 ➔ 住所の母集合からの `city_name` / `town_name` 正規化 ➔ 名称衝突検査 ➔ 整列 ➔ `rowId`（`1..N`）採番を行い、**3列のみの Area Skeleton（`rowId,city_name,town_name`）** を生成する（e-Stat 等の後段データ非依存）。
 2. **Phase 2（後段属性・境界付与）**: 確定済み Area Skeleton に対して後段責務として e-Stat 等から代表座標・人口・世帯数・小地域コードおよび境界 GeoJSON を付与し、マスターデータ（`data/`）を完成させる。
 3. 実ブラウザ（Chrome CDP）を使用した対象地区専用 LINE 資産一式（LINE Login、LINE公式アカウント、Messaging API、Linked Bot、LIFF、長期チャネルアクセストークン、公式ロゴ、2分割リッチメッセージ、あいさつメッセージ）の構築および READ ONLY 完全検証。
 
@@ -22,7 +22,7 @@ description: 地区プロビジョニング規範。Phase 1 Area Skeleton（rowI
    - 地区ごとの特殊事情（町名フォーマット、境界形状、世帯規模）を吸収するために共通エンジン（`active/**`）を変更してはならない。全ての地区差は `data/**` 内のマスターデータによって吸収する。
 2. **Phase 1 Area Skeleton 純粋性と後段分離原則**:
    - 第1段階（Phase 1）の成果物は `rowId,city_name,town_name` の3列のみとし、e-Stat・`households`・`population`・`latitude`・`longitude`・`boundaries`・投票率等を Phase 1 の Skeleton 決定に一切使用してはならない。
-   - `town_name` より下位の小字・方角・通称・人工的括弧名称を探索・推測・生成・地区固有辞書補完してはならない。
+   - 住所の母集合、公式区割り（適用法令の施行版・経過措置）、正規化、下位階層の生成禁止、名称衝突、整列、品質ゲート（QG-2 / QG-3）は、正本 `docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md` の定義に従う。
 3. **飛び地 MultiPolygon の完全統合（Phase 2 後段責務）**:
    - Phase 2 の境界付与において、同一 `rowId`（町丁目）に複数の離れたポリゴン（飛び地・島嶼）が存在する場合、別レコードに分割せず、単一の MultiPolygon Feature として統合する。
 4. **既存稼働地区データの非Migration原則と新旧対応表**:

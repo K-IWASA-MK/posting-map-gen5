@@ -27,12 +27,13 @@ System: POSTING MAP / FIELD OPERATIONS OS / 289 DISTRICT EXPANSION ENGINE
 ## ■ 判定フローチャート (Official Town & Chome Determination)
 
 ```text
-                    【Step 1: 対象地区・自治体名 確定】
-                             (city_name)
+                【Step 1: 公式区割りの確定・適用】
+          （適用法令の施行版・経過措置 ➔ 対象町域を選別）
+              ※ DISTRICT_DATA_ACQUISITION_RULE.md §4.1
                                   │
                                   ▼
-                【Step 2: 公式住所データから町字名を取得】
-                  （※先頭の形式的な「大字」接頭辞は除去）
+          【Step 2: 住所の母集合（§3.1）から町字名を取得・正規化】
+        （郡名除去・先頭の形式的な「大字」接頭辞を除去：§4.2）
                                   │
                                   ▼
                  【公式に「丁目」が存在するか？】
@@ -49,7 +50,8 @@ System: POSTING MAP / FIELD OPERATIONS OS / 289 DISTRICT EXPANSION ENGINE
              【そこで確定終了（下位の小字・方角等は生成しない）】
                                   │
                                   ▼
-         【Step 3: 最終順序確定後に rowId = 1..N を一意採番】
+   【Step 3: 名称衝突検査 ➔ 公式読み仮名で整列 ➔ rowId = 1..N を一意採番】
+             （DISTRICT_DATA_ACQUISITION_RULE.md §4.3〜§4.5）
                    ➔ 成果物: rowId,city_name,town_name
 ```
 
