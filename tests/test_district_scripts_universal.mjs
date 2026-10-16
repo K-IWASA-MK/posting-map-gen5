@@ -666,6 +666,11 @@ xml_update_only = '<metadata><updateDate>2024-10-01</updateDate><publishDate>202
 k4, d4 = fetch_mod.extract_creation_date_from_metadata(xml_update_only)
 assert k4 is None and d4 is None, f"Update date in XML must NOT be extracted as creation date: {k4}, {d4}"
 
+# 5. Metadata or HTML with only 基準年月日 or 調査年月日 (must NOT be treated as creation date)
+html_kijun_only = '<tr><td>大字・町丁目</td><td>基準年月日</td><td>令和6年1月1日</td><td>調査年月日: 令和6年2月1日</td><td><input name="chn" value="125"></td></tr>'
+k5, d5 = fetch_mod.extract_creation_date_from_html(html_kijun_only)
+assert k5 is None and d5 is None, f"Kijun/chosa date must NOT be extracted as creation date: {k5}, {d5}"
+
 print("CREATION_DATE_DISCRIMINATION_VERIFIED_SUCCESSFULLY")
 `;
     const res = runPython( ['-c', testScript], { encoding: 'utf-8' });

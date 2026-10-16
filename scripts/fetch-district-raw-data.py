@@ -42,7 +42,7 @@ def compute_sha256(filepath):
     return h.hexdigest()
 
 CREATION_DATE_KEYS = [
-    '作成年月日', '原資料作成日', 'データ作成日', '作成日', '基準年月日', '調査年月日',
+    '作成年月日', '原資料作成日', 'データ作成日', '作成日',
     'createDate', 'creationDate', 'dateCreated', 'Created Date', 'created_date'
 ]
 EXCLUDED_DATE_KEYS = [
