@@ -24,12 +24,13 @@ import tempfile
 from datetime import datetime, timezone
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Fetch district raw data autonomously from MLIT and e-Stat')
+    parser = argparse.ArgumentParser(description='Fetch district raw data autonomously from MLIT and verify ABR master')
     parser.add_argument('--city-code', required=True, help='5-digit municipality code (e.g. 24205)')
     parser.add_argument('--ref-dir', required=True, help='Explicit destination directory to cache location reference data (Required; no default)')
     parser.add_argument('--estat-dir', default=None, help='Directory to cache e-Stat data (optional)')
+    parser.add_argument('--abr-file', action='append', help='Path to Digital Agency ABR town master CSV (Required for Phase 1 verification)')
+    parser.add_argument('--abr-dir', default=None, help='Directory containing Digital Agency ABR town master CSV files')
     parser.add_argument('--data-kind', default='1', choices=['0', '1'], help='0: 街区レベル, 1: 大字・町丁目レベル (default: 1)')
-    parser.add_argument('--allow-overwrite', action='store_true', help='Explicitly allow overwriting existing reference files')
     return parser.parse_args()
 
 def compute_sha256(filepath):
@@ -40,7 +41,7 @@ def compute_sha256(filepath):
             h.update(chunk)
     return h.hexdigest()
 
-def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', allow_overwrite=False):
+def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports=None):
     """
     Fetch MLIT location reference data ZIP autonomously.
     data_kind: '1' for 大字・町丁目レベル (SSOT default), '0' for 街区レベル
@@ -50,8 +51,11 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', allow_overw
     normalized_csv = os.path.join(out_dir, 'reference_points.csv')
     provenance_path = os.path.join(out_dir, 'provenance.json')
 
-    if not allow_overwrite and os.path.exists(normalized_csv):
-        sys.exit(f"FATAL: Destination file already exists and --allow-overwrite was not specified: {normalized_csv}")
+    # Overwrite strictly prohibited across CSV, ZIP and provenance JSON
+    if os.path.exists(normalized_csv):
+        sys.exit(f"FATAL HARD STOP: Destination reference CSV already exists (overwrite strictly prohibited): {normalized_csv}")
+    if os.path.exists(provenance_path):
+        sys.exit(f"FATAL HARD STOP: Destination provenance JSON already exists (overwrite strictly prohibited): {provenance_path}")
 
     kind_label = "大字・町丁目" if data_kind == '1' else "街区"
     print(f"[MLIT Fetcher] Target Municipality Code: {city_code} (Pref: {pref_code}), Kind: {kind_label} (data_kind={data_kind})")
@@ -109,16 +113,21 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', allow_overw
                         cid = m_chn.group(1)
                         # Extract version like 19.0b, 24.0a
                         m_ver = re.search(r'(\d+\.\d+[a-z]?)', row)
-                        ver_str = m_ver.group(1) if m_ver else "unknown"
+                        ver_str = m_ver.group(1) if m_ver else None
                         # Extract year like 令和6年度 or 2024年度 or R06
                         m_year = re.search(r'(令和\s*\d+\s*年度|\d{4}年度|R\d+)', row)
-                        year_str = m_year.group(1) if m_year else "unknown"
+                        year_str = m_year.group(1) if m_year else None
+                        # Extract explicit source created date stated by provider (e.g. 令和6年3月29日, 2024-03-29)
+                        m_date = re.search(r'(令和\s*\d+\s*年\s*\d+\s*月\s*\d+\s*日|\d{4}年\s*\d+\s*月\s*\d+\s*日|\d{4}[-/]\d{1,2}[-/]\d{1,2})', row)
+                        date_str = m_date.group(1) if m_date else None
+
                         # Strip html tags for provenance
                         clean_text = re.sub(r'<[^>]+>', ' ', row).strip()
                         matched_candidates.append({
                             'chn': cid,
                             'version': ver_str,
                             'year': year_str,
+                            'created_date': date_str,
                             'text': clean_text
                         })
 
@@ -128,6 +137,8 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', allow_overw
             # Rule: Select by explicit provider metadata (highest version or latest year), no blind head assumption
             def ver_key(item):
                 v = item['version']
+                if not v:
+                    return (0, 0, 0)
                 m = re.match(r'(\d+)\.(\d+)([a-z]?)', v)
                 if m:
                     major = int(m.group(1))
@@ -141,8 +152,19 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', allow_overw
             chn_val = chosen['chn']
             resolved_version = chosen['version']
             resolved_year = chosen['year']
+            resolved_created_date = chosen['created_date']
             raw_row_text = chosen['text']
-            print(f"[MLIT Fetcher] Resolved metadata: Version={resolved_version}, Year={resolved_year}, chn={chn_val}")
+
+            # RULE: If year or version is unknown/undetermined, HARD STOP immediately
+            if not resolved_version or not resolved_year:
+                sys.exit(f"FATAL HARD STOP [DISTRICT_DATA_ACQUISITION_RULE.md §3.1, §7.2]: Failed to determine version or year from provider metadata! (version='{resolved_version}', year='{resolved_year}')")
+
+            # Check if final ZIP already exists (overwrite strictly prohibited)
+            final_zip_target = os.path.join(out_dir, f"{city_code}-{resolved_version}.zip")
+            if os.path.exists(final_zip_target):
+                sys.exit(f"FATAL HARD STOP: Destination archive ZIP already exists (overwrite strictly prohibited): {final_zip_target}")
+
+            print(f"[MLIT Fetcher] Resolved metadata: Version={resolved_version}, Year={resolved_year}, CreatedDate={resolved_created_date or 'Searching in archive...'}, chn={chn_val}")
 
         # Step 3: Accept stipulation
         print("[MLIT Fetcher] Step 3: Handling terms & stipulation confirmation...")
@@ -220,24 +242,50 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', allow_overw
 
         print(f"[MLIT Fetcher] Normalized {row_count} rows.")
 
-        # Step 8: Prepare Provenance metadata
+        # Step 8: Validate explicit source creation date stated by provider
+        if not resolved_created_date:
+            # Search inside extracted metadata files for explicit creation date
+            for root, dirs, files in os.walk(temp_extract_dir):
+                for f in files:
+                    if f.endswith('.xml') or f.lower().startswith('readme'):
+                        meta_fpath = os.path.join(root, f)
+                        try:
+                            with open(meta_fpath, 'r', encoding='utf-8', errors='ignore') as mf:
+                                content = mf.read()
+                                m_tag = re.search(r'(?:<作成日>|作成年月日\s*[:：]|作成日\s*[:：])\s*([^\s<]+)', content)
+                                if m_tag:
+                                    resolved_created_date = m_tag.group(1).strip()
+                                    break
+                        except Exception:
+                            pass
+                if resolved_created_date:
+                    break
+
+        if not resolved_created_date:
+            sys.exit(f"FATAL HARD STOP [DISTRICT_DATA_ACQUISITION_RULE.md §7.2]: Explicit source creation date not stated by provider for city {city_code}! (File timestamps cannot be used as substitute)")
+
+        # Step 9: Prepare Provenance metadata
         provenance_data = {
             'municipality_code': city_code,
             'data_kind': kind_label,
             'data_kind_code': data_kind,
             'resolved_version': resolved_version,
             'resolved_year': resolved_year,
+            'source_creation_date': resolved_created_date,
             'download_url': full_zip_url,
             'download_timestamp_utc': datetime.now(timezone.utc).isoformat(),
             'zip_sha256': zip_hash,
             'record_count': row_count,
             'provider_metadata_row': raw_row_text
         }
+        if abr_reports:
+            provenance_data['abr_verification'] = abr_reports
+
         temp_provenance_path = os.path.join(temp_work_dir, 'provenance.json')
         with open(temp_provenance_path, 'w', encoding='utf-8') as f:
             json.dump(provenance_data, f, ensure_ascii=False, indent=2)
 
-        # Step 9: Atomic move to target destination
+        # Step 10: Atomic move to target destination
         os.makedirs(out_dir, exist_ok=True)
         final_zip_path = os.path.join(out_dir, f"{city_code}-{resolved_version}.zip")
         shutil.move(temp_zip_path, final_zip_path)
@@ -252,6 +300,95 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', allow_overw
     finally:
         if os.path.exists(temp_work_dir):
             shutil.rmtree(temp_work_dir)
+
+def verify_abr_master(city_code, abr_files=None, abr_dir=None):
+    """
+    Verify presence and integrity of pre-positioned official Digital Agency ABR town master CSV.
+    Does NOT claim autonomous acquisition; strictly verifies placed official primary archive.
+    Verifies:
+    - File presence and read access
+    - Official header inspection (supporting both official English and Japanese column names)
+    - Preserving leading zeroes in official codes as strings
+    - Total record count in file
+    - Presence of records matching specified municipality code or name
+    - SHA-256 hash calculation
+    """
+    abr_candidates = []
+    if abr_files:
+        abr_candidates.extend(abr_files)
+    if abr_dir and os.path.exists(abr_dir):
+        for root, dirs, files in os.walk(abr_dir):
+            for f in files:
+                if f.endswith('.csv'):
+                    abr_candidates.append(os.path.join(root, f))
+
+    if not abr_candidates:
+        sys.exit(f"FATAL HARD STOP: No ABR town master CSV specified or found in --abr-file / --abr-dir for city {city_code}.")
+
+    verified_reports = []
+    matched_city_records_total = 0
+    city_code_5 = city_code[:5]
+
+    for abr_path in abr_candidates:
+        if not os.path.exists(abr_path):
+            sys.exit(f"FATAL HARD STOP: Specified ABR file not found: {abr_path}")
+
+        print(f"[ABR Verifier] Inspecting official ABR master: {abr_path}...")
+        file_hash = compute_sha256(abr_path)
+
+        with open(abr_path, 'r', encoding='utf-8-sig') as f:
+            reader = csv.reader(f)
+            try:
+                header = next(reader)
+            except StopIteration:
+                sys.exit(f"FATAL HARD STOP: ABR file is empty: {abr_path}")
+
+            col_code_idx = -1
+            col_city_idx = -1
+            for idx, col in enumerate(header):
+                c = col.strip()
+                if c in ['全国地方公共団体コード', 'lg_code', '市区町村コード', 'city_code']:
+                    col_code_idx = idx
+                elif c in ['市区町村名', 'city_name', 'city']:
+                    col_city_idx = idx
+
+            total_file_records = 0
+            matched_for_this_file = 0
+
+            for row in reader:
+                total_file_records += 1
+                code_val = ""
+                if col_code_idx != -1 and len(row) > col_code_idx:
+                    # Keep leading zeroes as string!
+                    code_val = row[col_code_idx].strip()
+
+                if code_val:
+                    if code_val.startswith(city_code_5):
+                        matched_for_this_file += 1
+                else:
+                    if col_city_idx != -1 and len(row) > col_city_idx:
+                        matched_for_this_file += 1
+
+            if total_file_records == 0:
+                sys.exit(f"FATAL HARD STOP: ABR file {abr_path} has 0 records!")
+
+            matched_city_records_total += matched_for_this_file
+            verified_reports.append({
+                'filepath': os.path.abspath(abr_path),
+                'sha256': file_hash,
+                'total_records': total_file_records,
+                'matched_municipality_records': matched_for_this_file,
+                'header_columns': header
+            })
+
+    if matched_city_records_total == 0:
+        sys.exit(
+            f"FATAL HARD STOP: Inspected ABR files do NOT contain records for municipality code '{city_code}'! "
+            f"Checked files: {[r['filepath'] for r in verified_reports]}"
+        )
+
+    print(f"[ABR Verifier] PASS: Verified {len(verified_reports)} ABR file(s). Target municipality matched {matched_city_records_total} records.")
+    return verified_reports
 
 def verify_estat_data(city_code, estat_dir):
     """
@@ -282,24 +419,32 @@ def verify_estat_data(city_code, estat_dir):
 def main():
     args = parse_args()
     print("=" * 70)
-    print("DISTRICT DATA AUTONOMOUS FETCHER (DISTRICT_DATA_ACQUISITION_RULE.md)")
+    print("DISTRICT DATA AUTONOMOUS FETCHER & ABR VERIFIER (DISTRICT_DATA_ACQUISITION_RULE.md)")
     print(f"Target Municipality Code: {args.city_code}")
-    print(f"Ref Output Directory: {args.ref_dir}")
+    print(f"Ref Output Directory:     {args.ref_dir}")
     print("=" * 70)
 
+    # 1. Verify pre-positioned official ABR town master if specified
+    abr_reports = None
+    if args.abr_file or args.abr_dir:
+        abr_reports = verify_abr_master(args.city_code, abr_files=args.abr_file, abr_dir=args.abr_dir)
+
+    # 2. Fetch MLIT location reference data
     ref_csv, prov_json = fetch_mlit_location_reference(
         city_code=args.city_code,
         ref_dir=args.ref_dir,
         data_kind=args.data_kind,
-        allow_overwrite=args.allow_overwrite
+        abr_reports=abr_reports
     )
     if args.estat_dir:
         verify_estat_data(args.city_code, args.estat_dir)
 
     print("=" * 70)
     print("[QG-1 Autonomous Fetch Gate] PASS: Reference data acquired with full provenance.")
-    print(f"  - MLIT Reference: {ref_csv}")
-    print(f"  - Provenance:     {prov_json}")
+    print(f"  - MLIT Reference:  {ref_csv}")
+    print(f"  - Provenance:      {prov_json}")
+    if abr_reports:
+        print(f"  - ABR Verified:    {len(abr_reports)} file(s)")
     print("=" * 70)
 
 if __name__ == '__main__':

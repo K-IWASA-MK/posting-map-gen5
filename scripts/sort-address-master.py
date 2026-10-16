@@ -36,7 +36,6 @@ def parse_args():
     parser.add_argument("--input", required=True, help="Input CSV path (Required; no default)")
     parser.add_argument("--output", required=True, help="Output CSV path (Required; no default)")
     parser.add_argument("--abr-file", required=True, action='append', help="Path to Digital Agency ABR town master CSV (Required; can be specified multiple times for multiple files)")
-    parser.add_argument("--allow-overwrite", action="store_true", help="Explicitly allow overwriting existing output file")
     return parser.parse_args()
 
 def load_abr_readings(abr_paths):
@@ -62,10 +61,10 @@ def load_abr_readings(abr_paths):
             # mt_town columns typically include: city_name, ward_name, oaza_cho, chome, city_kana, ward_kana, oaza_cho_kana, chome_number
             # If headers are different, handle common ABR naming
             for r in reader:
-                city = r.get("city_name") or r.get("city") or ""
-                ward = r.get("ward_name") or r.get("ward") or ""
-                oaza_cho = r.get("oaza_cho") or r.get("town") or ""
-                chome_name = r.get("chome") or ""
+                city = r.get("city_name") or r.get("city") or r.get("市区町村名") or ""
+                ward = r.get("ward_name") or r.get("ward") or r.get("郡区名") or ""
+                oaza_cho = r.get("oaza_cho") or r.get("town") or r.get("町字名") or r.get("大字町名") or r.get("大字町丁目名") or ""
+                chome_name = r.get("chome") or r.get("丁目名") or ""
 
                 # city_name in our schema preserves ward: '〇〇市△△区' or '〇〇市'
                 full_city_name = f"{city}{ward}".strip() if ward else city.strip()
@@ -73,15 +72,15 @@ def load_abr_readings(abr_paths):
                 if full_city_name and "郡" in full_city_name:
                     full_city_name = re.sub(r"^.+?郡", "", full_city_name)
 
-                city_kana = (r.get("city_kana") or "").strip()
-                ward_kana = (r.get("ward_kana") or "").strip()
+                city_kana = (r.get("city_kana") or r.get("市区町村名_カナ") or r.get("市区町村名_よみ") or "").strip()
+                ward_kana = (r.get("ward_kana") or r.get("郡区名_カナ") or "").strip()
                 full_city_kana = f"{city_kana}{ward_kana}".strip()
 
                 if full_city_name and full_city_kana:
                     city_readings[full_city_name] = full_city_kana
 
-                oaza_cho_kana = (r.get("oaza_cho_kana") or "").strip()
-                chome_number = (r.get("chome_number") or "").strip()
+                oaza_cho_kana = (r.get("oaza_cho_kana") or r.get("町字名_カナ") or r.get("町字名_よみ") or r.get("大字町名_カナ") or "").strip()
+                chome_number = (r.get("chome_number") or r.get("丁目数字") or "").strip()
 
                 # Full town name matching address_master representation: e.g. "△△町一丁目" or "△△町"
                 if chome_name:
@@ -173,8 +172,8 @@ def main():
     if not os.path.exists(args.input):
         sys.exit(f"FATAL: Input file not found: {args.input}")
 
-    if not args.allow_overwrite and os.path.exists(args.output):
-        sys.exit(f"FATAL: Output file already exists and --allow-overwrite was not specified: {args.output}")
+    if os.path.exists(args.output):
+        sys.exit(f"FATAL HARD STOP: Output file already exists (overwrite strictly prohibited): {args.output}")
 
     city_readings, town_readings = load_abr_readings(args.abr_file)
 

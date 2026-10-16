@@ -32,7 +32,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Build Universal District Master adhering to DISTRICT_DATA_ACQUISITION_RULE.md')
     # Core CLI arguments
     parser.add_argument('--out-csv', required=True, help='Output CSV path (Required; no default)')
-    parser.add_argument('--allow-overwrite', action='store_true', help='Explicitly allow overwriting existing output file')
     parser.add_argument('--phase1-only', action='store_true', help='Generate 3-column Area Skeleton (rowId,city_name,town_name) independently')
 
     # Phase 1 inputs
@@ -168,25 +167,57 @@ def run_phase1_skeleton(args):
     if not os.path.exists(args.ref_csv):
         sys.exit(f"FATAL: MLIT reference CSV not found: {args.ref_csv}")
 
-    if not args.allow_overwrite and os.path.exists(args.out_csv):
-        sys.exit(f"FATAL: Output file already exists and --allow-overwrite was not specified: {args.out_csv}")
+    if os.path.exists(args.out_csv):
+        sys.exit(f"FATAL HARD STOP: Output file already exists (overwrite strictly prohibited): {args.out_csv}")
 
     # 1. Load MLIT reference mother set
     print(f"[Phase 1 Step 1] Loading MLIT mother set from {args.ref_csv}...")
     mother_records = []
     with open(args.ref_csv, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        header = next(reader)
-        # MLIT format check: col 1 = 市区町村名, col 2 = 大字町丁目名
-        for r in reader:
-            if len(r) > 2:
-                raw_city = r[1].strip()
-                raw_town = r[2].strip()
+        try:
+            header = next(reader)
+        except StopIteration:
+            sys.exit(f"FATAL: Empty MLIT reference CSV: {args.ref_csv}")
+
+        # Locate columns in official MLIT header
+        col_city_idx = -1
+        col_town_idx = -1
+        col_code_idx = -1
+
+        for idx, h in enumerate(header):
+            h_clean = h.strip()
+            if '市区町村名' in h_clean:
+                col_city_idx = idx
+            elif '大字町丁目名' in h_clean:
+                col_town_idx = idx
+            elif '大字町丁目コード' in h_clean or '町丁目コード' in h_clean:
+                col_code_idx = idx
+
+        # Fallback to standard MLIT positions if header names not found
+        if col_city_idx == -1 and len(header) > 1:
+            col_city_idx = 1
+        if col_town_idx == -1 and len(header) > 2:
+            col_town_idx = 2
+
+        if col_city_idx == -1 or col_town_idx == -1:
+            sys.exit(f"FATAL: Could not locate required columns (市区町村名, 大字町丁目名) in MLIT header: {header}")
+
+        for line_no, r in enumerate(reader, start=2):
+            if len(r) > max(col_city_idx, col_town_idx):
+                raw_city = r[col_city_idx].strip()
+                raw_town = r[col_town_idx].strip()
+                # Official code: preserve leading zeroes as string!
+                town_code = ""
+                if col_code_idx != -1 and len(r) > col_code_idx:
+                    town_code = r[col_code_idx].strip()
+
                 clean_city = normalize_city_name(raw_city)
                 clean_town = clean_oaza_prefix(raw_town)
                 mother_records.append({
                     'raw_city': raw_city,
                     'raw_town': raw_town,
+                    'town_code': town_code,
                     'clean_city': clean_city,
                     'clean_town': clean_town,
                 })
@@ -194,18 +225,24 @@ def run_phase1_skeleton(args):
     if not mother_records:
         sys.exit(f"FATAL: No records parsed from MLIT reference CSV {args.ref_csv}.")
 
-    # De-duplicate mother set to distinct (clean_city, clean_town) pairs preserving raw provenance
+    # Group mother records by normalized (clean_city, clean_town)
+    # Track distinct entities: (raw_town, town_code)
     unique_towns_map = {}
     collision_tracker = defaultdict(set)
     for rec in mother_records:
         key = (rec['clean_city'], rec['clean_town'])
         unique_towns_map[key] = rec
-        collision_tracker[key].add((rec['raw_city'], rec['raw_town']))
+        collision_tracker[key].add((rec['raw_town'], rec['town_code']))
 
-    # Rule 4.3: Name collision check
-    for key, raw_set in collision_tracker.items():
-        if len(raw_set) > 1:
-            sys.exit(f"FATAL HARD STOP: Name collision detected for {key}! Distinct raw names normalized to same town: {raw_set}")
+    # Rule 4.3: Name collision check across distinct entities
+    for key, entity_set in collision_tracker.items():
+        if len(entity_set) > 1:
+            # Different raw names or different official codes normalized to the same town!
+            details = [f"(raw='{rt}', code='{cd}')" for rt, cd in sorted(entity_set)]
+            sys.exit(
+                f"FATAL HARD STOP [Rule 4.3]: Name collision detected for {key}! "
+                f"Multiple distinct entities normalized to same town name (auto-merging prohibited): {', '.join(details)}"
+            )
 
     total_mother_count = len(unique_towns_map)
     print(f"[Phase 1 Step 1] Loaded {len(mother_records)} points. Unique mother set town count: {total_mother_count}")

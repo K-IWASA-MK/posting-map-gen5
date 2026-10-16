@@ -41,29 +41,29 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     fs.mkdirSync(dir, { recursive: true });
 
     // 1. Fictitious MLIT reference CSV (大字・町丁目レベル)
-    // Columns: 都道府県名, 市区町村名, 大字町丁目名, 街区符号・地番, 座標系番号, X座標, Y座標, 緯度, 経度, ...
+    // Columns: 都道府県名, 市区町村名, 大字町丁目名, 街区符号・地番, 座標系番号, X座標, Y座標, 緯度, 経度, 住居表示フラグ, 代表点フラグ, 大字町丁目コード
     const mlitCsvPath = path.join(dir, 'mlit_ref.csv');
     const mlitRows = [
-      ['都道府県名', '市区町村名', '大字町丁目名', '街区符号・地番', '座標系番号', 'X', 'Y', '35.0', '136.0'],
-      ['仮想県', '架空市', '大字中央町', '1', '7', '0', '0', '35.1', '136.1'],
-      ['仮想県', '架空市', '朝日通一丁目', '1', '7', '0', '0', '35.2', '136.2'],
-      ['仮想県', '架空市', '朝日通二丁目', '1', '7', '0', '0', '35.2', '136.3'],
-      ['仮想県', '架空市', '大字緑ヶ丘', '1', '7', '0', '0', '35.3', '136.4'],
-      ['仮想県', '架空郡テスト町', '大字本町', '1', '7', '0', '0', '35.4', '136.5'],
-      ['仮想県', '見本政令市サンプル区', '駅前通', '1', '7', '0', '0', '35.5', '136.6'],
+      ['都道府県名', '市区町村名', '大字町丁目名', '街区符号・地番', '座標系番号', 'X座標', 'Y座標', '緯度', '経度', '住居表示フラグ', '代表点フラグ', '大字町丁目コード'],
+      ['仮想県', '架空市', '大字中央町', '1', '7', '0', '0', '35.1', '136.1', '0', '1', '0001000'],
+      ['仮想県', '架空市', '朝日通一丁目', '1', '7', '0', '0', '35.2', '136.2', '0', '1', '0002001'],
+      ['仮想県', '架空市', '朝日通二丁目', '1', '7', '0', '0', '35.2', '136.3', '0', '1', '0002002'],
+      ['仮想県', '架空市', '大字緑ヶ丘', '1', '7', '0', '0', '35.3', '136.4', '0', '1', '0003000'],
+      ['仮想県', '架空郡テスト町', '大字本町', '1', '7', '0', '0', '35.4', '136.5', '0', '1', '0004000'],
+      ['仮想県', '見本政令市サンプル区', '駅前通', '1', '7', '0', '0', '35.5', '136.6', '0', '1', '0005000'],
     ];
     fs.writeFileSync(mlitCsvPath, mlitRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
 
     // 2. Fictitious ABR town master CSV
     const abrCsvPath = path.join(dir, 'abr_town.csv');
     const abrRows = [
-      ['city_name', 'ward_name', 'oaza_cho', 'chome', 'city_kana', 'ward_kana', 'oaza_cho_kana', 'chome_number'],
-      ['架空市', '', '中央町', '', 'カクウシ', '', 'チュウオウチョウ', ''],
-      ['架空市', '', '朝日通', '一丁目', 'カクウシ', '', 'アサヒドオリ', '1'],
-      ['架空市', '', '朝日通', '二丁目', 'カクウシ', '', 'アサヒドオリ', '2'],
-      ['架空市', '', '緑ヶ丘', '', 'カクウシ', '', 'ミドリガオカ', ''],
-      ['架空郡テスト町', '', '本町', '', 'テストチョウ', '', 'ホンマチ', ''],
-      ['見本政令市', 'サンプル区', '駅前通', '', 'ミホンセイレイシ', 'サンプルク', 'エキマエドオリ', ''],
+      ['全国地方公共団体コード', 'city_name', 'ward_name', 'oaza_cho', 'chome', 'city_kana', 'ward_kana', 'oaza_cho_kana', 'chome_number'],
+      ['242055', '架空市', '', '中央町', '', 'カクウシ', '', 'チュウオウチョウ', ''],
+      ['242055', '架空市', '', '朝日通', '一丁目', 'カクウシ', '', 'アサヒドオリ', '1'],
+      ['242055', '架空市', '', '朝日通', '二丁目', 'カクウシ', '', 'アサヒドオリ', '2'],
+      ['242055', '架空市', '', '緑ヶ丘', '', 'カクウシ', '', 'ミドリガオカ', ''],
+      ['242063', '架空郡テスト町', '', '本町', '', 'テストチョウ', '', 'ホンマチ', ''],
+      ['242071', '見本政令市', 'サンプル区', '駅前通', '', 'ミホンセイレイシ', 'サンプルク', 'エキマエドオリ', ''],
     ];
     fs.writeFileSync(abrCsvPath, abrRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
 
@@ -192,15 +192,15 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     assert.ok(!fs.existsSync(outCsv), 'Unfinished CSV must NOT be left on failure');
   });
 
-  it('Abnormal Case 2: Name collision triggers HARD STOP and does NOT leave unfinished CSV', () => {
-    const { dir, abrCsvPath } = setupFictitiousFixtures('abnormal_collision');
+  it('Abnormal Case 2a: Name collision by distinct raw names triggers HARD STOP and does NOT leave unfinished CSV', () => {
+    const { dir, abrCsvPath } = setupFictitiousFixtures('abnormal_collision_raw');
     const collidingMlitCsv = path.join(dir, 'colliding_mlit.csv');
     // Two distinct raw towns normalized to the same town name in same municipality:
     // '大字中央町' and '中央町' -> both become '中央町'
     const rows = [
-      ['都道府県名', '市区町村名', '大字町丁目名', '街区符号・地番', '座標系番号', 'X', 'Y', '35.0', '136.0'],
-      ['仮想県', '架空市', '大字中央町', '1', '7', '0', '0', '35.1', '136.1'],
-      ['仮想県', '架空市', '中央町', '2', '7', '0', '0', '35.1', '136.1'],
+      ['都道府県名', '市区町村名', '大字町丁目名', '街区符号・地番', '座標系番号', 'X座標', 'Y座標', '緯度', '経度', '住居表示フラグ', '代表点フラグ', '大字町丁目コード'],
+      ['仮想県', '架空市', '大字中央町', '1', '7', '0', '0', '35.1', '136.1', '0', '1', '0001000'],
+      ['仮想県', '架空市', '中央町', '2', '7', '0', '0', '35.1', '136.1', '0', '1', '0001000'],
     ];
     fs.writeFileSync(collidingMlitCsv, rows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
 
@@ -208,6 +208,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     const scriptPath = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
 
     let failed = false;
+    let errorOutput = '';
     try {
       execFileSync('python3', [
         scriptPath,
@@ -215,13 +216,50 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
         '--ref-csv', collidingMlitCsv,
         '--abr-file', abrCsvPath,
         '--out-csv', outCsv,
-      ], { stdio: 'pipe' });
+      ], { stdio: 'pipe', encoding: 'utf-8' });
     } catch (err) {
       failed = true;
+      errorOutput = (err.stderr || '') + (err.stdout || '');
     }
 
-    assert.ok(failed, 'Script must fail when town name collision occurs');
+    assert.ok(failed, 'Script must fail when town raw name collision occurs');
     assert.ok(!fs.existsSync(outCsv), 'Unfinished CSV must NOT be left on collision');
+    assert.ok(errorOutput.includes('Name collision detected'), 'Error output must mention Name collision');
+  });
+
+  it('Abnormal Case 2b [CRITICAL]: Name collision by distinct official codes with identical raw town name triggers HARD STOP', () => {
+    const { dir, abrCsvPath } = setupFictitiousFixtures('abnormal_collision_code');
+    const collidingCodeMlitCsv = path.join(dir, 'colliding_code_mlit.csv');
+    // Identical raw town name '中央町' in same municipality, but distinct official codes '0001000' and '0002000'
+    const rows = [
+      ['都道府県名', '市区町村名', '大字町丁目名', '街区符号・地番', '座標系番号', 'X座標', 'Y座標', '緯度', '経度', '住居表示フラグ', '代表点フラグ', '大字町丁目コード'],
+      ['仮想県', '架空市', '中央町', '1', '7', '0', '0', '35.1', '136.1', '0', '1', '0001000'],
+      ['仮想県', '架空市', '中央町', '2', '7', '0', '0', '35.1', '136.1', '0', '1', '0002000'],
+    ];
+    fs.writeFileSync(collidingCodeMlitCsv, rows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    const outCsv = path.join(dir, 'unfinished_collision_code.csv');
+    const scriptPath = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
+
+    let failed = false;
+    let errorOutput = '';
+    try {
+      execFileSync('python3', [
+        scriptPath,
+        '--phase1-only',
+        '--ref-csv', collidingCodeMlitCsv,
+        '--abr-file', abrCsvPath,
+        '--out-csv', outCsv,
+      ], { stdio: 'pipe', encoding: 'utf-8' });
+    } catch (err) {
+      failed = true;
+      errorOutput = (err.stderr || '') + (err.stdout || '');
+    }
+
+    assert.ok(failed, 'Script must fail when raw town names are identical but official codes are distinct');
+    assert.ok(!fs.existsSync(outCsv), 'Unfinished CSV must NOT be left on distinct official code collision');
+    assert.ok(errorOutput.includes('Name collision detected'), 'Error output must state Name collision detected');
+    assert.ok(errorOutput.includes('0001000') && errorOutput.includes('0002000'), 'Error output must include both conflicting official codes');
   });
 
   it('Abnormal Case 3: Undetermined electoral mapping triggers HARD STOP and does NOT leave unfinished CSV', () => {
@@ -256,8 +294,8 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     assert.ok(!fs.existsSync(outCsv), 'Unfinished CSV must NOT be left on undetermined district');
   });
 
-  it('Abnormal Case 4: No-overwrite strictly prevents overwriting existing output CSV', () => {
-    const { dir, mlitCsvPath, abrCsvPath } = setupFictitiousFixtures('abnormal_overwrite');
+  it('Abnormal Case 4a: build-district-master strictly prevents overwriting existing output CSV', () => {
+    const { dir, mlitCsvPath, abrCsvPath } = setupFictitiousFixtures('abnormal_overwrite_build');
     const existingCsv = path.join(dir, 'existing.csv');
     fs.writeFileSync(existingCsv, 'PRE_EXISTING_DATA\n', 'utf-8');
 
@@ -270,39 +308,45 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
         '--phase1-only',
         '--ref-csv', mlitCsvPath,
         '--abr-file', abrCsvPath,
-        '--out-csv', existingCsv, // No --allow-overwrite
+        '--out-csv', existingCsv,
       ], { stdio: 'pipe' });
     } catch (err) {
       failed = true;
     }
 
-    assert.ok(failed, 'Script must fail when target file exists and --allow-overwrite is not set');
+    assert.ok(failed, 'Script must fail unconditionally when target file exists');
     assert.equal(fs.readFileSync(existingCsv, 'utf-8'), 'PRE_EXISTING_DATA\n', 'Existing file must not be modified');
   });
 
+  it('Abnormal Case 4b: sort-address-master strictly prevents overwriting existing output CSV', () => {
+    const { dir, abrCsvPath } = setupFictitiousFixtures('abnormal_overwrite_sort');
+    const inputCsv = path.join(dir, 'input.csv');
+    fs.writeFileSync(inputCsv, 'rowId,city_name,town_name\n1,架空市,中央町\n', 'utf-8');
+    const existingSortedCsv = path.join(dir, 'existing_sorted.csv');
+    fs.writeFileSync(existingSortedCsv, 'PRE_EXISTING_SORTED\n', 'utf-8');
+
+    const scriptPath = path.join(REPO_ROOT, 'scripts', 'sort-address-master.py');
+
+    let failed = false;
+    try {
+      execFileSync('python3', [
+        scriptPath,
+        '--input', inputCsv,
+        '--output', existingSortedCsv,
+        '--abr-file', abrCsvPath,
+      ], { stdio: 'pipe' });
+    } catch (err) {
+      failed = true;
+    }
+
+    assert.ok(failed, 'Sorter must fail unconditionally when target output file exists');
+    assert.equal(fs.readFileSync(existingSortedCsv, 'utf-8'), 'PRE_EXISTING_SORTED\n', 'Existing sorted file must not be modified');
+  });
+
   it('Abnormal Case 5: QG-2 omission/mix-in triggers HARD STOP and does NOT leave unfinished CSV', () => {
-    const { dir, mlitCsvPath, abrCsvPath, mappingCsvPath } = setupFictitiousFixtures('abnormal_qg2');
+    const { dir, mlitCsvPath, abrCsvPath } = setupFictitiousFixtures('abnormal_qg2');
     const outCsv = path.join(dir, 'unfinished_qg2.csv');
 
-    // Create a scenario where QG-2 fails: e.g. mapping assigns to target district,
-    // but an artificial duplicate row or mismatch exists
-    const duplicateMlitCsv = path.join(dir, 'duplicate_mlit.csv');
-    const mlitRows = [
-      ['都道府県名', '市区町村名', '大字町丁目名', '街区符号・地番', '座標系番号', 'X', 'Y', '35.0', '136.0'],
-      ['仮想県', '架空市', '大字中央町', '1', '7', '0', '0', '35.1', '136.1'],
-      ['仮想県', '架空市', '朝日通一丁目', '1', '7', '0', '0', '35.2', '136.2'],
-    ];
-    fs.writeFileSync(duplicateMlitCsv, mlitRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
-
-    // Mapping expects 朝日通二丁目 as well in 仮想第1区, but it is missing from mother set
-    // In Rule 4.1: If electoral mapping has towns for target district that are missing from mother set, or vice versa
-    const scriptPath = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
-
-    // Let's verify build-district-master with mismatch between expected and output
-    // The script derives expected_set from mother set filtered by mapping.
-    // If mother set has a town that mapping assigns to target district, expected_set includes it.
-    // If we test with missing mapping: already covered in Case 3.
-    // What if electoral mapping assigns a town to multiple districts?
     const multiDistMappingCsv = path.join(dir, 'multi_dist_mapping.csv');
     const multiDistRows = [
       ['city_name', 'town_name', 'electoral_district'],
@@ -315,6 +359,8 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
       ['見本政令市サンプル区', '駅前通', '仮想第4区'],
     ];
     fs.writeFileSync(multiDistMappingCsv, multiDistRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    const scriptPath = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
 
     let failed = false;
     try {
@@ -333,5 +379,64 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
 
     assert.ok(failed, 'Script must fail when town is assigned to multiple districts');
     assert.ok(!fs.existsSync(outCsv), 'Unfinished CSV must NOT be left on multi-district assignment');
+  });
+
+  it('Abnormal Case 6: ABR master verification checks target municipality records presence', () => {
+    const { dir } = setupFictitiousFixtures('abr_verify');
+    const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
+
+    // Case 6a: ABR CSV missing target municipality records
+    const mismatchedAbrCsv = path.join(dir, 'mismatched_abr.csv');
+    const rows = [
+      ['全国地方公共団体コード', 'city_name', 'oaza_cho', 'city_kana', 'oaza_cho_kana'],
+      ['999999', '別自治体', '町域A', 'ベツジチタイ', 'チョウイキエー'],
+    ];
+    fs.writeFileSync(mismatchedAbrCsv, rows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    const refDir = path.join(dir, 'ref_cache');
+    let failedMismatched = false;
+    let errOutput = '';
+    try {
+      execFileSync('python3', [
+        fetchScript,
+        '--city-code', '24205',
+        '--ref-dir', refDir,
+        '--abr-file', mismatchedAbrCsv,
+      ], { stdio: 'pipe', encoding: 'utf-8' });
+    } catch (err) {
+      failedMismatched = true;
+      errOutput = (err.stderr || '') + (err.stdout || '');
+    }
+
+    assert.ok(failedMismatched, 'Fetch script must fail when ABR does not contain records for target municipality');
+    assert.ok(errOutput.includes('do NOT contain records for municipality code'), 'Error output must mention missing municipality records');
+  });
+
+  it('Abnormal Case 7: fetch-district-raw-data strictly prevents overwriting existing files', () => {
+    const { dir, abrCsvPath } = setupFictitiousFixtures('fetch_overwrite');
+    const refDir = path.join(dir, 'existing_ref_cache');
+    const cityDir = path.join(refDir, '24205');
+    fs.mkdirSync(cityDir, { recursive: true });
+    const existingRefCsv = path.join(cityDir, 'reference_points.csv');
+    fs.writeFileSync(existingRefCsv, 'PRE_EXISTING_REF_DATA\n', 'utf-8');
+
+    const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
+    let failed = false;
+    let errOutput = '';
+    try {
+      execFileSync('python3', [
+        fetchScript,
+        '--city-code', '24205',
+        '--ref-dir', refDir,
+        '--abr-file', abrCsvPath,
+      ], { stdio: 'pipe', encoding: 'utf-8' });
+    } catch (err) {
+      failed = true;
+      errOutput = (err.stderr || '') + (err.stdout || '');
+    }
+
+    assert.ok(failed, 'Fetch script must fail unconditionally when destination file already exists');
+    assert.ok(errOutput.includes('overwrite strictly prohibited'), 'Error output must state overwrite strictly prohibited');
+    assert.equal(fs.readFileSync(existingRefCsv, 'utf-8'), 'PRE_EXISTING_REF_DATA\n', 'Existing reference file must not be modified');
   });
 });
