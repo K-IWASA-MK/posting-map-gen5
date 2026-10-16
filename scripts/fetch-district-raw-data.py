@@ -41,6 +41,87 @@ def compute_sha256(filepath):
             h.update(chunk)
     return h.hexdigest()
 
+CREATION_DATE_KEYS = [
+    '作成年月日', '原資料作成日', 'データ作成日', '作成日', '基準年月日', '調査年月日',
+    'createDate', 'creationDate', 'dateCreated', 'Created Date', 'created_date'
+]
+EXCLUDED_DATE_KEYS = [
+    '更新年月日', '更新日', '改定年月日', '改定日', '提供年月日', '提供日',
+    '公開年月日', '公開日', '公表年月日', '公表日',
+    'updateDate', 'modifiedDate', 'releaseDate', 'publishDate'
+]
+
+DATE_VALUE_REGEX = re.compile(r'(令和\s*\d+\s*年\s*\d+\s*月\s*\d+\s*日|\d{4}年\s*\d+\s*月\s*\d+\s*日|\d{4}[-/]\d{1,2}[-/]\d{1,2})')
+
+def extract_creation_date_from_html(row_html):
+    """
+    Extract explicit source creation date and key from provider HTML table row.
+    Strictly distinguishes creation date from update/release dates.
+    Returns (matched_key, matched_date) or (None, None).
+    """
+    # 1. Pattern: sequential <th>/<td> cells (label followed by value)
+    raw_cells = [re.sub(r'<[^>]+>', ' ', m.group(1)).strip() 
+                 for m in re.finditer(r'<(?:th|td)[^>]*>(.*?)</(?:th|td)>', row_html, re.DOTALL | re.IGNORECASE)]
+    
+    for i in range(len(raw_cells) - 1):
+        label_clean = raw_cells[i]
+        val_clean = raw_cells[i + 1]
+        is_creation = any(k.lower() in label_clean.lower() for k in CREATION_DATE_KEYS)
+        is_excluded = any(k.lower() in label_clean.lower() for k in EXCLUDED_DATE_KEYS)
+        if is_creation and not is_excluded:
+            m_date = DATE_VALUE_REGEX.search(val_clean)
+            if m_date:
+                matched_key = next(k for k in CREATION_DATE_KEYS if k.lower() in label_clean.lower())
+                return (matched_key, m_date.group(1))
+
+    # 2. Pattern: Inside single cell (e.g. <td>作成年月日：令和6年3月29日</td>)
+    for cell in raw_cells:
+        for k in CREATION_DATE_KEYS:
+            is_excluded = any(ex.lower() in cell.lower() for ex in EXCLUDED_DATE_KEYS)
+            if not is_excluded and k.lower() in cell.lower():
+                m_date = DATE_VALUE_REGEX.search(cell)
+                if m_date:
+                    return (k, m_date.group(1))
+
+    # 3. Pattern: Key: Value across text
+    key_pattern = '|'.join(re.escape(k) for k in CREATION_DATE_KEYS)
+    kv_matches = re.finditer(rf'(?i)[\s>](?:{key_pattern})\s*[:：=]\s*([^\s<"\'&]+)', row_html)
+    for m in kv_matches:
+        full_match = m.group(0)
+        matched_text = m.group(1)
+        m_date = DATE_VALUE_REGEX.search(matched_text)
+        if m_date:
+            matched_key = next((k for k in CREATION_DATE_KEYS if re.search(re.escape(k), full_match, re.IGNORECASE)), '作成日')
+            return (matched_key, m_date.group(1))
+
+    return (None, None)
+
+def extract_creation_date_from_metadata(content):
+    """
+    Extract explicit source creation date and key from metadata files (XML, README, text).
+    Strictly distinguishes creation date from update/release dates.
+    Returns (matched_key, matched_date) or (None, None).
+    """
+    # 1. XML tag pattern: <作成年月日>...</作成年月日>, <createDate>...</createDate>
+    for key in CREATION_DATE_KEYS:
+        tag_match = re.search(rf'<{key}[^>]*>\s*([^<]+)\s*</{key}>', content, re.IGNORECASE)
+        if tag_match:
+            val = tag_match.group(1).strip()
+            m_date = DATE_VALUE_REGEX.search(val)
+            if m_date:
+                return (key, m_date.group(1))
+
+    # 2. Text label pattern: 作成年月日: 2024-03-29
+    for key in CREATION_DATE_KEYS:
+        txt_match = re.search(rf'(?i)(?:^|[\r\n\s]){key}\s*[:：=]\s*([^\r\n]+)', content)
+        if txt_match:
+            val = txt_match.group(1).strip()
+            m_date = DATE_VALUE_REGEX.search(val)
+            if m_date:
+                return (key, m_date.group(1))
+
+    return (None, None)
+
 def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports=None):
     """
     Fetch MLIT location reference data ZIP autonomously.
@@ -56,6 +137,10 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports
         sys.exit(f"FATAL HARD STOP: Destination reference CSV already exists (overwrite strictly prohibited): {normalized_csv}")
     if os.path.exists(provenance_path):
         sys.exit(f"FATAL HARD STOP: Destination provenance JSON already exists (overwrite strictly prohibited): {provenance_path}")
+    if os.path.exists(out_dir):
+        existing_zips = [f for f in os.listdir(out_dir) if f.endswith('.zip')]
+        if existing_zips:
+            sys.exit(f"FATAL HARD STOP: Destination archive ZIP already exists in {out_dir} (overwrite strictly prohibited): {existing_zips}")
 
     kind_label = "大字・町丁目" if data_kind == '1' else "街区"
     print(f"[MLIT Fetcher] Target Municipality Code: {city_code} (Pref: {pref_code}), Kind: {kind_label} (data_kind={data_kind})")
@@ -117,9 +202,8 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports
                         # Extract year like 令和6年度 or 2024年度 or R06
                         m_year = re.search(r'(令和\s*\d+\s*年度|\d{4}年度|R\d+)', row)
                         year_str = m_year.group(1) if m_year else None
-                        # Extract explicit source created date stated by provider (e.g. 令和6年3月29日, 2024-03-29)
-                        m_date = re.search(r'(令和\s*\d+\s*年\s*\d+\s*月\s*\d+\s*日|\d{4}年\s*\d+\s*月\s*\d+\s*日|\d{4}[-/]\d{1,2}[-/]\d{1,2})', row)
-                        date_str = m_date.group(1) if m_date else None
+                        # Extract explicit source created date and key stated by provider
+                        key_str, date_str = extract_creation_date_from_html(row)
 
                         # Strip html tags for provenance
                         clean_text = re.sub(r'<[^>]+>', ' ', row).strip()
@@ -127,6 +211,7 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports
                             'chn': cid,
                             'version': ver_str,
                             'year': year_str,
+                            'created_date_key': key_str,
                             'created_date': date_str,
                             'text': clean_text
                         })
@@ -152,6 +237,7 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports
             chn_val = chosen['chn']
             resolved_version = chosen['version']
             resolved_year = chosen['year']
+            resolved_created_date_key = chosen['created_date_key']
             resolved_created_date = chosen['created_date']
             raw_row_text = chosen['text']
 
@@ -247,14 +333,15 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports
             # Search inside extracted metadata files for explicit creation date
             for root, dirs, files in os.walk(temp_extract_dir):
                 for f in files:
-                    if f.endswith('.xml') or f.lower().startswith('readme'):
+                    if f.endswith('.xml') or f.lower().startswith('readme') or f.endswith('.txt'):
                         meta_fpath = os.path.join(root, f)
                         try:
                             with open(meta_fpath, 'r', encoding='utf-8', errors='ignore') as mf:
                                 content = mf.read()
-                                m_tag = re.search(r'(?:<作成日>|作成年月日\s*[:：]|作成日\s*[:：])\s*([^\s<]+)', content)
-                                if m_tag:
-                                    resolved_created_date = m_tag.group(1).strip()
+                                k, d = extract_creation_date_from_metadata(content)
+                                if k and d:
+                                    resolved_created_date_key = k
+                                    resolved_created_date = d
                                     break
                         except Exception:
                             pass
@@ -262,7 +349,7 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports
                     break
 
         if not resolved_created_date:
-            sys.exit(f"FATAL HARD STOP [DISTRICT_DATA_ACQUISITION_RULE.md §7.2]: Explicit source creation date not stated by provider for city {city_code}! (File timestamps cannot be used as substitute)")
+            sys.exit(f"FATAL HARD STOP [DISTRICT_DATA_ACQUISITION_RULE.md §7.2]: Explicit source creation date not stated by provider for city {city_code}! (Update/release dates cannot substitute creation date, and file timestamps cannot be used as substitute)")
 
         # Step 9: Prepare Provenance metadata
         provenance_data = {
@@ -271,6 +358,7 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports
             'data_kind_code': data_kind,
             'resolved_version': resolved_version,
             'resolved_year': resolved_year,
+            'source_creation_date_key': resolved_created_date_key,
             'source_creation_date': resolved_created_date,
             'download_url': full_zip_url,
             'download_timestamp_utc': datetime.now(timezone.utc).isoformat(),
@@ -308,9 +396,16 @@ def verify_abr_master(city_code, abr_files=None, abr_dir=None):
     Verifies:
     - File presence and read access
     - Official header inspection (supporting both official English and Japanese column names)
-    - Preserving leading zeroes in official codes as strings
+    - Mandatory presence of all 5 required columns:
+      1. lg_code / 全国地方公共団体コード
+      2. city_name / 市区町村名
+      3. city_kana / 市区町村名_カナ
+      4. oaza_cho / 町字名
+      5. oaza_cho_kana / 町字名_カナ
+    - Matching 5-digit prefix of 6-digit official lg_code (preserving leading zeroes)
+    - Strict validation of mandatory column values per record (no blind fallback on city name)
     - Total record count in file
-    - Presence of records matching specified municipality code or name
+    - Presence of records matching specified municipality code
     - SHA-256 hash calculation
     """
     abr_candidates = []
@@ -345,29 +440,59 @@ def verify_abr_master(city_code, abr_files=None, abr_dir=None):
 
             col_code_idx = -1
             col_city_idx = -1
+            col_city_kana_idx = -1
+            col_town_idx = -1
+            col_town_kana_idx = -1
+
             for idx, col in enumerate(header):
                 c = col.strip()
                 if c in ['全国地方公共団体コード', 'lg_code', '市区町村コード', 'city_code']:
                     col_code_idx = idx
                 elif c in ['市区町村名', 'city_name', 'city']:
                     col_city_idx = idx
+                elif c in ['市区町村名_カナ', 'city_kana']:
+                    col_city_kana_idx = idx
+                elif c in ['町字名', 'oaza_cho', 'town']:
+                    col_town_idx = idx
+                elif c in ['町字名_カナ', 'oaza_cho_kana', 'town_kana']:
+                    col_town_kana_idx = idx
+
+            missing_cols = []
+            if col_code_idx == -1: missing_cols.append("全国地方公共団体コード / lg_code")
+            if col_city_idx == -1: missing_cols.append("市区町村名 / city_name / city")
+            if col_city_kana_idx == -1: missing_cols.append("市区町村名_カナ / city_kana")
+            if col_town_idx == -1: missing_cols.append("町字名 / oaza_cho / town")
+            if col_town_kana_idx == -1: missing_cols.append("町字名_カナ / oaza_cho_kana / town_kana")
+
+            if missing_cols:
+                sys.exit(f"FATAL HARD STOP: Missing mandatory ABR column(s) ({', '.join(missing_cols)}) in header: {header}")
 
             total_file_records = 0
             matched_for_this_file = 0
+            max_idx = max(col_code_idx, col_city_idx, col_city_kana_idx, col_town_idx, col_town_kana_idx)
 
-            for row in reader:
+            for line_no, row in enumerate(reader, start=2):
                 total_file_records += 1
-                code_val = ""
-                if col_code_idx != -1 and len(row) > col_code_idx:
-                    # Keep leading zeroes as string!
-                    code_val = row[col_code_idx].strip()
+                if len(row) <= max_idx:
+                    sys.exit(f"FATAL HARD STOP: Malformed ABR CSV row at line {line_no} in {abr_path} (expected at least {max_idx + 1} columns): {row}")
 
-                if code_val:
-                    if code_val.startswith(city_code_5):
-                        matched_for_this_file += 1
-                else:
-                    if col_city_idx != -1 and len(row) > col_city_idx:
-                        matched_for_this_file += 1
+                # Keep leading zeroes as string!
+                code_val = row[col_code_idx].strip()
+                if not code_val:
+                    sys.exit(f"FATAL HARD STOP: Empty lg_code at line {line_no} in {abr_path}")
+
+                # Compare 5-digit prefix preserving leading zeroes (lg_code is 6 digits with check digit)
+                if len(code_val) >= 5 and code_val[:5] == city_code_5:
+                    c_name = row[col_city_idx].strip()
+                    c_kana = row[col_city_kana_idx].strip()
+                    t_name = row[col_town_idx].strip()
+                    t_kana = row[col_town_kana_idx].strip()
+                    if not c_name or not c_kana or not t_name or not t_kana:
+                        sys.exit(
+                            f"FATAL HARD STOP: Missing mandatory values at line {line_no} in {abr_path}: "
+                            f"code='{code_val}', city='{c_name}', city_kana='{c_kana}', town='{t_name}', town_kana='{t_kana}'"
+                        )
+                    matched_for_this_file += 1
 
             if total_file_records == 0:
                 sys.exit(f"FATAL HARD STOP: ABR file {abr_path} has 0 records!")

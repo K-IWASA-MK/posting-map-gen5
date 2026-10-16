@@ -87,24 +87,24 @@ def load_abr_readings_phase1(abr_paths):
         with open(path, 'r', encoding='utf-8-sig') as f:
             reader = csv.DictReader(f)
             for r in reader:
-                city = r.get("city_name") or r.get("city") or ""
-                ward = r.get("ward_name") or r.get("ward") or ""
-                oaza_cho = r.get("oaza_cho") or r.get("town") or ""
-                chome_name = r.get("chome") or ""
+                city = r.get("city_name") or r.get("city") or r.get("市区町村名") or ""
+                ward = r.get("ward_name") or r.get("ward") or r.get("区名") or ""
+                oaza_cho = r.get("oaza_cho") or r.get("town") or r.get("町字名") or ""
+                chome_name = r.get("chome") or r.get("丁目名") or ""
 
                 full_city_name = f"{city}{ward}".strip() if ward else city.strip()
                 if "郡" in full_city_name:
                     full_city_name = re.sub(r"^.+?郡", "", full_city_name)
 
-                city_kana = (r.get("city_kana") or "").strip()
-                ward_kana = (r.get("ward_kana") or "").strip()
+                city_kana = (r.get("city_kana") or r.get("市区町村名_カナ") or "").strip()
+                ward_kana = (r.get("ward_kana") or r.get("区名_カナ") or "").strip()
                 full_city_kana = f"{city_kana}{ward_kana}".strip()
 
                 if full_city_name and full_city_kana:
                     city_readings[full_city_name] = full_city_kana
 
-                oaza_cho_kana = (r.get("oaza_cho_kana") or "").strip()
-                chome_number = (r.get("chome_number") or "").strip()
+                oaza_cho_kana = (r.get("oaza_cho_kana") or r.get("town_kana") or r.get("町字名_カナ") or "").strip()
+                chome_number = (r.get("chome_number") or r.get("丁目数字") or "").strip()
 
                 if chome_name:
                     full_town_name = f"{oaza_cho}{chome_name}".strip()
@@ -194,33 +194,32 @@ def run_phase1_skeleton(args):
             elif '大字町丁目コード' in h_clean or '町丁目コード' in h_clean:
                 col_code_idx = idx
 
-        # Fallback to standard MLIT positions if header names not found
-        if col_city_idx == -1 and len(header) > 1:
-            col_city_idx = 1
-        if col_town_idx == -1 and len(header) > 2:
-            col_town_idx = 2
+        # Official code and municipality columns are MANDATORY. No blind fallback or silent continuation.
+        if col_city_idx == -1 or col_town_idx == -1 or col_code_idx == -1:
+            sys.exit(f"FATAL HARD STOP [Rule 4.3]: Mandatory official columns (市区町村名, 大字町丁目名, 大字町丁目コード/町丁目コード) not found in MLIT header: {header}")
 
-        if col_city_idx == -1 or col_town_idx == -1:
-            sys.exit(f"FATAL: Could not locate required columns (市区町村名, 大字町丁目名) in MLIT header: {header}")
-
+        max_idx = max(col_city_idx, col_town_idx, col_code_idx)
         for line_no, r in enumerate(reader, start=2):
-            if len(r) > max(col_city_idx, col_town_idx):
-                raw_city = r[col_city_idx].strip()
-                raw_town = r[col_town_idx].strip()
-                # Official code: preserve leading zeroes as string!
-                town_code = ""
-                if col_code_idx != -1 and len(r) > col_code_idx:
-                    town_code = r[col_code_idx].strip()
+            if len(r) <= max_idx:
+                sys.exit(f"FATAL HARD STOP [Rule 4.3]: Malformed CSV row at line {line_no} (expected at least {max_idx + 1} columns): {r}")
+            raw_city = r[col_city_idx].strip()
+            raw_town = r[col_town_idx].strip()
+            if not raw_city or not raw_town:
+                sys.exit(f"FATAL HARD STOP [Rule 4.3]: Missing or empty city or town at line {line_no}: city='{raw_city}', town='{raw_town}'")
+            town_code = r[col_code_idx].strip()
+            # Official code: preserve leading zeroes as string! Empty code is strictly prohibited.
+            if not town_code:
+                sys.exit(f"FATAL HARD STOP [Rule 4.3]: Missing or empty official code at line {line_no}: city='{raw_city}', town='{raw_town}'")
 
-                clean_city = normalize_city_name(raw_city)
-                clean_town = clean_oaza_prefix(raw_town)
-                mother_records.append({
-                    'raw_city': raw_city,
-                    'raw_town': raw_town,
-                    'town_code': town_code,
-                    'clean_city': clean_city,
-                    'clean_town': clean_town,
-                })
+            clean_city = normalize_city_name(raw_city)
+            clean_town = clean_oaza_prefix(raw_town)
+            mother_records.append({
+                'raw_city': raw_city,
+                'raw_town': raw_town,
+                'town_code': town_code,
+                'clean_city': clean_city,
+                'clean_town': clean_town,
+            })
 
     if not mother_records:
         sys.exit(f"FATAL: No records parsed from MLIT reference CSV {args.ref_csv}.")

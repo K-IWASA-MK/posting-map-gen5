@@ -22,8 +22,28 @@ const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..');
 const TEST_TMP_DIR = path.join(REPO_ROOT, 'scratch', 'test_universal_scripts');
 
+function cleanupPycache() {
+  const pycache = path.join(REPO_ROOT, 'scripts', '__pycache__');
+  if (fs.existsSync(pycache)) {
+    fs.rmSync(pycache, { recursive: true, force: true });
+  }
+}
+
+function runPython(args, options = {}) {
+  const mergedOptions = {
+    ...options,
+    env: {
+      ...process.env,
+      PYTHONDONTWRITEBYTECODE: '1',
+      ...(options.env || {})
+    }
+  };
+  return execFileSync('python3', ['-B', ...args], mergedOptions);
+}
+
 describe('Universal District Generation Scripts Gate (Phase 1)', () => {
   before(() => {
+    cleanupPycache();
     fs.mkdirSync(TEST_TMP_DIR, { recursive: true });
   });
 
@@ -31,6 +51,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     if (fs.existsSync(TEST_TMP_DIR)) {
       fs.rmSync(TEST_TMP_DIR, { recursive: true, force: true });
     }
+    cleanupPycache();
   });
 
   // -------------------------------------------------------------
@@ -102,7 +123,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
       '--out-csv', outCsv,
     ];
 
-    execFileSync('python3', [scriptPath, ...args], { encoding: 'utf-8' });
+    runPython( [scriptPath, ...args], { encoding: 'utf-8' });
 
     assert.ok(fs.existsSync(outCsv), 'Output CSV must exist after successful generation');
 
@@ -136,7 +157,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
 
     // Generate whole area (no electoral filter)
     const buildScript = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
-    execFileSync('python3', [
+    runPython( [
       buildScript,
       '--phase1-only',
       '--ref-csv', mlitCsvPath,
@@ -146,7 +167,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
 
     // Run sort-address-master.py
     const sortScript = path.join(REPO_ROOT, 'scripts', 'sort-address-master.py');
-    execFileSync('python3', [
+    runPython( [
       sortScript,
       '--input', phase1Csv,
       '--output', sortedCsv,
@@ -177,7 +198,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
 
     let failed = false;
     try {
-      execFileSync('python3', [
+      runPython( [
         scriptPath,
         '--phase1-only',
         '--ref-csv', mlitCsvPath,
@@ -210,7 +231,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     let failed = false;
     let errorOutput = '';
     try {
-      execFileSync('python3', [
+      runPython( [
         scriptPath,
         '--phase1-only',
         '--ref-csv', collidingMlitCsv,
@@ -244,7 +265,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     let failed = false;
     let errorOutput = '';
     try {
-      execFileSync('python3', [
+      runPython( [
         scriptPath,
         '--phase1-only',
         '--ref-csv', collidingCodeMlitCsv,
@@ -277,7 +298,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
 
     let failed = false;
     try {
-      execFileSync('python3', [
+      runPython( [
         scriptPath,
         '--phase1-only',
         '--ref-csv', mlitCsvPath,
@@ -303,7 +324,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
 
     let failed = false;
     try {
-      execFileSync('python3', [
+      runPython( [
         scriptPath,
         '--phase1-only',
         '--ref-csv', mlitCsvPath,
@@ -329,7 +350,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
 
     let failed = false;
     try {
-      execFileSync('python3', [
+      runPython( [
         scriptPath,
         '--input', inputCsv,
         '--output', existingSortedCsv,
@@ -364,7 +385,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
 
     let failed = false;
     try {
-      execFileSync('python3', [
+      runPython( [
         scriptPath,
         '--phase1-only',
         '--ref-csv', mlitCsvPath,
@@ -381,15 +402,15 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     assert.ok(!fs.existsSync(outCsv), 'Unfinished CSV must NOT be left on multi-district assignment');
   });
 
-  it('Abnormal Case 6: ABR master verification checks target municipality records presence', () => {
-    const { dir } = setupFictitiousFixtures('abr_verify');
+  it('Abnormal Case 6a: ABR master verification checks target municipality records presence', () => {
+    const { dir } = setupFictitiousFixtures('abr_verify_mismatch');
     const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
 
-    // Case 6a: ABR CSV missing target municipality records
+    // Case 6a: ABR CSV containing only other municipality
     const mismatchedAbrCsv = path.join(dir, 'mismatched_abr.csv');
     const rows = [
-      ['全国地方公共団体コード', 'city_name', 'oaza_cho', 'city_kana', 'oaza_cho_kana'],
-      ['999999', '別自治体', '町域A', 'ベツジチタイ', 'チョウイキエー'],
+      ['全国地方公共団体コード', '市区町村名', '市区町村名_カナ', '町字名', '町字名_カナ'],
+      ['999999', '別自治体', 'ベツジチタイ', '町域A', 'チョウイキエー'],
     ];
     fs.writeFileSync(mismatchedAbrCsv, rows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
 
@@ -397,7 +418,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     let failedMismatched = false;
     let errOutput = '';
     try {
-      execFileSync('python3', [
+      runPython( [
         fetchScript,
         '--city-code', '24205',
         '--ref-dir', refDir,
@@ -412,6 +433,69 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     assert.ok(errOutput.includes('do NOT contain records for municipality code'), 'Error output must mention missing municipality records');
   });
 
+  it('Abnormal Case 6b [CRITICAL]: ABR verification does NOT slip through on empty code with city name present', () => {
+    const { dir } = setupFictitiousFixtures('abr_verify_slipthrough');
+    const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
+
+    // Case 6b: Code is empty, but city name is present.
+    // The previous implementation mistakenly slipped through this and counted as matched.
+    const emptyCodeAbrCsv = path.join(dir, 'empty_code_abr.csv');
+    const rows = [
+      ['全国地方公共団体コード', '市区町村名', '市区町村名_カナ', '町字名', '町字名_カナ'],
+      ['', '架空市', 'カクウシ', '中央町', 'チュウオウチョウ'],
+    ];
+    fs.writeFileSync(emptyCodeAbrCsv, rows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    const refDir = path.join(dir, 'ref_cache');
+    let failed = false;
+    let errOutput = '';
+    try {
+      runPython( [
+        fetchScript,
+        '--city-code', '24205',
+        '--ref-dir', refDir,
+        '--abr-file', emptyCodeAbrCsv,
+      ], { stdio: 'pipe', encoding: 'utf-8' });
+    } catch (err) {
+      failed = true;
+      errOutput = (err.stderr || '') + (err.stdout || '');
+    }
+
+    assert.ok(failed, 'Fetch script must fail when lg_code is empty (cannot slip through on city name)');
+    assert.ok(errOutput.includes('Empty lg_code') || errOutput.includes('do NOT contain records for municipality code'), 'Error output must reject empty lg_code');
+  });
+
+  it('Abnormal Case 6c: ABR verification triggers HARD STOP when mandatory columns (e.g. city_kana) are missing', () => {
+    const { dir } = setupFictitiousFixtures('abr_verify_missing_col');
+    const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
+
+    // Missing 'city_kana' / '市区町村名_カナ'
+    const missingColAbrCsv = path.join(dir, 'missing_col_abr.csv');
+    const rows = [
+      ['lg_code', 'city_name', 'oaza_cho', 'oaza_cho_kana'],
+      ['242055', '架空市', '中央町', 'チュウオウチョウ'],
+    ];
+    fs.writeFileSync(missingColAbrCsv, rows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    const refDir = path.join(dir, 'ref_cache');
+    let failed = false;
+    let errOutput = '';
+    try {
+      runPython( [
+        fetchScript,
+        '--city-code', '24205',
+        '--ref-dir', refDir,
+        '--abr-file', missingColAbrCsv,
+      ], { stdio: 'pipe', encoding: 'utf-8' });
+    } catch (err) {
+      failed = true;
+      errOutput = (err.stderr || '') + (err.stdout || '');
+    }
+
+    assert.ok(failed, 'Fetch script must fail when mandatory ABR column (city_kana) is missing from header');
+    assert.ok(errOutput.includes('Missing mandatory ABR column'), 'Error output must mention missing mandatory column');
+  });
+
   it('Abnormal Case 7: fetch-district-raw-data strictly prevents overwriting existing files', () => {
     const { dir, abrCsvPath } = setupFictitiousFixtures('fetch_overwrite');
     const refDir = path.join(dir, 'existing_ref_cache');
@@ -424,7 +508,7 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     let failed = false;
     let errOutput = '';
     try {
-      execFileSync('python3', [
+      runPython( [
         fetchScript,
         '--city-code', '24205',
         '--ref-dir', refDir,
@@ -439,4 +523,153 @@ describe('Universal District Generation Scripts Gate (Phase 1)', () => {
     assert.ok(errOutput.includes('overwrite strictly prohibited'), 'Error output must state overwrite strictly prohibited');
     assert.equal(fs.readFileSync(existingRefCsv, 'utf-8'), 'PRE_EXISTING_REF_DATA\n', 'Existing reference file must not be modified');
   });
+
+  it('Abnormal Case 8a [CRITICAL]: build-district-master stops when MLIT code column is missing', () => {
+    const { dir, abrCsvPath } = setupFictitiousFixtures('abnormal_mlit_missing_col');
+    const badMlitCsv = path.join(dir, 'no_code_col_mlit.csv');
+    // Missing '大字町丁目コード' column entirely
+    const rows = [
+      ['都道府県名', '市区町村名', '大字町丁目名', '街区符号・地番'],
+      ['仮想県', '架空市', '中央町', '1'],
+    ];
+    fs.writeFileSync(badMlitCsv, rows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    const outCsv = path.join(dir, 'unfinished_no_col.csv');
+    const scriptPath = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
+
+    let failed = false;
+    let errOutput = '';
+    try {
+      runPython( [
+        scriptPath,
+        '--phase1-only',
+        '--ref-csv', badMlitCsv,
+        '--abr-file', abrCsvPath,
+        '--out-csv', outCsv,
+      ], { stdio: 'pipe', encoding: 'utf-8' });
+    } catch (err) {
+      failed = true;
+      errOutput = (err.stderr || '') + (err.stdout || '');
+    }
+
+    assert.ok(failed, 'Script must fail when official code column is missing');
+    assert.ok(!fs.existsSync(outCsv), 'Unfinished CSV must NOT be left');
+    assert.ok(errOutput.includes('Mandatory official columns'), 'Error output must mention missing mandatory column');
+  });
+
+  it('Abnormal Case 8b [CRITICAL]: build-district-master stops when row official code is empty', () => {
+    const { dir, abrCsvPath } = setupFictitiousFixtures('abnormal_mlit_empty_code');
+    const badMlitCsv = path.join(dir, 'empty_code_row_mlit.csv');
+    // Row 2 has empty code ''
+    const rows = [
+      ['都道府県名', '市区町村名', '大字町丁目名', '大字町丁目コード'],
+      ['仮想県', '架空市', '中央町', '0001000'],
+      ['仮想県', '架空市', '緑町', '   '],
+    ];
+    fs.writeFileSync(badMlitCsv, rows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    const outCsv = path.join(dir, 'unfinished_empty_code.csv');
+    const scriptPath = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
+
+    let failed = false;
+    let errOutput = '';
+    try {
+      runPython( [
+        scriptPath,
+        '--phase1-only',
+        '--ref-csv', badMlitCsv,
+        '--abr-file', abrCsvPath,
+        '--out-csv', outCsv,
+      ], { stdio: 'pipe', encoding: 'utf-8' });
+    } catch (err) {
+      failed = true;
+      errOutput = (err.stderr || '') + (err.stdout || '');
+    }
+
+    assert.ok(failed, 'Script must fail when a row has empty official code');
+    assert.ok(!fs.existsSync(outCsv), 'Unfinished CSV must NOT be left');
+    assert.ok(errOutput.includes('Missing or empty official code'), 'Error output must mention empty official code');
+  });
+
+  it('Normal Case 3: ABR verification succeeds with official 6-digit lg_code matched against 5-digit city code (Japanese & English headers)', () => {
+    const { dir } = setupFictitiousFixtures('abr_verify_official_normal');
+    const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
+
+    // 1. Digital Agency standard English header with 6-digit lg_code (5 digits + check digit)
+    const abrEnCsv = path.join(dir, 'abr_official_en.csv');
+    const enRows = [
+      ['lg_code', 'city', 'city_kana', 'oaza_cho', 'oaza_cho_kana'],
+      ['242055', '架空市', 'カクウシ', '中央町', 'チュウオウチョウ'],
+      ['242055', '架空市', 'カクウシ', '朝日通一丁目', 'アサヒドオリイッテョウメ'],
+      ['242063', 'テスト町', 'テストチョウ', '本町', 'ホンマチ'],
+    ];
+    fs.writeFileSync(abrEnCsv, enRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    // 2. Digital Agency standard Japanese header with 6-digit lg_code
+    const abrJaCsv = path.join(dir, 'abr_official_ja.csv');
+    const jaRows = [
+      ['全国地方公共団体コード', '市区町村名', '市区町村名_カナ', '町字名', '町字名_カナ'],
+      ['242055', '架空市', 'カクウシ', '中央町', 'チュウオウチョウ'],
+      ['242055', '架空市', 'カクウシ', '朝日通一丁目', 'アサヒドオリイッテョウメ'],
+    ];
+    fs.writeFileSync(abrJaCsv, jaRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    // Verify python helper executes verify_abr_master successfully for both files
+    const verifyScript = `
+import sys
+from importlib.machinery import SourceFileLoader
+fetch_mod = SourceFileLoader('fetch_raw', '${fetchScript}').load_module()
+
+# Test EN
+rep_en = fetch_mod.verify_abr_master('24205', abr_files=['${abrEnCsv}'])
+assert len(rep_en) == 1
+assert rep_en[0]['matched_municipality_records'] == 2, f"Expected 2 matches, got {rep_en[0]['matched_municipality_records']}"
+
+# Test JA
+rep_ja = fetch_mod.verify_abr_master('24205', abr_files=['${abrJaCsv}'])
+assert len(rep_ja) == 1
+assert rep_ja[0]['matched_municipality_records'] == 2, f"Expected 2 matches, got {rep_ja[0]['matched_municipality_records']}"
+
+print("ABR_OFFICIAL_NORMAL_VERIFIED_SUCCESSFULLY")
+`;
+    const res = runPython( ['-c', verifyScript], { encoding: 'utf-8' });
+    assert.ok(res.includes('ABR_OFFICIAL_NORMAL_VERIFIED_SUCCESSFULLY'), 'Both English and Japanese official ABR headers must succeed');
+  });
+
+  it('Creation Date Verification: Distinguishes creation date from update/release dates, and records key + value in provenance', () => {
+    const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
+
+    const testScript = `
+import sys
+from importlib.machinery import SourceFileLoader
+fetch_mod = SourceFileLoader('fetch_raw', '${fetchScript}').load_module()
+
+# 1. HTML row with explicit creation date
+html_valid = '<tr><td>大字・町丁目</td><td>作成年月日</td><td>令和6年3月29日</td><td><input name="chn" value="123"></td></tr>'
+k, d = fetch_mod.extract_creation_date_from_html(html_valid)
+assert k == '作成年月日'
+assert d == '令和6年3月29日'
+
+# 2. HTML row with only update/release date (must NOT be treated as creation date)
+html_update_only = '<tr><td>大字・町丁目</td><td>更新年月日: 2024-10-01</td><td>公表日: 2024-10-15</td><td><input name="chn" value="124"></td></tr>'
+k2, d2 = fetch_mod.extract_creation_date_from_html(html_update_only)
+assert k2 is None and d2 is None, f"Update date must NOT be extracted as creation date: {k2}, {d2}"
+
+# 3. Metadata XML with official createDate tag
+xml_valid = '<metadata><createDate>2024-03-29</createDate><updateDate>2024-10-01</updateDate></metadata>'
+k3, d3 = fetch_mod.extract_creation_date_from_metadata(xml_valid)
+assert k3 == 'createDate'
+assert d3 == '2024-03-29'
+
+# 4. Metadata with only updateDate
+xml_update_only = '<metadata><updateDate>2024-10-01</updateDate><publishDate>2024-10-15</publishDate></metadata>'
+k4, d4 = fetch_mod.extract_creation_date_from_metadata(xml_update_only)
+assert k4 is None and d4 is None, f"Update date in XML must NOT be extracted as creation date: {k4}, {d4}"
+
+print("CREATION_DATE_DISCRIMINATION_VERIFIED_SUCCESSFULLY")
+`;
+    const res = runPython( ['-c', testScript], { encoding: 'utf-8' });
+    assert.ok(res.includes('CREATION_DATE_DISCRIMINATION_VERIFIED_SUCCESSFULLY'), 'Creation date must be strictly distinguished from update dates');
+  });
 });
+
