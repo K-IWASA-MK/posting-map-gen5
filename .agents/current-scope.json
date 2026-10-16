@@ -1,10 +1,9 @@
 {
-  "mission": "Phase 1 Scripts Defect Rectification & Governance Hardening",
+  "mission": "Phase 1 Scripts Defect Rectification & Governance Hardening (Rectification of Unfulfilled Conditions)",
   "files": [
     ".agents/current-scope.json",
     "scripts/build-district-master.py",
     "scripts/fetch-district-raw-data.py",
-    "scripts/sort-address-master.py",
     "tests/test_district_scripts_universal.mjs"
   ]
 }
