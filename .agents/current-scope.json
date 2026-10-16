@@ -1,5 +1,5 @@
 {
-  "mission": "Phase 1 Data Generation Scripts Universalization & Governance Alignment",
+  "mission": "Phase 1 Scripts Defect Rectification & Governance Hardening",
   "files": [
     ".agents/current-scope.json",
     "scripts/build-district-master.py",
