@@ -1,16 +1,13 @@
 {
-  "mission": "Stage 0 Entrance Gate Mechanical Enforcement",
+  "mission": "Phase 1 Area Skeleton Source & Electoral Boundary Rule（全地区共通：Phase 1 の city_name/town_name 正本を国土交通省 位置参照情報「大字・町丁目レベル」最新版に固定し、その後に公式区割りを当てはめる手順の規程化。市町村内で区割りが分かれる稀なケース（例: MIE-03 の四日市市）も含む）",
   "files": [
     ".agents/current-scope.json",
     ".agents/os-registry.json",
-    ".agents/rules/verification-gates.md",
-    ".agents/workflows/development/workflow.md",
-    "AGENTS.md",
-    "docs/ai-foundation.md",
-    "package.json",
-    "scripts/check-auditor-gate.mjs",
-    "scripts/check-entrance-gate.mjs",
-    "scripts/check-scope.mjs",
-    "tests/test_auditor_gate.mjs"
+    ".agents/rules/district-data-transition-rule.md",
+    ".agents/skills/district-data-provisioning/SKILL.md",
+    ".agents/skills/official-data-audit/SKILL.md",
+    "docs/architecture/ADDRESS_EXTRACTION_RULE.md",
+    "docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md",
+    "docs/operations/DISTRICT_PROVISIONING_RUNBOOK.md"
   ]
 }
