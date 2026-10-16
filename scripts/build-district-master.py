@@ -33,10 +33,12 @@ def parse_args():
     # Core CLI arguments
     parser.add_argument('--out-csv', required=True, help='Output CSV path (Required; no default)')
     parser.add_argument('--phase1-only', action='store_true', help='Generate 3-column Area Skeleton (rowId,city_name,town_name) independently')
+    parser.add_argument('--provenance-out', default=None, help='Output path for skeleton provenance JSON (optional; defaults to directory of out-csv)')
 
     # Phase 1 inputs
     parser.add_argument('--ref-csv', required=True, help='Path to MLIT reference_points.csv (大字・町丁目レベル)')
     parser.add_argument('--abr-file', action='append', help='Path to Digital Agency ABR town master CSV (Required for Phase 1)')
+    parser.add_argument('--reading-reconciliation', default=None, help='Path to external official reading reconciliation JSON (optional)')
     parser.add_argument('--city-name', default='', help='Target municipality name for display override (optional)')
     parser.add_argument('--electoral-mapping', default=None, help='Path to electoral mapping CSV (city_name,town_name,electoral_district)')
     parser.add_argument('--target-district', default=None, help='Target electoral district name when electoral-mapping is provided')
@@ -69,9 +71,40 @@ def clean_oaza_prefix(name):
         return clean_name[2:]
     return clean_name
 
+def load_reading_reconciliations(json_path):
+    """
+    Load external official reading reconciliation JSON (Rule 4.4).
+    Key: "<city_code>:<town_code>"
+    Required fields per entry: reconciled_reading
+    """
+    if not json_path:
+        return {}
+    if not os.path.exists(json_path):
+        sys.exit(f"FATAL HARD STOP: Reading reconciliation file not found: {json_path}")
+    print(f"[Phase 1 Reconciliations] Loading external official reconciliations from {json_path}...")
+    with open(json_path, 'r', encoding='utf-8') as f:
+        try:
+            data = json.load(f)
+        except Exception as e:
+            sys.exit(f"FATAL HARD STOP: Malformed reading reconciliation JSON ({json_path}): {e}")
+
+    if not isinstance(data, dict):
+        sys.exit(f"FATAL HARD STOP: Reading reconciliation JSON must be an object keyed by '<city_code>:<town_code>': {json_path}")
+
+    for k, v in data.items():
+        if not isinstance(v, dict) or not v.get('reconciled_reading'):
+            sys.exit(f"FATAL HARD STOP: Missing 'reconciled_reading' for reconciliation key '{k}' in {json_path}")
+
+    print(f"[Phase 1 Reconciliations] Loaded {len(data)} reconciliation entries.")
+    return data
+
 def load_abr_readings_phase1(abr_paths):
     """
-    Load official readings from Digital Agency ABR CSVs for Phase 1 sorting.
+    Load official readings from Digital Agency ABR CSVs for Phase 1 sorting adhering to official ABR hierarchy.
+    machiaza_type:
+      1 (大字): oaza_cho + oaza_cho_kana
+      2 (丁目): oaza_cho + chome / oaza_cho_kana + chome_number
+      3 (小字): oaza_cho + koaza (or koaza if oaza_cho empty) / oaza_cho_kana + koaza_kana
     """
     if not abr_paths:
         sys.exit("FATAL: --abr-file is strictly required for Phase 1 Area Skeleton generation.")
@@ -89,8 +122,13 @@ def load_abr_readings_phase1(abr_paths):
             for r in reader:
                 city = r.get("city_name") or r.get("city") or r.get("市区町村名") or ""
                 ward = r.get("ward_name") or r.get("ward") or r.get("区名") or ""
-                oaza_cho = r.get("oaza_cho") or r.get("town") or r.get("町字名") or ""
-                chome_name = r.get("chome") or r.get("丁目名") or ""
+                m_type = (r.get("machiaza_type") or r.get("町字区分コード") or "1").strip()
+                oaza_cho = (r.get("oaza_cho") or r.get("town") or r.get("町字名") or "").strip()
+                oaza_cho_kana = (r.get("oaza_cho_kana") or r.get("town_kana") or r.get("町字名_カナ") or "").strip()
+                chome_name = (r.get("chome") or r.get("丁目名") or "").strip()
+                chome_number = (r.get("chome_number") or r.get("丁目数字") or "").strip()
+                koaza = (r.get("koaza") or r.get("小字名") or "").strip()
+                koaza_kana = (r.get("koaza_kana") or r.get("小字名_カナ") or "").strip()
 
                 full_city_name = f"{city}{ward}".strip() if ward else city.strip()
                 if "郡" in full_city_name:
@@ -103,24 +141,51 @@ def load_abr_readings_phase1(abr_paths):
                 if full_city_name and full_city_kana:
                     city_readings[full_city_name] = full_city_kana
 
-                oaza_cho_kana = (r.get("oaza_cho_kana") or r.get("town_kana") or r.get("町字名_カナ") or "").strip()
-                chome_number = (r.get("chome_number") or r.get("丁目数字") or "").strip()
+                # Construct town name and reading according to official Digital Agency ABR specification
+                if m_type == "2":  # 丁目
+                    full_town = f"{oaza_cho}{chome_name}".strip()
+                    base_town = oaza_cho
+                    base_kana = oaza_cho_kana
+                    num = chome_number
+                elif m_type == "3":  # 小字
+                    if oaza_cho:
+                        full_town = f"{oaza_cho}{koaza}".strip()
+                        base_town = full_town
+                        base_kana = f"{oaza_cho_kana}{koaza_kana}".strip()
+                    else:
+                        full_town = koaza.strip()
+                        base_town = full_town
+                        base_kana = koaza_kana.strip()
+                    num = "00"
+                else:  # 1 (大字) or default
+                    full_town = oaza_cho.strip()
+                    base_town = full_town
+                    base_kana = oaza_cho_kana.strip()
+                    num = "00"
 
-                if chome_name:
-                    full_town_name = f"{oaza_cho}{chome_name}".strip()
-                else:
-                    full_town_name = oaza_cho.strip()
+                if not full_city_name or not full_town:
+                    continue
 
-                clean_town_name = re.sub(r"^大字", "", full_town_name)
+                clean_full = re.sub(r"^大字", "", full_town)
+                clean_base = re.sub(r"^大字", "", base_town)
 
-                if full_city_name and clean_town_name and oaza_cho_kana:
-                    key = (full_city_name, clean_town_name)
-                    town_readings[key] = {
-                        "oaza_cho_kana": oaza_cho_kana,
-                        "chome_number": chome_number
-                    }
+                entry = {
+                    "base_kana": base_kana,
+                    "chome_number": num,
+                    "full_town": full_town,
+                    "base_town": base_town
+                }
 
-    print(f"[Phase 1 ABR] Loaded {len(city_readings)} cities and {len(town_readings)} town reading entries.")
+                # Register mappings preserving raw, clean, and explicit prefixes
+                town_readings[(full_city_name, full_town)] = entry
+                town_readings[(full_city_name, clean_full)] = entry
+                town_readings[(full_city_name, f"大字{clean_full}")] = entry
+                if base_town != full_town:
+                    town_readings[(full_city_name, base_town)] = entry
+                    town_readings[(full_city_name, clean_base)] = entry
+                    town_readings[(full_city_name, f"大字{clean_base}")] = entry
+
+    print(f"[Phase 1 ABR] Loaded {len(city_readings)} cities and {len(town_readings)} town reading keys.")
     return city_readings, town_readings
 
 def load_electoral_mapping(mapping_path, target_district):
@@ -184,6 +249,9 @@ def run_phase1_skeleton(args):
         col_city_idx = -1
         col_town_idx = -1
         col_code_idx = -1
+        col_city_code_idx = -1
+        col_lat_idx = -1
+        col_lon_idx = -1
 
         for idx, h in enumerate(header):
             h_clean = h.strip()
@@ -193,6 +261,12 @@ def run_phase1_skeleton(args):
                 col_town_idx = idx
             elif '大字町丁目コード' in h_clean or '町丁目コード' in h_clean:
                 col_code_idx = idx
+            elif '市区町村コード' in h_clean:
+                col_city_code_idx = idx
+            elif '緯度' in h_clean:
+                col_lat_idx = idx
+            elif '経度' in h_clean:
+                col_lon_idx = idx
 
         # Official code and municipality columns are MANDATORY. No blind fallback or silent continuation.
         if col_city_idx == -1 or col_town_idx == -1 or col_code_idx == -1:
@@ -211,40 +285,77 @@ def run_phase1_skeleton(args):
             if not town_code:
                 sys.exit(f"FATAL HARD STOP [Rule 4.3]: Missing or empty official code at line {line_no}: city='{raw_city}', town='{raw_town}'")
 
+            city_code = r[col_city_code_idx].strip() if (col_city_code_idx != -1 and len(r) > col_city_code_idx) else args.city_code
+            lat = r[col_lat_idx].strip() if (col_lat_idx != -1 and len(r) > col_lat_idx) else ""
+            lon = r[col_lon_idx].strip() if (col_lon_idx != -1 and len(r) > col_lon_idx) else ""
+
             clean_city = normalize_city_name(raw_city)
             clean_town = clean_oaza_prefix(raw_town)
             mother_records.append({
+                'city_code': city_code,
                 'raw_city': raw_city,
                 'raw_town': raw_town,
                 'town_code': town_code,
                 'clean_city': clean_city,
                 'clean_town': clean_town,
+                'lat': lat,
+                'lon': lon
             })
 
     if not mother_records:
         sys.exit(f"FATAL: No records parsed from MLIT reference CSV {args.ref_csv}.")
 
-    # Group mother records by normalized (clean_city, clean_town)
-    # Track distinct entities: (raw_town, town_code)
+    # Deduplicate point records by distinct entity (city_code, clean_city, raw_town, town_code)
+    distinct_entities = {}
+    for rec in mother_records:
+        entity_key = (rec['city_code'], rec['clean_city'], rec['raw_town'], rec['town_code'])
+        if entity_key not in distinct_entities:
+            distinct_entities[entity_key] = rec
+
+    entity_list = list(distinct_entities.values())
+
+    # Plan A: Detect name collision upon stripping '大字' across distinct town codes
+    # Group entities by (clean_city, clean_town)
+    tentative_groups = defaultdict(list)
+    for ent in entity_list:
+        tentative_groups[(ent['clean_city'], ent['clean_town'])].append(ent)
+
+    # For groups containing multiple entities:
+    # 1. Distinct codes and distinct raw names: Plan A applies -> retain raw names to avoid collision
+    # 2. Distinct raw names with same code: collision (auto-merging distinct raw names prohibited) -> HARD STOP
+    for group_key, ents in tentative_groups.items():
+        distinct_codes = set(e['town_code'] for e in ents)
+        distinct_raws = set(e['raw_town'] for e in ents)
+        if len(distinct_codes) > 1 and len(distinct_raws) > 1:
+            print(f"[Plan A Collision Avoidance] Collision detected for {group_key} ({len(distinct_codes)} distinct codes). Retaining raw names:")
+            for e in ents:
+                print(f"  -> Retained raw name: '{e['raw_town']}' (code: '{e['town_code']}')")
+                e['clean_town'] = e['raw_town']
+        elif len(distinct_raws) > 1 and len(distinct_codes) == 1:
+            details = [f"(raw='{e['raw_town']}', code='{e['town_code']}')" for e in ents]
+            sys.exit(
+                f"FATAL HARD STOP [Rule 4.3]: Name collision detected! Distinct raw town names with same official code for {group_key} (auto-merging prohibited): {', '.join(details)}"
+            )
+
+    # Final grouping check: ensure no indistinguishable name collisions remain
     unique_towns_map = {}
     collision_tracker = defaultdict(set)
-    for rec in mother_records:
-        key = (rec['clean_city'], rec['clean_town'])
-        unique_towns_map[key] = rec
-        collision_tracker[key].add((rec['raw_town'], rec['town_code']))
+    for ent in entity_list:
+        key = (ent['clean_city'], ent['clean_town'])
+        unique_towns_map[key] = ent
+        collision_tracker[key].add((ent['raw_town'], ent['town_code']))
 
-    # Rule 4.3: Name collision check across distinct entities
     for key, entity_set in collision_tracker.items():
-        if len(entity_set) > 1:
-            # Different raw names or different official codes normalized to the same town!
+        distinct_codes = set(code for _, code in entity_set)
+        if len(distinct_codes) > 1:
             details = [f"(raw='{rt}', code='{cd}')" for rt, cd in sorted(entity_set)]
             sys.exit(
-                f"FATAL HARD STOP [Rule 4.3]: Name collision detected for {key}! "
-                f"Multiple distinct entities normalized to same town name (auto-merging prohibited): {', '.join(details)}"
+                f"FATAL HARD STOP [Rule 4.3]: Name collision detected! Indistinguishable name collision detected for {key} even after Plan A raw retention! "
+                f"Multiple distinct codes for same town name (auto-merging prohibited): {', '.join(details)}"
             )
 
     total_mother_count = len(unique_towns_map)
-    print(f"[Phase 1 Step 1] Loaded {len(mother_records)} points. Unique mother set town count: {total_mother_count}")
+    print(f"[Phase 1 Step 1] Loaded {len(mother_records)} points ({len(entity_list)} unique entities). Unique mother set town count: {total_mother_count}")
 
     # 2. Electoral Boundary Application (Rule 4.1)
     electoral_map = load_electoral_mapping(args.electoral_mapping, args.target_district)
@@ -275,13 +386,17 @@ def run_phase1_skeleton(args):
         target_towns = list(unique_towns_map.values())
         expected_set = set(unique_towns_map.keys())
 
-    # 3. Load ABR readings and resolve sort keys (Rule 4.4)
-    print("[Phase 1 Step 3] Resolving official readings via Digital Agency ABR...")
+    # 3. Load ABR readings and external reconciliations (Rule 4.4)
+    print("[Phase 1 Step 3] Resolving official readings via Digital Agency ABR and external reconciliations...")
     city_readings, town_readings = load_abr_readings_phase1(args.abr_file)
+    reconciliations = load_reading_reconciliations(args.reading_reconciliation)
 
     def resolve_sort_key(rec):
         cname = rec['clean_city']
         tname = rec['clean_town']
+        raw_name = rec['raw_town']
+        city_code = rec['city_code']
+        town_code = rec['town_code']
 
         city_kana = city_readings.get(cname)
         if not city_kana:
@@ -290,9 +405,20 @@ def run_phase1_skeleton(args):
                     city_kana = ck
                     break
         if not city_kana:
-            raise ValueError(f"FATAL HARD STOP: Official ABR reading missing for city '{cname}'")
+            sys.exit(f"FATAL HARD STOP [Rule 4.4]: Official ABR reading missing for city '{cname}'")
 
-        town_entry = town_readings.get((cname, tname))
+        # 1. Check external official reconciliations by composite key "<city_code>:<town_code>"
+        comp_key = f"{city_code}:{town_code}"
+        reconciled = reconciliations.get(comp_key)
+        if reconciled and reconciled.get('reconciled_reading'):
+            town_kana = reconciled['reconciled_reading'].strip()
+            chome_part = ""
+            chome_match = re.search(r"([一二三四五六七八九十]+丁目)$", tname)
+            chome_num = CHOME_NUM_MAP.get(chome_match.group(1), "00") if chome_match else "00"
+            return (city_kana, town_kana, chome_num, tname, town_kana)
+
+        # 2. Check ABR readings by exact clean_town or raw_town
+        town_entry = town_readings.get((cname, tname)) or town_readings.get((cname, raw_name))
 
         chome_part = ""
         chome_match = re.search(r"([一二三四五六七八九十]+丁目)$", tname)
@@ -302,14 +428,16 @@ def run_phase1_skeleton(args):
             base_name = tname[:-len(chome_part)]
 
         if not town_entry:
-            base_key = (cname, base_name)
-            if base_key in town_readings:
-                town_entry = town_readings[base_key]
+            base_clean = re.sub(r"^大字", "", base_name)
+            town_entry = town_readings.get((cname, base_name)) or town_readings.get((cname, base_clean)) or town_readings.get((cname, f"大字{base_clean}"))
 
-        if not town_entry:
-            raise ValueError(f"FATAL HARD STOP: Official ABR reading missing for town '{cname}' '{tname}'")
+        if not town_entry or not town_entry.get("base_kana"):
+            sys.exit(
+                f"FATAL HARD STOP [Rule 4.4]: Official ABR reading missing for town '{cname}' '{tname}' (code: '{town_code}'). "
+                f"Provide external official reconciliation JSON via --reading-reconciliation with key '{comp_key}'."
+            )
 
-        oaza_cho_kana = town_entry["oaza_cho_kana"]
+        base_kana = town_entry["base_kana"]
         chome_num = CHOME_NUM_MAP.get(chome_part, "00")
         if chome_num == "00" and town_entry.get("chome_number"):
             try:
@@ -317,23 +445,37 @@ def run_phase1_skeleton(args):
             except:
                 pass
 
-        return (city_kana, oaza_cho_kana, chome_num, tname)
+        return (city_kana, base_kana, chome_num, tname, base_kana)
 
-    # Validate all target towns have ABR readings (HARD STOP on any missing)
+    # Validate all target towns have ABR readings or reconciliations (HARD STOP on any missing)
     for rec in target_towns:
         resolve_sort_key(rec)
-    print("PASS [ABR Verification]: All target towns resolved official readings successfully.")
+    print("PASS [Reading Resolution]: All target towns resolved official readings successfully.")
 
-    # 4. Sort deterministic 50-on order (Rule 4.4)
+    # 4. Sort deterministic 50-on order (Rule 4.4: city_kana asc, base_kana asc, chome_number asc, town_name asc)
     sorted_towns = sorted(target_towns, key=resolve_sort_key)
 
     # 5. Deterministic rowId 1..N assignment (Rule 4.5)
     final_skeleton_rows = []
+    provenance_rows = []
     for idx, rec in enumerate(sorted_towns, start=1):
+        s_key = resolve_sort_key(rec)
+        resolved_reading = s_key[4]
         final_skeleton_rows.append({
             'rowId': idx,
             'city_name': rec['clean_city'],
             'town_name': rec['clean_town']
+        })
+        provenance_rows.append({
+            'rowId': idx,
+            'city_code': rec['city_code'],
+            'town_code': rec['town_code'],
+            'raw_town_name': rec['raw_town'],
+            'clean_town_name': rec['clean_town'],
+            'latitude': rec['lat'],
+            'longitude': rec['lon'],
+            'resolved_reading': resolved_reading,
+            'source_ref_csv': os.path.abspath(args.ref_csv)
         })
 
     # 6. Quality Gates Verification (QG-2, QG-3)
@@ -365,11 +507,17 @@ def run_phase1_skeleton(args):
         sys.exit(f"FAIL QG-3: rowId is not continuous 1..N! (Length: {len(all_row_ids)})")
     print(f"PASS [QG-3 rowId Integrity]: Exactly 1..{len(final_skeleton_rows)} continuous sequence verified.")
 
-    # 7. Write output atomically via temporary file (No unfinished CSV on error)
+    # 7. Write output CSV and skeleton provenance JSON atomically via temporary files
     out_dir = os.path.dirname(os.path.abspath(args.out_csv))
     os.makedirs(out_dir, exist_ok=True)
     fd, temp_csv_path = tempfile.mkstemp(prefix="phase1_skeleton_", dir=out_dir)
     os.close(fd)
+
+    prov_out_path = args.provenance_out or os.path.join(out_dir, "skeleton_provenance.json")
+    prov_dir = os.path.dirname(os.path.abspath(prov_out_path))
+    os.makedirs(prov_dir, exist_ok=True)
+    fd_prov, temp_prov_path = tempfile.mkstemp(prefix="skeleton_provenance_", dir=prov_dir)
+    os.close(fd_prov)
 
     try:
         with open(temp_csv_path, 'w', encoding='utf-8', newline='\n') as f:
@@ -378,11 +526,22 @@ def run_phase1_skeleton(args):
             for r in final_skeleton_rows:
                 writer.writerow([r['rowId'], r['city_name'], r['town_name']])
 
+        with open(temp_prov_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                "skeleton_csv": os.path.abspath(args.out_csv),
+                "total_records": len(provenance_rows),
+                "records": provenance_rows
+            }, f, ensure_ascii=False, indent=2)
+
         shutil.move(temp_csv_path, args.out_csv)
+        shutil.move(temp_prov_path, prov_out_path)
         print(f"SUCCESS: Written {len(final_skeleton_rows)} records to {args.out_csv}")
+        print(f"SUCCESS: Written skeleton provenance to {prov_out_path}")
     finally:
         if os.path.exists(temp_csv_path):
             os.remove(temp_csv_path)
+        if os.path.exists(temp_prov_path):
+            os.remove(temp_prov_path)
 
     print("=" * 70)
     print("PHASE 1 AREA SKELETON GENERATION COMPLETED SUCCESSFULLY!")

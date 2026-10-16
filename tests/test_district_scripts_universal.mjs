@@ -676,5 +676,263 @@ print("CREATION_DATE_DISCRIMINATION_VERIFIED_SUCCESSFULLY")
     const res = runPython( ['-c', testScript], { encoding: 'utf-8' });
     assert.ok(res.includes('CREATION_DATE_DISCRIMINATION_VERIFIED_SUCCESSFULLY'), 'Creation date must be strictly distinguished from update dates');
   });
+
+  it('Plan A Collision Avoidance: Retains raw town names when stripping 大字 causes collision across distinct codes', () => {
+    const dir = path.join(TEST_TMP_DIR, 'plan_a_test');
+    fs.mkdirSync(dir, { recursive: true });
+
+    const buildScript = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
+    const mlitCsv = path.join(dir, 'mlit_collision.csv');
+    const abrCsv = path.join(dir, 'abr.csv');
+    const outCsv = path.join(dir, 'out_skeleton.csv');
+    const provOut = path.join(dir, 'out_provenance.json');
+
+    // MLIT rows with collision: "大字サンプル町" (code 100) vs "サンプル町" (code 200) in same city
+    const mlitRows = [
+      ['都道府県コード', '都道府県名', '市区町村コード', '市区町村名', '大字町丁目コード', '大字町丁目名', '緯度', '経度'],
+      ['99', '仮想県', '99999', '架空市', '99999000100', '大字サンプル町', '35.10', '136.10'],
+      ['99', '仮想県', '99999', '架空市', '99999000200', 'サンプル町', '35.20', '136.20'],
+      ['99', '仮想県', '99999', '架空市', '99999000300', '大字通常町', '35.30', '136.30'],
+    ];
+    fs.writeFileSync(mlitCsv, mlitRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    // ABR rows providing readings
+    const abrRows = [
+      ['lg_code', 'machiaza_type', 'city', 'city_kana', 'oaza_cho', 'oaza_cho_kana'],
+      ['999991', '1', '架空市', 'カクウシ', '大字サンプル町', 'オオアザサンプルマチ'],
+      ['999991', '1', '架空市', 'カクウシ', 'サンプル町', 'サンプルマチ'],
+      ['999991', '1', '架空市', 'カクウシ', '通常町', 'ツウジョウマチ'],
+    ];
+    fs.writeFileSync(abrCsv, abrRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    runPython([
+      buildScript,
+      '--phase1-only',
+      '--ref-csv', mlitCsv,
+      '--abr-file', abrCsv,
+      '--out-csv', outCsv,
+      '--provenance-out', provOut
+    ]);
+
+    const generated = fs.readFileSync(outCsv, 'utf-8');
+    const lines = generated.trim().split('\n');
+    assert.equal(lines.length, 4, 'Header + 3 towns');
+
+    // Both distinct entities must be preserved with Plan A raw names
+    assert.ok(generated.includes('大字サンプル町'), 'Raw name 大字サンプル町 must be preserved to avoid collision');
+    assert.ok(generated.includes('サンプル町'), 'サンプル町 must be preserved');
+    // Non-colliding town must have 大字 stripped
+    assert.ok(generated.includes('通常町'), '通常町 must have 大字 stripped normally');
+    assert.ok(!generated.includes('大字通常町'), 'Non-colliding town must not retain 大字');
+
+    // Verify skeleton provenance JSON
+    assert.ok(fs.existsSync(provOut), 'Skeleton provenance must be generated');
+    const prov = JSON.parse(fs.readFileSync(provOut, 'utf-8'));
+    assert.equal(prov.total_records, 3);
+    assert.equal(prov.records[0].city_code, '99999');
+    assert.ok(prov.records.some(r => r.town_code === '99999000100' && r.clean_town_name === '大字サンプル町'));
+    assert.ok(prov.records.some(r => r.town_code === '99999000200' && r.clean_town_name === 'サンプル町'));
+  });
+
+  it('Indistinguishable Collision: HARD STOP when multiple distinct codes share exact same raw name', () => {
+    const dir = path.join(TEST_TMP_DIR, 'indistinguishable_test');
+    fs.mkdirSync(dir, { recursive: true });
+
+    const buildScript = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
+    const mlitCsv = path.join(dir, 'mlit_fatal.csv');
+    const abrCsv = path.join(dir, 'abr.csv');
+    const outCsv = path.join(dir, 'out_skeleton.csv');
+
+    const mlitRows = [
+      ['都道府県コード', '都道府県名', '市区町村コード', '市区町村名', '大字町丁目コード', '大字町丁目名'],
+      ['99', '仮想県', '99999', '架空市', '99999000100', '衝突町'],
+      ['99', '仮想県', '99999', '架空市', '99999000200', '衝突町'],
+    ];
+    fs.writeFileSync(mlitCsv, mlitRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    const abrRows = [
+      ['lg_code', 'machiaza_type', 'city', 'city_kana', 'oaza_cho', 'oaza_cho_kana'],
+      ['999991', '1', '架空市', 'カクウシ', '衝突町', 'ショウトツマチ'],
+    ];
+    fs.writeFileSync(abrCsv, abrRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    assert.throws(() => {
+      runPython([
+        buildScript,
+        '--phase1-only',
+        '--ref-csv', mlitCsv,
+        '--abr-file', abrCsv,
+        '--out-csv', outCsv
+      ], { stdio: 'pipe' });
+    }, /Indistinguishable name collision detected/);
+  });
+
+  it('ABR Hierarchy and Soft-Validation: verify_abr_master passes on missing readings in raw ABR, and build handles Type 1, 2, 3', () => {
+    const dir = path.join(TEST_TMP_DIR, 'abr_hierarchy_test');
+    fs.mkdirSync(dir, { recursive: true });
+
+    const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
+    const abrCsv = path.join(dir, 'abr_types.csv');
+
+    // ABR with Type 1 (大字), Type 2 (丁目), Type 3 (小字), including row with missing reading
+    const abrRows = [
+      ['lg_code', 'machiaza_type', 'city', 'city_kana', 'oaza_cho', 'oaza_cho_kana', 'chome', 'chome_number', 'koaza', 'koaza_kana'],
+      ['999991', '1', '架空市', 'カクウシ', '大字第一町', 'オオアザダイイチマチ', '', '', '', ''],
+      ['999991', '2', '架空市', 'カクウシ', '第二通', 'ダイニドオリ', '一丁目', '1', '', ''],
+      ['999991', '3', '架空市', 'カクウシ', '', '', '', '', '第三字新田', 'ダイサンアザシンデン'],
+      ['999991', '1', '架空市', 'カクウシ', '読み欠落町', '', '', '', '', ''], // Missing reading in raw ABR
+    ];
+    fs.writeFileSync(abrCsv, abrRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    // Verify verify_abr_master does NOT hard stop on missing reading
+    const testPy = `
+from importlib.machinery import SourceFileLoader
+fetch_mod = SourceFileLoader('fetch_raw', '${fetchScript}').load_module()
+rep = fetch_mod.verify_abr_master('99999', abr_files=['${abrCsv}'])
+assert len(rep) == 1
+assert rep[0]['matched_municipality_records'] == 4
+print("ABR_RAW_VALIDATION_PASSED")
+`;
+    const res = runPython(['-c', testPy], { encoding: 'utf-8' });
+    assert.ok(res.includes('ABR_RAW_VALIDATION_PASSED'), 'ABR raw inspection must pass without demanding non-empty readings on raw rows');
+  });
+
+  it('MLIT scraping: Recognizes data_kind form attribute, handles <br> tags, and parses 令和7年', () => {
+    const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
+
+    const testPy = `
+import re
+from importlib.machinery import SourceFileLoader
+fetch_mod = SourceFileLoader('fetch_raw', '${fetchScript}').load_module()
+
+# Row matching simulation with <br> tag and data_kind=1
+row_html = '<td align="center" nowrap><font size="2">大字・<br>町丁目</font><input type="hidden" value="1" name="data_kind" id="data_kind1"></td><td>令和7年</td><td>19.0b</td><input type="checkbox" name="chn" value="44355">作成年月日: 2026-03-19'
+
+# Year regex check
+m_year = re.search(r'(令和\\s*\\d+\\s*(?:年|年度)?|\\d{4}\\s*(?:年|年度)?|平成\\s*\\d+\\s*(?:年|年度)?|R\\d+)', row_html)
+assert m_year is not None
+assert m_year.group(1) == '令和7年'
+
+# Data kind form attribute check (matches both name..value and value..name)
+m_kind = re.search(r"""name=[\x27"]?data_kind[\x27"]?[^>]*value=[\x27"]?(\\d+)[\x27"]?""", row_html)
+if not m_kind:
+    m_kind = re.search(r"""value=[\x27"]?(\\d+)[\x27"]?[^>]*name=[\x27"]?data_kind[\x27"]?""", row_html)
+assert m_kind is not None
+assert m_kind.group(1) == '1'
+
+print("MLIT_FORM_AND_YEAR_PARSING_VERIFIED")
+`;
+    const res = runPython(['-c', testPy], { encoding: 'utf-8' });
+    assert.ok(res.includes('MLIT_FORM_AND_YEAR_PARSING_VERIFIED'));
+  });
+
+  it('External Reconciliation & Re-sorting: Solves reading disparity via composite key and preserves identical output upon sort-address-master', () => {
+    const dir = path.join(TEST_TMP_DIR, 'reconcile_and_resort_test');
+    fs.mkdirSync(dir, { recursive: true });
+
+    const buildScript = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
+    const sortScript = path.join(REPO_ROOT, 'scripts', 'sort-address-master.py');
+
+    const mlitCsv = path.join(dir, 'mlit_ref.csv');
+    const abrCsv = path.join(dir, 'abr.csv');
+    const reconJson = path.join(dir, 'reconciliations.json');
+    const outCsv = path.join(dir, 'skeleton.csv');
+    const provJson = path.join(dir, 'skeleton_provenance.json');
+    const resortedCsv = path.join(dir, 'skeleton_resorted.csv');
+
+    // MLIT has "旧字体町" which differs from ABR or has missing reading in ABR
+    const mlitRows = [
+      ['都道府県コード', '都道府県名', '市区町村コード', '市区町村名', '大字町丁目コード', '大字町丁目名', '緯度', '経度'],
+      ['99', '仮想県', '99999', '架空市', '99999000100', 'イ町', '35.10', '136.10'],
+      ['99', '仮想県', '99999', '架空市', '99999000200', '旧字体町', '35.20', '136.20'],
+      ['99', '仮想県', '99999', '架空市', '99999000300', 'ア町', '35.30', '136.30'],
+    ];
+    fs.writeFileSync(mlitCsv, mlitRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    // ABR provides readings for イ町 and ア町, but NOT for 旧字体町
+    const abrRows = [
+      ['lg_code', 'machiaza_type', 'city', 'city_kana', 'oaza_cho', 'oaza_cho_kana'],
+      ['999991', '1', '架空市', 'カクウシ', 'イ町', 'イマチ'],
+      ['999991', '1', '架空市', 'カクウシ', 'ア町', 'アマチ'],
+    ];
+    fs.writeFileSync(abrCsv, abrRows.map(r => r.join(',')).join('\n') + '\n', 'utf-8');
+
+    // 1. Without reconciliation JSON: build-district-master must HARD STOP
+    assert.throws(() => {
+      runPython([
+        buildScript,
+        '--phase1-only',
+        '--ref-csv', mlitCsv,
+        '--abr-file', abrCsv,
+        '--out-csv', outCsv
+      ], { stdio: 'pipe' });
+    }, /Official ABR reading missing for town/);
+
+    // 2. With official external reconciliation JSON using composite key "99999:99999000200"
+    const reconciliations = {
+      "99999:99999000200": {
+        "raw_town_name": "旧字体町",
+        "reconciled_reading": "ウマチ",
+        "reconciled_target_official_name": "新字体町",
+        "source_provider": "架空市公報",
+        "source_document_title": "町名変更対照資料",
+        "source_url": "https://example.gov.jp/reconcile",
+        "source_section_or_page": "p.5",
+        "verified_date": "2026-01-01"
+      }
+    };
+    fs.writeFileSync(reconJson, JSON.stringify(reconciliations, null, 2), 'utf-8');
+
+    runPython([
+      buildScript,
+      '--phase1-only',
+      '--ref-csv', mlitCsv,
+      '--abr-file', abrCsv,
+      '--reading-reconciliation', reconJson,
+      '--out-csv', outCsv,
+      '--provenance-out', provJson
+    ]);
+
+    const builtContent = fs.readFileSync(outCsv, 'utf-8');
+    const builtLines = builtContent.trim().split('\n').slice(1).map(l => l.split(',')[2]);
+    // Ordered 50-on by reading: ア町 (アマチ) -> イ町 (イマチ) -> 旧字体町 (ウマチ)
+    assert.deepEqual(builtLines, ['ア町', 'イ町', '旧字体町'], 'Must be sorted 50-on using reconciled reading');
+
+    // 3. Run sort-address-master on the generated skeleton with provenance and reconciliation
+    runPython([
+      sortScript,
+      '--input', outCsv,
+      '--output', resortedCsv,
+      '--abr-file', abrCsv,
+      '--provenance', provJson,
+      '--reading-reconciliation', reconJson
+    ]);
+
+    const resortedContent = fs.readFileSync(resortedCsv, 'utf-8');
+    assert.equal(builtContent, resortedContent, 'Re-sorting generated CSV must produce 100% identical output and ordering');
+  });
+
+  it('No District Hardcoding: scripts must not contain hardcoded real district/town names in logic', () => {
+    const scripts = [
+      path.join(REPO_ROOT, 'scripts', 'build-district-master.py'),
+      path.join(REPO_ROOT, 'scripts', 'sort-address-master.py'),
+      path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py')
+    ];
+
+    const forbiddenPatterns = [
+      /if.*['"]萱町['"]/,
+      /if.*['"]大字萱町['"]/,
+      /if.*['"]巖新田['"]/,
+      /if.*['"]小山台['"]/
+    ];
+
+    for (const sc of scripts) {
+      const code = fs.readFileSync(sc, 'utf-8');
+      for (const pat of forbiddenPatterns) {
+        assert.ok(!pat.test(code), `Forbidden hardcoded pattern ${pat} found in ${path.basename(sc)}`);
+      }
+    }
+  });
 });
+
 

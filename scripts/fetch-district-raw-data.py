@@ -190,7 +190,20 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports
             matched_candidates = []
 
             for row in rows:
-                if kind_label in row:
+                # Determine data kind by official form input attribute value="1" (大字・町丁目) or "0" (街区), or cell text
+                m_data_kind = re.search(r'name=[\'\"]?data_kind[\'\"]?[^>]*value=[\'\"]?(\d+)[\'\"]?', row)
+                if not m_data_kind:
+                    m_data_kind = re.search(r'value=[\'\"]?(\d+)[\'\"]?[^>]*name=[\'\"]?data_kind[\'\"]?', row)
+
+                is_kind_match = False
+                if m_data_kind:
+                    is_kind_match = (m_data_kind.group(1) == data_kind)
+                else:
+                    # Fallback to tag-stripped text match: "大字・町丁目" or "街区" (handles <br> tags in cell)
+                    clean_row = re.sub(r'<[^>]+>', ' ', row)
+                    is_kind_match = (kind_label in clean_row or re.search(rf'{kind_label[0]}.*{kind_label[-1]}', clean_row) is not None)
+
+                if is_kind_match:
                     m_chn = re.search(r'name=[\'\"]?chn[\'\"]?[^>]*value=[\'\"]?(\d+)[\'\"]?', row)
                     if not m_chn:
                         m_chn = re.search(r'value=[\'\"]?(\d+)[\'\"]?[^>]*name=[\'\"]?chn[\'\"]?', row)
@@ -199,8 +212,8 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports
                         # Extract version like 19.0b, 24.0a
                         m_ver = re.search(r'(\d+\.\d+[a-z]?)', row)
                         ver_str = m_ver.group(1) if m_ver else None
-                        # Extract year like 令和6年度 or 2024年度 or R06
-                        m_year = re.search(r'(令和\s*\d+\s*年度|\d{4}年度|R\d+)', row)
+                        # Extract year like 令和7年, 令和6年度, 2025年, 2024年度, R06
+                        m_year = re.search(r'(令和\s*\d+\s*(?:年|年度)?|\d{4}\s*(?:年|年度)?|平成\s*\d+\s*(?:年|年度)?|R\d+)', row)
                         year_str = m_year.group(1) if m_year else None
                         # Extract explicit source created date and key stated by provider
                         key_str, date_str = extract_creation_date_from_html(row)
@@ -441,8 +454,11 @@ def verify_abr_master(city_code, abr_files=None, abr_dir=None):
             col_code_idx = -1
             col_city_idx = -1
             col_city_kana_idx = -1
+            col_type_idx = -1
             col_town_idx = -1
             col_town_kana_idx = -1
+            col_koaza_idx = -1
+            col_koaza_kana_idx = -1
 
             for idx, col in enumerate(header):
                 c = col.strip()
@@ -452,10 +468,16 @@ def verify_abr_master(city_code, abr_files=None, abr_dir=None):
                     col_city_idx = idx
                 elif c in ['市区町村名_カナ', 'city_kana']:
                     col_city_kana_idx = idx
+                elif c in ['町字区分コード', 'machiaza_type']:
+                    col_type_idx = idx
                 elif c in ['町字名', 'oaza_cho', 'town']:
                     col_town_idx = idx
                 elif c in ['町字名_カナ', 'oaza_cho_kana', 'town_kana']:
                     col_town_kana_idx = idx
+                elif c in ['小字名', 'koaza']:
+                    col_koaza_idx = idx
+                elif c in ['小字名_カナ', 'koaza_kana']:
+                    col_koaza_kana_idx = idx
 
             missing_cols = []
             if col_code_idx == -1: missing_cols.append("全国地方公共団体コード / lg_code")
@@ -469,7 +491,10 @@ def verify_abr_master(city_code, abr_files=None, abr_dir=None):
 
             total_file_records = 0
             matched_for_this_file = 0
-            max_idx = max(col_code_idx, col_city_idx, col_city_kana_idx, col_town_idx, col_town_kana_idx)
+            required_indices = [col_code_idx, col_city_idx, col_city_kana_idx, col_town_idx, col_town_kana_idx]
+            if col_type_idx != -1:
+                required_indices.append(col_type_idx)
+            max_idx = max(required_indices)
 
             for line_no, row in enumerate(reader, start=2):
                 total_file_records += 1
@@ -485,12 +510,10 @@ def verify_abr_master(city_code, abr_files=None, abr_dir=None):
                 if len(code_val) >= 5 and code_val[:5] == city_code_5:
                     c_name = row[col_city_idx].strip()
                     c_kana = row[col_city_kana_idx].strip()
-                    t_name = row[col_town_idx].strip()
-                    t_kana = row[col_town_kana_idx].strip()
-                    if not c_name or not c_kana or not t_name or not t_kana:
+                    if not c_name or not c_kana:
                         sys.exit(
-                            f"FATAL HARD STOP: Missing mandatory values at line {line_no} in {abr_path}: "
-                            f"code='{code_val}', city='{c_name}', city_kana='{c_kana}', town='{t_name}', town_kana='{t_kana}'"
+                            f"FATAL HARD STOP: Missing mandatory municipality value at line {line_no} in {abr_path}: "
+                            f"code='{code_val}', city='{c_name}', city_kana='{c_kana}'"
                         )
                     matched_for_this_file += 1
 

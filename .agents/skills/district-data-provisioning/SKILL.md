@@ -7,7 +7,7 @@ description: 地区プロビジョニング規範。Phase 1 Area Skeleton（rowI
 
 ## 1. 概要と適用責務
 本 Pack は、新地区の開設において、以下を安全かつ再現可能に遂行するための Universal プロビジョニング規格である：
-1. **Phase 1（Area Skeleton 確定）**: 正本 `docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md`（§3.1, §4, §5）に従い、公式区割りの確定・適用 ➔ 住所の母集合からの `city_name` / `town_name` 正規化 ➔ 名称衝突検査 ➔ 整列 ➔ `rowId`（`1..N`）採番を行い、**3列のみの Area Skeleton（`rowId,city_name,town_name`）** を生成する（e-Stat 等の後段データ非依存）。
+1. **Phase 1（Area Skeleton 確定と原本対応保存）**: 正本 `docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md`（§3.1, §4, §5, §7.2）に従い、国交省位置参照情報のフォーム属性・セル構造判定による自動取得 ➔ ABR原本構造健全性検証 ➔ 公式区割り適用 ➔ 案A大字衝突回避正規化 ➔ 外部根拠JSON補完とABR階層整列 ➔ `rowId`（`1..N`）採番を行い、**3列のみの Area Skeleton（`rowId,city_name,town_name`）** および **原本対応根拠データ（`skeleton_provenance.json`）** を生成する（e-Stat 等の後段データ非依存）。
 2. **Phase 2（後段属性・境界付与）**: 確定済み Area Skeleton に対して後段責務として e-Stat 等から代表座標・人口・世帯数・小地域コードおよび境界 GeoJSON を付与し、マスターデータ（`data/`）を完成させる。
 3. 実ブラウザ（Chrome CDP）を使用した対象地区専用 LINE 資産一式（LINE Login、LINE公式アカウント、Messaging API、Linked Bot、LIFF、長期チャネルアクセストークン、公式ロゴ、2分割リッチメッセージ、あいさつメッセージ）の構築および READ ONLY 完全検証。
 
@@ -23,11 +23,18 @@ description: 地区プロビジョニング規範。Phase 1 Area Skeleton（rowI
 2. **Phase 1 Area Skeleton 純粋性と後段分離原則**:
    - 第1段階（Phase 1）の成果物は `rowId,city_name,town_name` の3列のみとし、e-Stat・`households`・`population`・`latitude`・`longitude`・`boundaries`・投票率等を Phase 1 の Skeleton 決定に一切使用してはならない。
    - 住所の母集合、公式区割り（適用法令の施行版・経過措置）、正規化、下位階層の生成禁止、名称衝突、整列、品質ゲート（QG-2 / QG-3）は、正本 `docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md` の定義に従う。
-3. **飛び地 MultiPolygon の完全統合（Phase 2 後段責務）**:
+3. **Phase 1 汎用実行ワークフロー（自律調達から確定まで）**:
+   - **Step 1: 国交省位置参照情報の取得 (`fetch-district-raw-data.py`)**: フォーム属性 `name="data_kind" value="1"` およびセル構造で大字・町丁目行を確実に同定し、年・年度表記を解析して最新ZIPを取得。原資料作成日と取得メタデータを Provenance に記録。
+   - **Step 2: ABR原本構造健全性検証 (`verify_abr_master`)**: ABR原本自体の構造・コード・種別整合性のみを検証。原本自体の読み欠損による不当停止を排除するため、原本検証段階で行レベルの読み非空を一律に要求しない。
+   - **Step 3: 案A大字衝突回避の正規化**: 同一自治体内において、先頭「大字」の除去によって異なる大字町丁目コードの町域と衝突する場合は、衝突するレコードの原文名称（「大字〇〇」表記）をそのまま保持して独立維持する。原文保持でも区別できない場合（同一名称・異コード）は即座に HARD STOP する。
+   - **Step 4: 読み乖離の外部根拠JSON補完と整列**: 母集合とABRの間の表記差・読み欠落は推測で埋めず、自治体公表資料等に基づく外部根拠JSON（`<city_code>:<town_code>` 複合キー）を入力して決定論的に解決する。未解決が残存する場合は HARD STOP する。整列は基底町名読み五十音順＋丁目数値順（1, 2, 3...）で行う。
+   - **Step 5: 原本対応根拠データ保存**: 3列 CSV とは別に、各町域の `rowId`、自治体コード、国交省町丁目コード、原文名称、正規化名称、原本緯度経度、出典情報を記録した根拠データ（`skeleton_provenance.json` 等）を出力する。
+   - **Step 6: 再整列の同一性保証 (`sort-address-master.py`)**: 既存ソーターは上記根拠データを受け取り、外部根拠JSONの複合キーを解決して生成時と 100% 同一の名称・順序を再現する（名称変更禁止）。
+4. **飛び地 MultiPolygon の完全統合（Phase 2 後段責務）**:
    - Phase 2 の境界付与において、同一 `rowId`（町丁目）に複数の離れたポリゴン（飛び地・島嶼）が存在する場合、別レコードに分割せず、単一の MultiPolygon Feature として統合する。
-4. **既存稼働地区データの非Migration原則と新旧対応表**:
+5. **既存稼働地区データの非Migration原則と新旧対応表**:
    - 既存稼働地区の確定済み `data/**` および既存 `rowId` は遡及的に Migration・再採番しない（新規地区では `data/area_mapping.json` を空配列 `[]` に初期化する）。
-5. **Code Deployment 権限の非保有**:
+6. **Code Deployment 権限の非保有**:
    - 本 Pack を実行する District Provisioner は、コードのデプロイ権限を持たない。データ受入ゲートが 100% PASS した後、MASTER の承認を経てプロビジョニングを完了する。
 
 ---

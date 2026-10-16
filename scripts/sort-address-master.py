@@ -24,6 +24,8 @@ import argparse
 import tempfile
 import shutil
 
+import json
+
 CHOME_NUM_MAP = {
     "一丁目": "01", "二丁目": "02", "三丁目": "03", "四丁目": "04", "五丁目": "05",
     "六丁目": "06", "七丁目": "07", "八丁目": "08", "九丁目": "09", "十丁目": "10",
@@ -36,14 +38,62 @@ def parse_args():
     parser.add_argument("--input", required=True, help="Input CSV path (Required; no default)")
     parser.add_argument("--output", required=True, help="Output CSV path (Required; no default)")
     parser.add_argument("--abr-file", required=True, action='append', help="Path to Digital Agency ABR town master CSV (Required; can be specified multiple times for multiple files)")
+    parser.add_argument("--provenance", default=None, help="Path to skeleton provenance JSON for resolving official codes (optional)")
+    parser.add_argument("--reading-reconciliation", default=None, help="Path to external official reading reconciliation JSON (optional)")
     return parser.parse_args()
+
+def load_reading_reconciliations(json_path):
+    """
+    Load external official reading reconciliation JSON (Rule 4.4).
+    Key: "<city_code>:<town_code>"
+    """
+    if not json_path:
+        return {}
+    if not os.path.exists(json_path):
+        sys.exit(f"FATAL HARD STOP: Reading reconciliation file not found: {json_path}")
+    print(f"[Phase 1 Reconciliations] Loading external official reconciliations from {json_path}...")
+    with open(json_path, 'r', encoding='utf-8') as f:
+        try:
+            data = json.load(f)
+        except Exception as e:
+            sys.exit(f"FATAL HARD STOP: Malformed reading reconciliation JSON ({json_path}): {e}")
+
+    if not isinstance(data, dict):
+        sys.exit(f"FATAL HARD STOP: Reading reconciliation JSON must be an object keyed by '<city_code>:<town_code>': {json_path}")
+
+    for k, v in data.items():
+        if not isinstance(v, dict) or not v.get('reconciled_reading'):
+            sys.exit(f"FATAL HARD STOP: Missing 'reconciled_reading' for reconciliation key '{k}' in {json_path}")
+
+    return data
+
+def load_provenance_data(provenance_path):
+    """
+    Load skeleton provenance JSON mapping rowId -> record metadata (city_code, town_code, raw_town_name).
+    """
+    if not provenance_path:
+        return {}
+    if not os.path.exists(provenance_path):
+        sys.exit(f"FATAL HARD STOP: Specified provenance file not found: {provenance_path}")
+
+    with open(provenance_path, 'r', encoding='utf-8') as f:
+        try:
+            data = json.load(f)
+        except Exception as e:
+            sys.exit(f"FATAL HARD STOP: Malformed provenance JSON ({provenance_path}): {e}")
+
+    records = data.get('records', [])
+    mapping = {}
+    for r in records:
+        rid = int(r.get('rowId', 0))
+        if rid > 0:
+            mapping[rid] = r
+    print(f"[Provenance Loader] Loaded {len(mapping)} records from {provenance_path}")
+    return mapping
 
 def load_abr_readings(abr_paths):
     """
-    Load official readings from Digital Agency ABR town master CSV files.
-    Returns:
-      city_readings: dict[(pref_name, city_name)] -> city_kana
-      town_readings: dict[(city_name, normalized_town_name)] -> (oaza_cho_kana, chome_num)
+    Load official readings from Digital Agency ABR town master CSV files adhering strictly to official hierarchy.
     """
     city_readings = {}
     town_readings = {}
@@ -55,60 +105,82 @@ def load_abr_readings(abr_paths):
         print(f"[ABR Loader] Reading official ABR town master: {path}...")
         with open(path, "r", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
-            fields = reader.fieldnames or []
-
-            # Check expected columns
-            # mt_town columns typically include: city_name, ward_name, oaza_cho, chome, city_kana, ward_kana, oaza_cho_kana, chome_number
-            # If headers are different, handle common ABR naming
             for r in reader:
                 city = r.get("city_name") or r.get("city") or r.get("市区町村名") or ""
-                ward = r.get("ward_name") or r.get("ward") or r.get("郡区名") or ""
-                oaza_cho = r.get("oaza_cho") or r.get("town") or r.get("町字名") or r.get("大字町名") or r.get("大字町丁目名") or ""
-                chome_name = r.get("chome") or r.get("丁目名") or ""
+                ward = r.get("ward_name") or r.get("ward") or r.get("区名") or ""
+                m_type = (r.get("machiaza_type") or r.get("町字区分コード") or "1").strip()
+                oaza_cho = (r.get("oaza_cho") or r.get("town") or r.get("町字名") or "").strip()
+                oaza_cho_kana = (r.get("oaza_cho_kana") or r.get("town_kana") or r.get("町字名_カナ") or "").strip()
+                chome_name = (r.get("chome") or r.get("丁目名") or "").strip()
+                chome_number = (r.get("chome_number") or r.get("丁目数字") or "").strip()
+                koaza = (r.get("koaza") or r.get("小字名") or "").strip()
+                koaza_kana = (r.get("koaza_kana") or r.get("小字名_カナ") or "").strip()
 
-                # city_name in our schema preserves ward: '〇〇市△△区' or '〇〇市'
                 full_city_name = f"{city}{ward}".strip() if ward else city.strip()
-                # Clean up county name if present in ABR city column (e.g. 〇〇郡△△町 -> △△町)
-                if full_city_name and "郡" in full_city_name:
+                if "郡" in full_city_name:
                     full_city_name = re.sub(r"^.+?郡", "", full_city_name)
 
-                city_kana = (r.get("city_kana") or r.get("市区町村名_カナ") or r.get("市区町村名_よみ") or "").strip()
-                ward_kana = (r.get("ward_kana") or r.get("郡区名_カナ") or "").strip()
+                city_kana = (r.get("city_kana") or r.get("市区町村名_カナ") or "").strip()
+                ward_kana = (r.get("ward_kana") or r.get("区名_カナ") or "").strip()
                 full_city_kana = f"{city_kana}{ward_kana}".strip()
 
                 if full_city_name and full_city_kana:
                     city_readings[full_city_name] = full_city_kana
 
-                oaza_cho_kana = (r.get("oaza_cho_kana") or r.get("町字名_カナ") or r.get("町字名_よみ") or r.get("大字町名_カナ") or "").strip()
-                chome_number = (r.get("chome_number") or r.get("丁目数字") or "").strip()
+                if m_type == "2":  # 丁目
+                    full_town = f"{oaza_cho}{chome_name}".strip()
+                    base_town = oaza_cho
+                    base_kana = oaza_cho_kana
+                    num = chome_number
+                elif m_type == "3":  # 小字
+                    if oaza_cho:
+                        full_town = f"{oaza_cho}{koaza}".strip()
+                        base_town = full_town
+                        base_kana = f"{oaza_cho_kana}{koaza_kana}".strip()
+                    else:
+                        full_town = koaza.strip()
+                        base_town = full_town
+                        base_kana = koaza_kana.strip()
+                    num = "00"
+                else:  # 1 (大字) or default
+                    full_town = oaza_cho.strip()
+                    base_town = full_town
+                    base_kana = oaza_cho_kana.strip()
+                    num = "00"
 
-                # Full town name matching address_master representation: e.g. "△△町一丁目" or "△△町"
-                if chome_name:
-                    full_town_name = f"{oaza_cho}{chome_name}".strip()
-                else:
-                    full_town_name = oaza_cho.strip()
+                if not full_city_name or not full_town:
+                    continue
 
-                # Also strip leading 大字 if present in ABR to match normalized town_name
-                clean_town_name = re.sub(r"^大字", "", full_town_name)
+                clean_full = re.sub(r"^大字", "", full_town)
+                clean_base = re.sub(r"^大字", "", base_town)
 
-                if full_city_name and clean_town_name and oaza_cho_kana:
-                    key = (full_city_name, clean_town_name)
-                    town_readings[key] = {
-                        "oaza_cho_kana": oaza_cho_kana,
-                        "chome_number": chome_number
-                    }
+                entry = {
+                    "base_kana": base_kana,
+                    "chome_number": num,
+                    "full_town": full_town,
+                    "base_town": base_town
+                }
+
+                town_readings[(full_city_name, full_town)] = entry
+                town_readings[(full_city_name, clean_full)] = entry
+                town_readings[(full_city_name, f"大字{clean_full}")] = entry
+                if base_town != full_town:
+                    town_readings[(full_city_name, base_town)] = entry
+                    town_readings[(full_city_name, clean_base)] = entry
+                    town_readings[(full_city_name, f"大字{clean_base}")] = entry
 
     print(f"[ABR Loader] Loaded readings: {len(city_readings)} cities/wards, {len(town_readings)} town entries.")
     return city_readings, town_readings
 
-def resolve_sort_key_universal(row, city_readings, town_readings):
+def resolve_sort_key_universal(row, city_readings, town_readings, provenance_map, reconciliations):
     """
     Derive deterministic sort key adhering to DISTRICT_DATA_ACQUISITION_RULE.md §4.4.
     Keys:
       1. city_kana (50-on order)
-      2. oaza_cho_kana (50-on order)
+      2. base_kana (50-on order)
       3. chome_num (numeric 00..99)
-      4. rowId (preserved tie-breaker)
+      4. town_name (preserved tie-breaker)
+      5. row_id (preserved tie-breaker)
     """
     city_name = (row.get("city_name") or "").strip()
     town_name = (row.get("town_name") or "").strip()
@@ -117,7 +189,6 @@ def resolve_sort_key_universal(row, city_readings, town_readings):
     # 1. City kana resolution
     city_kana = city_readings.get(city_name)
     if not city_kana:
-        # Fallback for city if county was stripped: match on bare city_name
         for cname, ckana in city_readings.items():
             if cname == city_name or re.sub(r"^.+?郡", "", cname) == city_name:
                 city_kana = ckana
@@ -126,32 +197,41 @@ def resolve_sort_key_universal(row, city_readings, town_readings):
     if not city_kana:
         raise ValueError(f"FATAL: Unresolved city reading in official ABR data for city_name='{city_name}'")
 
-    # 2. Town kana resolution
-    # Strip leading 大字 if present
-    clean_town = re.sub(r"^大字", "", town_name)
-    lookup_key = (city_name, clean_town)
+    # 2. Check external reconciliation via provenance official code if available
+    prov_rec = provenance_map.get(row_id)
+    if prov_rec:
+        city_code = prov_rec.get('city_code', '')
+        town_code = prov_rec.get('town_code', '')
+        comp_key = f"{city_code}:{town_code}"
+        reconciled = reconciliations.get(comp_key)
+        if reconciled and reconciled.get('reconciled_reading'):
+            town_kana = reconciled['reconciled_reading'].strip()
+            chome_part = ""
+            chome_match = re.search(r"([一二三四五六七八九十]+丁目)$", town_name)
+            chome_num = CHOME_NUM_MAP.get(chome_match.group(1), "00") if chome_match else "00"
+            return (city_kana, town_kana, chome_num, town_name, row_id)
 
-    town_entry = town_readings.get(lookup_key)
+    # 3. Lookup in ABR readings (preserving raw and clean town names)
+    clean_town = re.sub(r"^大字", "", town_name)
+    town_entry = town_readings.get((city_name, town_name)) or town_readings.get((city_name, clean_town))
 
     chome_part = ""
-    chome_match = re.search(r"([一二三四五六七八九十]+丁目)$", clean_town)
-    base_name = clean_town
+    chome_match = re.search(r"([一二三四五六七八九十]+丁目)$", town_name)
+    base_name = town_name
     if chome_match:
         chome_part = chome_match.group(1)
-        base_name = clean_town[:-len(chome_part)]
+        base_name = town_name[:-len(chome_part)]
 
     if not town_entry:
-        # Try matching base town without chome in ABR
-        base_key = (city_name, base_name)
-        if base_key in town_readings:
-            town_entry = town_readings[base_key]
+        base_clean = re.sub(r"^大字", "", base_name)
+        town_entry = town_readings.get((city_name, base_name)) or town_readings.get((city_name, base_clean)) or town_readings.get((city_name, f"大字{base_clean}"))
 
-    if not town_entry:
+    if not town_entry or not town_entry.get("base_kana"):
         raise ValueError(f"FATAL: Unresolved town reading in official ABR data for city='{city_name}', town='{town_name}' (clean='{clean_town}')")
 
-    oaza_cho_kana = town_entry["oaza_cho_kana"]
+    base_kana = town_entry["base_kana"]
 
-    # 3. Chome numerical sorting
+    # 4. Chome numerical sorting (Rule 4.4)
     chome_num = CHOME_NUM_MAP.get(chome_part, "00")
     if chome_num == "00" and town_entry.get("chome_number"):
         try:
@@ -159,7 +239,7 @@ def resolve_sort_key_universal(row, city_readings, town_readings):
         except:
             pass
 
-    return (city_kana, oaza_cho_kana, chome_num, row_id)
+    return (city_kana, base_kana, chome_num, town_name, row_id)
 
 def main():
     args = parse_args()
@@ -176,6 +256,8 @@ def main():
         sys.exit(f"FATAL HARD STOP: Output file already exists (overwrite strictly prohibited): {args.output}")
 
     city_readings, town_readings = load_abr_readings(args.abr_file)
+    provenance_map = load_provenance_data(args.provenance)
+    reconciliations = load_reading_reconciliations(args.reading_reconciliation)
 
     with open(args.input, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -188,14 +270,14 @@ def main():
     # Test and resolve sort keys for all rows (HARD STOP on any failure)
     for idx, r in enumerate(original_rows):
         try:
-            resolve_sort_key_universal(r, city_readings, town_readings)
+            resolve_sort_key_universal(r, city_readings, town_readings, provenance_map, reconciliations)
         except Exception as err:
             sys.exit(f"FAIL [Universal Reading Check] at row {idx+1} (rowId={r.get('rowId')}): {err}")
 
     print("PASS [Universal Reading Check]: All records successfully resolved sort keys via official ABR data.")
 
     # Sort execution
-    sorted_rows = sorted(original_rows, key=lambda r: resolve_sort_key_universal(r, city_readings, town_readings))
+    sorted_rows = sorted(original_rows, key=lambda r: resolve_sort_key_universal(r, city_readings, town_readings, provenance_map, reconciliations))
 
     # Verification: row count preservation and rowId sequence
     assert len(sorted_rows) == original_count, "Record count mismatch after sort"
