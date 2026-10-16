@@ -2,13 +2,18 @@
 """
 sort-address-master.py
 
-address_master.csv の各レコードを日本語の読み順（あいうえお順・五十音順）に整列する標準スクリプト。
+address_master.csv（または Phase 1 Area Skeleton CSV）の各レコードを、
+デジタル庁 アドレス・ベース・レジストリ（ABR）町字マスターの公式読み仮名に基づき、
+日本語の読み順（五十音順・丁目の数値順）に厳格整列する Universal スクリプト。
+
+準拠規程: docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md §4.4, §4.5
 
 【絶対順守規則】
-1. 表示値（town_name等の全カラム）は1文字も改変しない。
-2. rowId（1..N）の各町丁目の既存数値は100%保持する（振り直し・改番厳禁）。
-3. 読み順は日本郵便公式データ（公定一次情報）に基づくソート専用キー（sort_kana）によって決定する。
-4. 同一町名で複数小地域が存在する場合は e_stat_code 昇順による安定した副順序を使用する。
+1. 表示値（city_name, town_name 等の全カラム）は1文字も改変しない。
+2. 読み順はデジタル庁ABR町字マスター（city_kana, ward_kana, oaza_cho_kana）の公式入力に統一。
+3. 地区専用のハードコード辞書・任意推測マップは永久禁止。
+4. 読み仮名が欠損しているレコードが1件でも検知された場合は即時 HARD STOP。
+5. 出力先は必須指定とし、既存ファイルの上書きを禁止。異常終了時は未完成ファイルを残さない。
 """
 
 import os
@@ -16,299 +21,162 @@ import sys
 import re
 import csv
 import argparse
-
-# 日本郵便公式データに基づく桑名市町名カナ辞書 (公定一次資料)
-POSTAL_KANA_KUWANA = {
-    "相生町": "アイオイチョウ",
-    "相川町": "アイカワチョウ",
-    "青葉町": "アオバチョウ",
-    "赤須賀": "アカスカ",
-    "赤尾": "アコオ",
-    "赤尾台": "アコオダイ",
-    "油町": "アブラマチ",
-    "伊賀町": "イガマチ",
-    "和泉": "イズミ",
-    "一色町": "イッシキマチ",
-    "今片町": "イマカタマチ",
-    "今北町": "イマキタマチ",
-    "今島": "イマジマ",
-    "今中町": "イマナカマチ",
-    "入江葭町": "イリエヨシマチ",
-    "上野": "ウエノ",
-    "内堀": "ウチボリ",
-    "馬道": "ウマミチ",
-    "梅園通": "ウメゾノドオリ",
-    "駅元町": "エキモトチョウ",
-    "江戸町": "エドマチ",
-    "江場": "エバ",
-    "大貝須": "オオガイス",
-    "大仲新田": "オオナカシンデン",
-    "大山田": "オオヤマダ",
-    "尾野山": "オノヤマ",
-    "蠣塚新田": "カキヅカシンデン",
-    "神楽町": "カグラチョウ",
-    "掛樋": "カケヒ",
-    "鍜冶町": "カジマチ",
-    "春日町": "カスガチョウ",
-    "霞町": "カスミチョウ",
-    "片町": "カタマチ",
-    "上之輪新田": "カミノワシンデン",
-    "上深谷部": "カミフカヤベ",
-    "萱町": "カヤマチ",
-    "嘉例川": "カレガワ",
-    "川口町": "カワグチチョウ",
-    "川崎町": "カワサキチョウ",
-    "北魚町": "キタウオマチ",
-    "北川原台": "キタガワラダイ",
-    "北寺町": "キタテラマチ",
-    "北鍋屋町": "キタナベヤマチ",
-    "北別所": "キタベッシヨ",
-    "希望ケ丘": "キボウガオカ",
-    "京橋町": "キョウバシチョウ",
-    "京町": "キョウマチ",
-    "清竹の丘": "キヨタケノオカ",
-    "桑名": "クワナ",
-    "桑部": "クワベ",
-    "小泉": "コイズミ",
-    "小貝須": "コガイス",
-    "寿町": "コトブキチョウ",
-    "紺屋町": "コンヤマチ",
-    "五反田": "ゴタンダ",
-    "坂井": "サカイ",
-    "桜通": "サクラドオリ",
-    "さくらの丘": "サクラノオカ",
-    "里町": "サトマチ",
-    "三栄町": "サンエイチョウ",
-    "参宮通": "サングウドオリ",
-    "三之丸": "サンノマル",
-    "汐見町": "シオミチョウ",
-    "繁松新田": "シゲマツシンデン",
-    "志知": "シチ",
-    "島田": "シマダ",
-    "清水町": "シミズチョウ",
-    "下深谷部": "シモフカヤベ",
-    "職人町": "ショクニンマチ",
-    "城山台": "シロヤマダイ",
-    "新倉持": "シンクラモチ",
-    "神成町": "シンセイチョウ",
-    "新地": "シンチ",
-    "新築町": "シンチクチョウ",
-    "新西方": "シンニシカタ",
-    "新町": "シンマチ",
-    "新屋敷": "シンヤシキ",
-    "新矢田": "シンヤダ",
-    "地蔵": "ジゾウ",
-    "城南萱町": "ジョウナンカヤマチ",
-    "末広町": "スエヒロチョウ",
-    "住吉町": "スミヨシチョウ",
-    "船馬町": "センバチョウ",
-    "桑栄町": "ソウエイチョウ",
-    "外堀": "ソトボリ",
-    "太一丸": "タイチマル",
-    "太平町": "タイヘイチョウ",
-    "高塚町": "タカツカチョウ",
-    "立花町": "タチバナチョウ",
-    "立田町": "タツタチョウ",
-    "多度町猪飼": "タドチョウイカイ",
-    "多度町大鳥居": "タドチョウオオドリイ",
-    "多度町小山": "タドチョウオヤマ",
-    "多度町小山台": "タドチョウオヤマダイ",
-    "多度町香取": "タドチョウカトリ",
-    "多度町上之郷": "タドチョウカミノゴウ",
-    "多度町北猪飼": "タドチョウキタイカイ",
-    "多度町古野": "タドチョウコノ",
-    "多度町下野代": "タドチョウシモノシロ",
-    "多度町多度": "タドチョウタド",
-    "多度町力尾": "タドチョウチカラオ",
-    "多度町戸津": "タドチョウトヅ",
-    "多度町中須": "タドチョウナカズ",
-    "多度町肱江": "タドチョウヒジエ",
-    "多度町平古": "タドチョウヒラコ",
-    "多度町美鹿": "タドチョウビロク",
-    "多度町福永": "タドチョウフクナガ",
-    "多度町御衣野": "タドチョウミゾノ",
-    "多度町南之郷": "タドチョウミナミノゴウ",
-    "多度町柚井": "タドチョウユイ",
-    "田町": "タマチ",
-    "太夫": "タユウ",
-    "大央町": "ダイオウチョウ",
-    "大福": "ダイフク",
-    "中央町": "チュウオウチョウ",
-    "千代田町": "チヨダチョウ",
-    "筑紫": "ツクシ",
-    "筒尾": "ツツオ",
-    "堤原": "ツツミハラ",
-    "伝馬町": "テンマチョウ",
-    "常盤町": "トキワチョウ",
-    "殿町": "トノマチ",
-    "友村": "トモムラ",
-    "中山町": "ナカヤマチョウ",
-    "長島町赤地": "ナガシマチョウアカジ",
-    "長島町浦安": "ナガシマチョウウラヤス",
-    "長島町大倉": "ナガシマチョウオオクラ",
-    "長島町大島": "ナガシマチョウオオジマ",
-    "長島町押付": "ナガシマチョウオシツケ",
-    "長島町鎌ケ地": "ナガシマチョウカマガンジ",
-    "長島町上坂手": "ナガシマチョウカミサカテ",
-    "長島町北殿名": "ナガシマチョウキタトノメ",
-    "長島町源部外面": "ナガシマチョウゲンベドモ",
-    "長島町高座": "ナガシマチョウコウザ",
-    "長島町小島": "ナガシマチョウコジマ",
-    "長島町駒江": "ナガシマチョウコマエ",
-    "長島町下坂手": "ナガシマチョウシモサカテ",
-    "長島町新所": "ナガシマチョウシンショ",
-    "長島町杉江": "ナガシマチョウスギエ",
-    "長島町千倉": "ナガシマチョウチクラ",
-    "長島町出口": "ナガシマチョウデグチ",
-    "長島町十日外面": "ナガシマチョウトオカドモ",
-    "長島町殿名": "ナガシマチョウトノメ",
-    "長島町中川": "ナガシマチョウナカガワ",
-    "長島町長島萱町": "ナガシマチョウナガシマカヤマチ",
-    "長島町長島下町": "ナガシマチョウナガシマシモマチ",
-    "長島町長島中町": "ナガシマチョウナガシマナカマチ",
-    "長島町西川": "ナガシマチョウニシカワ",
-    "長島町西外面": "ナガシマチョウニシドモ",
-    "長島町西外面市街": "ナガシマチョウニシドモシガイ",
-    "長島町白鶏": "ナガシマチョウハッケ",
-    "長島町東殿名": "ナガシマチョウヒガシトノメ",
-    "長島町平方": "ナガシマチョウヒラカタ",
-    "長島町福豊": "ナガシマチョウフクトヨ",
-    "長島町福吉": "ナガシマチョウフクヨシ",
-    "長島町又木": "ナガシマチョウマタギ",
-    "長島町又木市街": "ナガシマチョウマタギシガイ",
-    "長島町松蔭": "ナガシマチョウマツカゲ",
-    "長島町松ケ島": "ナガシマチョウマツガシマ",
-    "長島町松之木": "ナガシマチョウマツノキ",
-    "長島町間々": "ナガシマチョウママ",
-    "長島町横満蔵": "ナガシマチョウヨコマクラ",
-    "長島町葭ケ須": "ナガシマチョウヨシガス",
-    "西方": "ニシカタ",
-    "西金井": "ニシカナイ",
-    "西正和台": "ニシセイワダイ",
-    "西鍋屋町": "ニシナベヤマチ",
-    "西別所": "ニシベッシヨ",
-    "西矢田町": "ニシヤダマチ",
-    "西汰上": "ニシユリアゲ",
-    "額田": "ヌカタ",
-    "野田": "ノダ",
-    "能部": "ノンベ",
-    "芳ケ崎": "ハガサキ",
-    "蓮見町": "ハスミチョウ",
-    "八間通": "ハチケンドオリ",
-    "八幡町": "ハチマンチョウ",
-    "播磨": "ハリマ",
-    "稗田": "ヒエダ",
-    "東方": "ヒガシカタ",
-    "東金井": "ヒガシカナイ",
-    "東正和台": "ヒガシセイワダイ",
-    "東太一丸": "ヒガシタイチマル",
-    "東鍋屋町": "ヒガシナベヤマチ",
-    "東野": "ヒガシノ",
-    "東矢田町": "ヒガシヤダマチ",
-    "東汰上": "ヒガシユリアゲ",
-    "陽だまりの丘": "ヒダマリノオカ",
-    "広見ケ丘": "ヒロミガオカ",
-    "枇杷島台": "ビワジマダイ",
-    "深谷町": "フカヤチョウ",
-    "福江": "フクエ",
-    "福江町": "フクエマチ",
-    "福岡町": "フクオカチョウ",
-    "福島": "フクジマ",
-    "福島新町": "フクジマシンマチ",
-    "福地": "フクチ",
-    "藤が丘": "フジガオカ",
-    "風呂町": "フロマチ",
-    "宝殿町": "ホウデンマチ",
-    "星川": "ホシカワ",
-    "星見ケ丘": "ホシミガオカ",
-    "本願寺": "ホンガンジ",
-    "本町": "ホンマチ",
-    "益生町": "マスオチョウ",
-    "増田": "マスダ",
-    "松並町": "マツナミチョウ",
-    "松ノ木": "マツノキ",
-    "三崎通": "ミサキドオリ",
-    "三ツ矢橋": "ミツヤバシ",
-    "南魚町": "ミナミウオマチ",
-    "南寺町": "ミナミテラマチ",
-    "宮通": "ミヤドオリ",
-    "宮町": "ミヤマチ",
-    "明正町": "メイセイチョウ",
-    "元赤須賀": "モトアカスカ",
-    "森忠": "モリタダ",
-    "安永": "ヤスナガ",
-    "矢田": "ヤダ",
-    "矢田磧": "ヤダカワラ",
-    "柳原": "ヤナギハラ",
-    "有楽町": "ユウラクチョウ",
-    "吉之丸": "ヨシノマル",
-    "吉津屋町": "ヨツヤチョウ",
-    "蓮花寺": "レンゲジ",
-    "鍛冶町": "カジマチ",
-    "星見ヶ丘": "ホシミガオカ",
-    "芳ヶ崎": "ハガサキ",
-    "蛎塚新田": "カキヅカシンデン",
-    "上之輪": "カミノワ",
-    "巖新田": "イワオシンデン",
-    "長島町老松": "ナガシマチョウオイマツ",
-    "小貝須字柳原": "コガイスアザヤナギハラ",
-    "多度町御衣野・下野代": "タドチョウミゾノ・シモノシロ"
-}
+import tempfile
+import shutil
 
 CHOME_NUM_MAP = {
-    "一丁目": "01",
-    "二丁目": "02",
-    "三丁目": "03",
-    "四丁目": "04",
-    "五丁目": "05",
-    "六丁目": "06",
-    "七丁目": "07",
-    "八丁目": "08",
-    "九丁目": "09",
-    "十丁目": "10"
+    "一丁目": "01", "二丁目": "02", "三丁目": "03", "四丁目": "04", "五丁目": "05",
+    "六丁目": "06", "七丁目": "07", "八丁目": "08", "九丁目": "09", "十丁目": "10",
+    "十一丁目": "11", "十二丁目": "12", "十三丁目": "13", "十四丁目": "14", "十五丁目": "15",
+    "十六丁目": "16", "十七丁目": "17", "十八丁目": "18", "十九丁目": "19", "二十丁目": "20"
 }
 
-def resolve_sort_key(row):
-    """
-    row からソート専用キー (sort_kana, chome_num, e_stat_code_int) を導出する。
-    town_name の表示文字列そのものは一切変更しない。
-    """
-    town_name = row["town_name"]
+def parse_args():
+    parser = argparse.ArgumentParser(description="Universal Address Master Sorter adhering to DISTRICT_DATA_ACQUISITION_RULE.md §4.4")
+    parser.add_argument("--input", required=True, help="Input CSV path (Required; no default)")
+    parser.add_argument("--output", required=True, help="Output CSV path (Required; no default)")
+    parser.add_argument("--abr-file", required=True, action='append', help="Path to Digital Agency ABR town master CSV (Required; can be specified multiple times for multiple files)")
+    parser.add_argument("--allow-overwrite", action="store_true", help="Explicitly allow overwriting existing output file")
+    return parser.parse_args()
 
-    # 1. 大字接頭辞の除去（ソート専用キー用）
-    core_name = re.sub(r"^大字", "", town_name)
+def load_abr_readings(abr_paths):
+    """
+    Load official readings from Digital Agency ABR town master CSV files.
+    Returns:
+      city_readings: dict[(pref_name, city_name)] -> city_kana
+      town_readings: dict[(city_name, normalized_town_name)] -> (oaza_cho_kana, chome_num)
+    """
+    city_readings = {}
+    town_readings = {}
 
-    # 2. 丁目部分の分離
+    for path in abr_paths:
+        if not os.path.exists(path):
+            sys.exit(f"FATAL: Specified ABR file not found: {path}")
+
+        print(f"[ABR Loader] Reading official ABR town master: {path}...")
+        with open(path, "r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            fields = reader.fieldnames or []
+
+            # Check expected columns
+            # mt_town columns typically include: city_name, ward_name, oaza_cho, chome, city_kana, ward_kana, oaza_cho_kana, chome_number
+            # If headers are different, handle common ABR naming
+            for r in reader:
+                city = r.get("city_name") or r.get("city") or ""
+                ward = r.get("ward_name") or r.get("ward") or ""
+                oaza_cho = r.get("oaza_cho") or r.get("town") or ""
+                chome_name = r.get("chome") or ""
+
+                # city_name in our schema preserves ward: '〇〇市△△区' or '〇〇市'
+                full_city_name = f"{city}{ward}".strip() if ward else city.strip()
+                # Clean up county name if present in ABR city column (e.g. 〇〇郡△△町 -> △△町)
+                if full_city_name and "郡" in full_city_name:
+                    full_city_name = re.sub(r"^.+?郡", "", full_city_name)
+
+                city_kana = (r.get("city_kana") or "").strip()
+                ward_kana = (r.get("ward_kana") or "").strip()
+                full_city_kana = f"{city_kana}{ward_kana}".strip()
+
+                if full_city_name and full_city_kana:
+                    city_readings[full_city_name] = full_city_kana
+
+                oaza_cho_kana = (r.get("oaza_cho_kana") or "").strip()
+                chome_number = (r.get("chome_number") or "").strip()
+
+                # Full town name matching address_master representation: e.g. "△△町一丁目" or "△△町"
+                if chome_name:
+                    full_town_name = f"{oaza_cho}{chome_name}".strip()
+                else:
+                    full_town_name = oaza_cho.strip()
+
+                # Also strip leading 大字 if present in ABR to match normalized town_name
+                clean_town_name = re.sub(r"^大字", "", full_town_name)
+
+                if full_city_name and clean_town_name and oaza_cho_kana:
+                    key = (full_city_name, clean_town_name)
+                    town_readings[key] = {
+                        "oaza_cho_kana": oaza_cho_kana,
+                        "chome_number": chome_number
+                    }
+
+    print(f"[ABR Loader] Loaded readings: {len(city_readings)} cities/wards, {len(town_readings)} town entries.")
+    return city_readings, town_readings
+
+def resolve_sort_key_universal(row, city_readings, town_readings):
+    """
+    Derive deterministic sort key adhering to DISTRICT_DATA_ACQUISITION_RULE.md §4.4.
+    Keys:
+      1. city_kana (50-on order)
+      2. oaza_cho_kana (50-on order)
+      3. chome_num (numeric 00..99)
+      4. rowId (preserved tie-breaker)
+    """
+    city_name = (row.get("city_name") or "").strip()
+    town_name = (row.get("town_name") or "").strip()
+    row_id = int(row.get("rowId") or 0)
+
+    # 1. City kana resolution
+    city_kana = city_readings.get(city_name)
+    if not city_kana:
+        # Fallback for city if county was stripped: match on bare city_name
+        for cname, ckana in city_readings.items():
+            if cname == city_name or re.sub(r"^.+?郡", "", cname) == city_name:
+                city_kana = ckana
+                break
+
+    if not city_kana:
+        raise ValueError(f"FATAL: Unresolved city reading in official ABR data for city_name='{city_name}'")
+
+    # 2. Town kana resolution
+    # Strip leading 大字 if present
+    clean_town = re.sub(r"^大字", "", town_name)
+    lookup_key = (city_name, clean_town)
+
+    town_entry = town_readings.get(lookup_key)
+
     chome_part = ""
-    chome_match = re.search(r"([一二三四五六七八九十]+丁目)$", core_name)
-    base_name = core_name
+    chome_match = re.search(r"([一二三四五六七八九十]+丁目)$", clean_town)
+    base_name = clean_town
     if chome_match:
         chome_part = chome_match.group(1)
-        base_name = core_name[:-len(chome_part)]
+        base_name = clean_town[:-len(chome_part)]
 
-    # 3. カナ引き当て
-    base_kana = None
-    if base_name in POSTAL_KANA_KUWANA:
-        base_kana = POSTAL_KANA_KUWANA[base_name]
-    elif core_name in POSTAL_KANA_KUWANA:
-        base_kana = POSTAL_KANA_KUWANA[core_name]
+    if not town_entry:
+        # Try matching base town without chome in ABR
+        base_key = (city_name, base_name)
+        if base_key in town_readings:
+            town_entry = town_readings[base_key]
 
-    if not base_kana:
-        raise ValueError(f"FATAL: Unresolved reading kana for town_name='{town_name}' (base='{base_name}')")
+    if not town_entry:
+        raise ValueError(f"FATAL: Unresolved town reading in official ABR data for city='{city_name}', town='{town_name}' (clean='{clean_town}')")
 
+    oaza_cho_kana = town_entry["oaza_cho_kana"]
+
+    # 3. Chome numerical sorting
     chome_num = CHOME_NUM_MAP.get(chome_part, "00")
-    e_stat_code = int(row.get("e_stat_code") or 0)
+    if chome_num == "00" and town_entry.get("chome_number"):
+        try:
+            chome_num = f"{int(town_entry['chome_number']):02d}"
+        except:
+            pass
 
-    return (base_kana, chome_num, e_stat_code)
+    return (city_kana, oaza_cho_kana, chome_num, row_id)
 
 def main():
-    parser = argparse.ArgumentParser(description="Sort address_master.csv in Japanese alphabetical reading order without altering rowId or values.")
-    parser.add_argument("--input", default="data/address_master.csv", help="Input address_master.csv path")
-    parser.add_argument("--output", default="data/address_master.csv", help="Output address_master.csv path")
-    args = parser.parse_args()
+    args = parse_args()
+    print("=" * 70)
+    print("UNIVERSAL ADDRESS MASTER SORTER (DISTRICT_DATA_ACQUISITION_RULE.md §4.4)")
+    print(f"Input:  {args.input}")
+    print(f"Output: {args.output}")
+    print("=" * 70)
 
     if not os.path.exists(args.input):
         sys.exit(f"FATAL: Input file not found: {args.input}")
+
+    if not args.allow_overwrite and os.path.exists(args.output):
+        sys.exit(f"FATAL: Output file already exists and --allow-overwrite was not specified: {args.output}")
+
+    city_readings, town_readings = load_abr_readings(args.abr_file)
 
     with open(args.input, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -316,45 +184,45 @@ def main():
         original_rows = list(reader)
 
     original_count = len(original_rows)
-    print(f"📊 Loaded {original_count} records from {args.input}")
+    print(f"[Sorter] Loaded {original_count} records from {args.input}")
 
-    # 全件のソートキー解決テスト
-    for r in original_rows:
+    # Test and resolve sort keys for all rows (HARD STOP on any failure)
+    for idx, r in enumerate(original_rows):
         try:
-            resolve_sort_key(r)
+            resolve_sort_key_universal(r, city_readings, town_readings)
         except Exception as err:
-            sys.exit(f"❌ Error at rowId={r.get('rowId')}: {err}")
+            sys.exit(f"FAIL [Universal Reading Check] at row {idx+1} (rowId={r.get('rowId')}): {err}")
 
-    print("✅ All records successfully resolved sort_kana from official Japan Post data.")
+    print("PASS [Universal Reading Check]: All records successfully resolved sort keys via official ABR data.")
 
-    # ソート実行
-    sorted_rows = sorted(original_rows, key=resolve_sort_key)
+    # Sort execution
+    sorted_rows = sorted(original_rows, key=lambda r: resolve_sort_key_universal(r, city_readings, town_readings))
 
-    # 整合性検証
+    # Verification: row count preservation and rowId sequence
     assert len(sorted_rows) == original_count, "Record count mismatch after sort"
 
     orig_row_ids = set(int(r["rowId"]) for r in original_rows)
     sorted_row_ids = set(int(r["rowId"]) for r in sorted_rows)
     assert orig_row_ids == sorted_row_ids, "rowId set changed after sort"
-    assert orig_row_ids == set(range(1, original_count + 1)), "rowId is not a continuous sequence from 1 to N"
 
-    orig_pop = sum(int(r["population"]) for r in original_rows if r.get("population"))
-    sorted_pop = sum(int(r["population"]) for r in sorted_rows if r.get("population"))
-    assert orig_pop == sorted_pop, f"Population sum mismatch: {orig_pop} vs {sorted_pop}"
+    # Write output atomically via temporary file
+    out_dir = os.path.dirname(os.path.abspath(args.output))
+    os.makedirs(out_dir, exist_ok=True)
+    fd, temp_out_path = tempfile.mkstemp(prefix="sort_address_", dir=out_dir)
+    os.close(fd)
 
-    orig_hh = sum(int(r["households"]) for r in original_rows if r.get("households"))
-    sorted_hh = sum(int(r["households"]) for r in sorted_rows if r.get("households"))
-    assert orig_hh == sorted_hh, f"Households sum mismatch: {orig_hh} vs {sorted_hh}"
+    try:
+        with open(temp_out_path, "w", encoding="utf-8", newline="\n") as f:
+            writer = csv.DictWriter(f, fieldnames=original_header, lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(sorted_rows)
 
-    # 出力 (LF改行)
-    with open(args.output, "w", encoding="utf-8", newline="\n") as f:
-        writer = csv.DictWriter(f, fieldnames=original_header, lineterminator="\n")
-        writer.writeheader()
-        writer.writerows(sorted_rows)
-
-    print(f"🎉 Successfully sorted and wrote {len(sorted_rows)} records to {args.output}")
-    print(f"   First: rowId={sorted_rows[0]['rowId']}, town_name={sorted_rows[0]['town_name']}")
-    print(f"   Last:  rowId={sorted_rows[-1]['rowId']}, town_name={sorted_rows[-1]['town_name']}")
+        # Atomic move to destination
+        shutil.move(temp_out_path, args.output)
+        print(f"[Sorter] SUCCESS: Written {len(sorted_rows)} sorted records to {args.output}")
+    finally:
+        if os.path.exists(temp_out_path):
+            os.remove(temp_out_path)
 
 if __name__ == "__main__":
     main()
