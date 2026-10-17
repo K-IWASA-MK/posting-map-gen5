@@ -240,6 +240,8 @@ const okayamaSS = new MockSpreadsheet("ss-okayama-id", "OKAYAMA", {
 mockSpreadsheets["ss-kuwana-id"] = kuwanaSS;
 mockSpreadsheets["ss-okayama-id"] = okayamaSS;
 
+// Wave A Bridge: set both TARGET_SPREADSHEET_ID (single-district) and DISTRICT_REGISTRY (legacy runtime)
+scriptPropertiesStore["TARGET_SPREADSHEET_ID"] = "ss-kuwana-id";
 scriptPropertiesStore["DISTRICT_REGISTRY"] = JSON.stringify({
   "KUWANA": "ss-kuwana-id",
   "OKAYAMA": "ss-okayama-id"
@@ -493,6 +495,10 @@ runTest('期限切れセッショントークンでのアクセス ➔ UNAUTHORI
 // ─── [CASE 10] テナント拘束 (districtId Mismatch) ➔ DENY ────────────────────
 console.log('\n▶ [TEST 10] テナント拘束 (KUWANA セッションで OKAYAMA へのアクセス遮断)');
 runTest('KUWANA のセッショントークンで OKAYAMA のデータを取得 ➔ DISTRICT_MISMATCH で拒否', () => {
+  const sessionCheck = verifyDashboardSession(validKuwanaSessionToken, "OKAYAMA");
+  assert.equal(sessionCheck.success, false);
+  assert.equal(sessionCheck.code, "DISTRICT_MISMATCH");
+
   const req = {
     postData: {
       contents: JSON.stringify({

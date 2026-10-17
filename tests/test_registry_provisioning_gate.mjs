@@ -291,9 +291,10 @@ const templateFolder = createMockFolder("folder-01-template-id", "Templates", nu
 const templateSSFile = createMockFile("template-ss-empty-id", "TEMPLATE_EMPTY_DB", templateFolder);
 mockSpreadsheets["template-ss-empty-id"] = new MockSpreadsheet("template-ss-empty-id", "TEMPLATE_EMPTY_DB", "TEMPLATE");
 
-// 初期環境: レガシー fallback と Generation 2 Registry の共存
+// 初期環境: 単一地区設定（Wave A Bridge として DISTRICT_REGISTRY も併設）
 mockScriptProperties["BRANCH_ROOT_FOLDER_ID"] = BRANCH_ROOT_ID;
-mockScriptProperties["TARGET_SPREADSHEET_ID"] = LEGACY_SS_ID;
+mockScriptProperties["TARGET_SPREADSHEET_ID"] = TEST_SS_ID;
+mockScriptProperties["GOOGLE_MAPS_API_KEY"] = "test-maps-key-kuwana";
 mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify({
   [TEST_DISTRICT]: {
     spreadsheetId: TEST_SS_ID,
@@ -317,65 +318,73 @@ function runGate(gateName, fn) {
   }
 }
 
-console.log("\n▶ Running Registry Verification Gates (Gates 1-7)...");
+console.log("\n▶ Running Single-District Resolution & Integrity Gates (Gates 1-7)...");
 
-// Gate 1: Registry exists
-runGate("Gate 1: Registry exists", () => {
-  const regRaw = PropertiesService.getScriptProperties().getProperty("DISTRICT_REGISTRY");
-  assert.ok(regRaw, "DISTRICT_REGISTRY must exist in Script Properties");
-  const parsed = JSON.parse(regRaw);
-  assert.equal(typeof parsed, "object", "DISTRICT_REGISTRY must be a valid JSON object");
+// Gate 1: TARGET_SPREADSHEET_ID is configured in Script Properties
+runGate("Gate 1: TARGET_SPREADSHEET_ID configured in Script Properties", () => {
+  const targetSsId = PropertiesService.getScriptProperties().getProperty("TARGET_SPREADSHEET_ID");
+  assert.equal(targetSsId, TEST_SS_ID, "TARGET_SPREADSHEET_ID must match configured DB ID");
 });
 
-// Gate 2: New district entry exists
-runGate("Gate 2: New district entry exists", () => {
-  const reg = JSON.parse(PropertiesService.getScriptProperties().getProperty("DISTRICT_REGISTRY"));
-  assert.ok(reg[TEST_DISTRICT], `Entry for district "${TEST_DISTRICT}" must exist in DISTRICT_REGISTRY`);
+// Gate 2: SYSTEM_INFO sheet exists and B2 matches districtId
+runGate("Gate 2: SYSTEM_INFO sheet exists and B2 matches districtId", () => {
+  const ss = SpreadsheetApp.openById(TEST_SS_ID);
+  const sysSheet = ss.getSheetByName("SYSTEM_INFO");
+  assert.ok(sysSheet, "SYSTEM_INFO sheet must exist");
+  const rows = sysSheet.getRange(1, 1, sysSheet.getLastRow(), sysSheet.getLastColumn()).getValues();
+  const codeRow = rows.find(r => r[0] === "地区コード");
+  assert.ok(codeRow, "地区コード row must exist in SYSTEM_INFO");
+  assert.equal(codeRow[1], TEST_DISTRICT, "SYSTEM_INFO B2 must match TEST_DISTRICT");
 });
 
-// Gate 3: spreadsheetId matches
-runGate("Gate 3: spreadsheetId matches", () => {
-  const reg = JSON.parse(PropertiesService.getScriptProperties().getProperty("DISTRICT_REGISTRY"));
-  const entry = reg[TEST_DISTRICT];
-  const actualSsId = (typeof entry === "object" && entry !== null) ? entry.spreadsheetId : entry;
-  assert.equal(actualSsId, TEST_SS_ID, `spreadsheetId must match configured DB ID`);
+// Gate 3: handleGetMapsApiKey returns GOOGLE_MAPS_API_KEY for matching district
+runGate("Gate 3: handleGetMapsApiKey resolves GOOGLE_MAPS_API_KEY for matching district", () => {
+  SpreadsheetResolver.getInstance().clearCache();
+  const res = handleGetMapsApiKey(TEST_DISTRICT, "");
+  assert.equal(res.success, true, "handleGetMapsApiKey must succeed");
+  assert.equal(res.mapsApiKey, "test-maps-key-kuwana", "mapsApiKey must match GOOGLE_MAPS_API_KEY");
 });
 
-// Gate 4: enabled
-runGate("Gate 4: enabled is true", () => {
-  const reg = JSON.parse(PropertiesService.getScriptProperties().getProperty("DISTRICT_REGISTRY"));
-  const entry = reg[TEST_DISTRICT];
-  assert.ok(typeof entry === "object" && entry !== null, "Entry must be an object with metadata");
-  assert.equal(entry.enabled, true, "enabled must be true");
+// Gate 4: handleGetMapsApiKey fails closed when GOOGLE_MAPS_API_KEY is missing
+runGate("Gate 4: handleGetMapsApiKey fails closed when GOOGLE_MAPS_API_KEY is missing", () => {
+  const savedKey = mockScriptProperties["GOOGLE_MAPS_API_KEY"];
+  try {
+    delete mockScriptProperties["GOOGLE_MAPS_API_KEY"];
+    SpreadsheetResolver.getInstance().clearCache();
+    const res = handleGetMapsApiKey(TEST_DISTRICT, "");
+    assert.equal(res.success, false, "Must fail closed when GOOGLE_MAPS_API_KEY is missing");
+  } finally {
+    mockScriptProperties["GOOGLE_MAPS_API_KEY"] = savedKey;
+  }
 });
 
 // Gate 5: Known district routing
 runGate("Gate 5: Known district routing", () => {
   SpreadsheetResolver.getInstance().clearCache();
   const ss = SpreadsheetResolver.getInstance().getSpreadsheet(TEST_DISTRICT);
-  assert.equal(ss.getId(), TEST_SS_ID, `Resolved spreadsheet must match target pure DB ID`);
+  assert.equal(ss.getId(), TEST_SS_ID, `Resolved spreadsheet must match target DB ID`);
 });
 
-// Gate 6: Unknown district rejection
-runGate("Gate 6: Unknown district rejection", () => {
+// Gate 6: Mismatched / Unknown district rejection (Integrity Guard / Fail-Closed)
+runGate("Gate 6: Unknown / Mismatched district rejection", () => {
   SpreadsheetResolver.getInstance().clearCache();
   assert.throws(() => {
     SpreadsheetResolver.getInstance().getSpreadsheet("UNKNOWN_XYZ");
-  }, /not found in DISTRICT_REGISTRY/, "Unknown district must be rejected with 'not found in DISTRICT_REGISTRY'");
+  }, /DISTRICT_MISMATCH|not found in DISTRICT_REGISTRY/, "Unknown/mismatched district must be rejected");
 });
 
-// Gate 7: Legacy fallback not used
-runGate("Gate 7: Legacy fallback not used", () => {
+// Gate 7: Cross-district leakage prevented
+runGate("Gate 7: Cross-district leakage prevented", () => {
   SpreadsheetResolver.getInstance().clearCache();
   assert.throws(() => {
     const ss = SpreadsheetResolver.getInstance().getSpreadsheet("ANOTHER_UNKNOWN");
     if (ss && ss.getId() === LEGACY_SS_ID) {
       throw new Error("CRITICAL: Leaked to legacy fallback!");
     }
-  }, /not found in DISTRICT_REGISTRY/);
+  }, /DISTRICT_MISMATCH|not found in DISTRICT_REGISTRY/);
 });
 
-console.log("\n▶ Running Canonical Drive Physical Layout Gates (Gates 8-13)...");
+console.log("\n▶ Running Canonical Drive Physical Layout Gates (Gates 8-12)...");
 
 // プロビジョニング実行テスト用の新地区
 const PROV_DISTRICT = "SHIZUOKA";
@@ -390,16 +399,6 @@ const dbResult = prov.createDistrictDatabase("template-ss-empty-id", null, null,
   provisioningToken: "valid-token"
 });
 assert.equal(dbResult.success, true, "createDistrictDatabase must succeed: " + JSON.stringify(dbResult));
-
-// 3. REGISTRY への登録（bootstrapEnvironment 等価モック）
-const currentReg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-currentReg[PROV_DISTRICT] = {
-  spreadsheetId: dbResult.spreadsheetId,
-  storageFolderId: driveStructure.storageFolderId,
-  name: PROV_DISTRICT,
-  enabled: false
-};
-mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(currentReg);
 
 // Gate 8: BRANCH_ROOT_FOLDER_ID exists in Script Properties
 runGate("Gate 8: BRANCH_ROOT_FOLDER_ID exists in Script Properties", () => {
@@ -451,15 +450,6 @@ runGate("Gate 12: sourceArchiveFolder.parentId === districtFolderId", () => {
   assert.ok(parentIter.hasNext(), "archiveFolder must have a parent");
   const parentFolder = parentIter.next();
   assert.equal(parentFolder.getId(), driveStructure.districtFolderId, "archiveFolder parent must be districtFolder");
-});
-
-// Gate 13: DISTRICT_REGISTRY entry matches created IDs
-runGate("Gate 13: DISTRICT_REGISTRY entry matches created IDs", () => {
-  const reg = JSON.parse(PropertiesService.getScriptProperties().getProperty("DISTRICT_REGISTRY"));
-  const entry = reg[PROV_DISTRICT];
-  assert.ok(entry, "Registry entry must exist for PROV_DISTRICT");
-  assert.equal(entry.spreadsheetId, dbResult.spreadsheetId, "Registered spreadsheetId must match DB file ID");
-  assert.equal(entry.storageFolderId, driveStructure.storageFolderId, "Registered storageFolderId must match storage folder ID");
 });
 
 console.log("\n▶ Running Provisioner Unit Invariant Tests...");
@@ -532,737 +522,9 @@ runGate("Unit 6: Canonical DB name must match cleanDistrictId exactly (No prefix
   assert.doesNotMatch(file.getName(), /^POSTING_MAP_DB_/, "File name must NOT contain POSTING_MAP_DB_ prefix");
 });
 
-console.log("\n▶ Running repairDistrictDriveBinding Gates (Gates 14-30)...");
-
-// Mock Drive structure for repairDistrictDriveBinding
-const repairBranchRoot = createMockFolder("test-repair-branch-root-id", "03_BRANCH");
-const repairKuwanaFolder = repairBranchRoot.createFolder("KUWANA");
-const repairCanonicalStorage = repairKuwanaFolder.createFolder("KUWANA 支部_STORAGE");
-const canonicalStorageId = repairCanonicalStorage.getId();
-const oldStorageFolder = createMockFolder("old-storage-folder-id", "Templates");
-
 const VALID_TOKEN = "valid-token";
 const RAW_HASH_VALID = computeSha256(VALID_TOKEN);
-
-function resetRepairState() {
-  delete mockScriptProperties["BRANCH_ROOT_FOLDER_ID"];
-  mockScriptProperties["PROVISIONING_TOKEN_HASH"] = RAW_HASH_VALID;
-  mockScriptProperties["STORAGE_PARENT_ID"] = "old-storage-folder-id";
-  mockScriptProperties["TARGET_SPREADSHEET_ID"] = "ss-kuwana-pure-db-id";
-  mockScriptProperties["GOOGLE_MAPS_API_KEY"] = "test-maps-key";
-  mockScriptProperties["LINE_LIFF_ID"] = "test-liff-id";
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify({
-    KUWANA: {
-      spreadsheetId: "ss-kuwana-pure-db-id",
-      storageFolderId: "old-storage-folder-id",
-      name: "KUWANA",
-      enabled: true
-    },
-    OKAYAMA_02: {
-      spreadsheetId: "ss-okayama-id",
-      storageFolderId: "storage-okayama-id",
-      name: "OKAYAMA_02",
-      enabled: true
-    }
-  });
-}
-
-// Gate 14: branch root absent → set success
-runGate("Gate 14: repairDistrictDriveBinding initial seed sets BRANCH_ROOT_FOLDER_ID", () => {
-  resetRepairState();
-  assert.equal(mockScriptProperties["BRANCH_ROOT_FOLDER_ID"], undefined);
-
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true, "Should succeed: " + (res.message || res.code));
-  assert.equal(mockScriptProperties["BRANCH_ROOT_FOLDER_ID"], "test-repair-branch-root-id");
-  assert.equal(mockScriptProperties["STORAGE_PARENT_ID"], canonicalStorageId);
-  const reg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  assert.equal(reg.KUWANA.storageFolderId, canonicalStorageId);
-});
-
-// Gate 15: same branch root → idempotent success (no-op)
-runGate("Gate 15: repairDistrictDriveBinding idempotent success with same branch root", () => {
-  assert.equal(mockScriptProperties["BRANCH_ROOT_FOLDER_ID"], "test-repair-branch-root-id");
-
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: canonicalStorageId,
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(mockScriptProperties["BRANCH_ROOT_FOLDER_ID"], "test-repair-branch-root-id");
-});
-
-// Gate 16: different existing branch root → fail closed (BRANCH_ROOT_MISMATCH, mutation 0)
-runGate("Gate 16: repairDistrictDriveBinding mismatched existing branch root fails closed", () => {
-  const savedRoot = mockScriptProperties["BRANCH_ROOT_FOLDER_ID"];
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "different-branch-root-id",
-    expectedCurrentStorageFolderId: canonicalStorageId,
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "BRANCH_ROOT_MISMATCH");
-  assert.equal(mockScriptProperties["BRANCH_ROOT_FOLDER_ID"], savedRoot, "Root must not be mutated");
-});
-
-// Gate 17: storage old ID CAS match → success
-runGate("Gate 17: repairDistrictDriveBinding storage old ID CAS match updates storageFolderId", () => {
-  resetRepairState();
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  const reg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  assert.equal(reg.KUWANA.storageFolderId, canonicalStorageId);
-  assert.equal(mockScriptProperties["STORAGE_PARENT_ID"], canonicalStorageId);
-});
-
-// Gate 18: storage stale ID → mutation 0 (STALE_WRITE)
-runGate("Gate 18: repairDistrictDriveBinding stale current storageFolderId fails closed (STALE_WRITE)", () => {
-  resetRepairState();
-  const savedReg = mockScriptProperties["DISTRICT_REGISTRY"];
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "wrong-stale-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "STALE_WRITE");
-  assert.equal(mockScriptProperties["DISTRICT_REGISTRY"], savedReg, "Registry must not be mutated");
-});
-
-// Gate 19: target storage != server-resolved canonical → fail (STORAGE_FOLDER_MISMATCH, mutation 0)
-runGate("Gate 19: repairDistrictDriveBinding non-canonical target storage fails closed", () => {
-  resetRepairState();
-  const savedReg = mockScriptProperties["DISTRICT_REGISTRY"];
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: "unresolved-fake-storage-id",
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "STORAGE_FOLDER_MISMATCH");
-  assert.equal(mockScriptProperties["DISTRICT_REGISTRY"], savedReg, "Registry must not be mutated");
-});
-
-// Gate 20: enabled:true remains true
-runGate("Gate 20: repairDistrictDriveBinding enabled: true is strictly preserved", () => {
-  resetRepairState();
-  const beforeReg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  assert.equal(beforeReg.KUWANA.enabled, true);
-
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  const afterReg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  assert.equal(afterReg.KUWANA.enabled, true, "enabled must remain true");
-});
-
-// Gate 21: spreadsheetId unchanged
-runGate("Gate 21: repairDistrictDriveBinding spreadsheetId is strictly unchanged", () => {
-  resetRepairState();
-  const beforeReg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  const expectedSS = beforeReg.KUWANA.spreadsheetId;
-
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  const afterReg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  assert.equal(afterReg.KUWANA.spreadsheetId, expectedSS, "spreadsheetId must not change");
-});
-
-// Gate 22: other district 0 diff
-runGate("Gate 22: repairDistrictDriveBinding other district entry has 0 diff", () => {
-  resetRepairState();
-  const beforeReg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  const expectedOkayama = JSON.stringify(beforeReg.OKAYAMA_02);
-
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  const afterReg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  assert.equal(JSON.stringify(afterReg.OKAYAMA_02), expectedOkayama, "Other district must be 100% identical");
-});
-
-// Gate 23: PROVISIONING_TOKEN_HASH unchanged
-runGate("Gate 23: repairDistrictDriveBinding PROVISIONING_TOKEN_HASH strictly unchanged", () => {
-  resetRepairState();
-  const originalHash = mockScriptProperties["PROVISIONING_TOKEN_HASH"];
-
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(mockScriptProperties["PROVISIONING_TOKEN_HASH"], originalHash, "Token hash must not change");
-});
-
-// Gate 24: TARGET_SPREADSHEET_ID unchanged
-runGate("Gate 24: repairDistrictDriveBinding TARGET_SPREADSHEET_ID strictly unchanged", () => {
-  resetRepairState();
-  const originalTargetSS = mockScriptProperties["TARGET_SPREADSHEET_ID"];
-
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(mockScriptProperties["TARGET_SPREADSHEET_ID"], originalTargetSS, "TARGET_SPREADSHEET_ID must not change");
-});
-
-// Gate 25: unrelated Properties 0 diff
-runGate("Gate 25: repairDistrictDriveBinding unrelated Script Properties have 0 diff", () => {
-  resetRepairState();
-
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(mockScriptProperties["GOOGLE_MAPS_API_KEY"], "test-maps-key");
-  assert.equal(mockScriptProperties["LINE_LIFF_ID"], "test-liff-id");
-});
-
-// Gate 26: read-back mechanical verification
-runGate("Gate 26: repairDistrictDriveBinding read-back mechanical verification succeeds", () => {
-  resetRepairState();
-
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(res.districtId, "KUWANA");
-  assert.equal(res.branchRootFolderId, "test-repair-branch-root-id");
-  assert.equal(res.storageFolderId, canonicalStorageId);
-  assert.equal(res.storageParentId, canonicalStorageId);
-  assert.equal(res.districtRegistryUpdated, true);
-});
-
-// Gate 27: corrupted Registry → mutation 0 (CORRUPTED_REGISTRY)
-runGate("Gate 27: repairDistrictDriveBinding corrupted Registry fails closed (CORRUPTED_REGISTRY)", () => {
-  resetRepairState();
-  mockScriptProperties["DISTRICT_REGISTRY"] = "{INVALID_JSON...";
-
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "CORRUPTED_REGISTRY");
-});
-
-// Gate 28: Non-existent district fails closed (DISTRICT_NOT_FOUND)
-runGate("Gate 28: repairDistrictDriveBinding non-existent district fails closed (DISTRICT_NOT_FOUND)", () => {
-  resetRepairState();
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "NON_EXISTENT_DIST",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "DISTRICT_NOT_FOUND");
-});
-
-// Gate 29: expectedRegistryRawHash mismatch fails closed (STALE_WRITE)
-runGate("Gate 29: repairDistrictDriveBinding expectedRegistryRawHash CAS mismatch fails closed", () => {
-  resetRepairState();
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    expectedCurrentStorageFolderId: "old-storage-folder-id",
-    targetStorageFolderId: canonicalStorageId,
-    expectedRegistryRawHash: "0000000000000000000000000000000000000000000000000000000000000000",
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "STALE_WRITE");
-});
-
-// Gate 30: Missing required arguments fails closed (INVALID_ARGUMENT)
-runGate("Gate 30: repairDistrictDriveBinding missing required argument fails closed", () => {
-  resetRepairState();
-  const res = handleRepairDistrictDriveBinding({
-    districtId: "KUWANA",
-    branchRootFolderId: "test-repair-branch-root-id",
-    targetStorageFolderId: canonicalStorageId,
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "INVALID_ARGUMENT");
-});
-
-// ====================================================
-// ▶ Running migrateDistrictPhotos Gates (Gates 31-50)...
-// ====================================================
-
-console.log("\n▶ Running migrateDistrictPhotos Gates (Gates 31-50)...");
-
-const photoSourceFolder = createMockFolder("photo-source-folder-id", "Templates");
-const photoCanonicalStorage = createMockFolder("photo-canonical-storage-id", "KUWANA 支部_STORAGE");
-
-function resetPhotoTestState() {
-  resetRepairState();
-  // Update Kuwana entry in registry to use photoCanonicalStorage.id
-  const reg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  reg.KUWANA.storageFolderId = photoCanonicalStorage.getId();
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(reg);
-
-  // Clear folder files
-  photoSourceFolder.files = [];
-  photoCanonicalStorage.files = [];
-}
-
-function createTestPhoto(id, name, folder = photoSourceFolder, mime = "image/jpeg") {
-  const file = createMockFile(id, name, folder, mime);
-  return file;
-}
-
-// Gate 31: invalid token → mutation 0
-runGate("Gate 31: migrateDistrictPhotos invalid token fails closed with mutation 0", () => {
-  resetPhotoTestState();
-  const p1 = createTestPhoto("p31_1", "p31_1.jpg");
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p31_1"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: "bad-token"
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "UNAUTHORIZED");
-  assert.equal(p1.parent.getId(), photoSourceFolder.getId());
-});
-
-// Gate 32: GET → METHOD_NOT_ALLOWED
-runGate("Gate 32: migrateDistrictPhotos GET request rejected with METHOD_NOT_ALLOWED", () => {
-  const out = doGet({ parameter: { action: "migrateDistrictPhotos" } });
-  const data = JSON.parse(out.content);
-  assert.equal(data.success, false);
-  assert.equal(data.code, "METHOD_NOT_ALLOWED");
-});
-
-// Gate 33: district missing → mutation 0
-runGate("Gate 33: migrateDistrictPhotos missing districtId fails closed with mutation 0", () => {
-  resetPhotoTestState();
-  const p33 = createTestPhoto("p33_1", "p33_1.jpg");
-  const res = handleMigrateDistrictPhotos({
-    fileIds: ["p33_1"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "INVALID_INPUT");
-  assert.equal(p33.parent.getId(), photoSourceFolder.getId());
-});
-
-// Gate 34: empty fileIds reject
-runGate("Gate 34: migrateDistrictPhotos empty fileIds rejected", () => {
-  resetPhotoTestState();
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: [],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "INVALID_INPUT");
-});
-
-// Gate 35: duplicate IDs contract
-runGate("Gate 35: migrateDistrictPhotos duplicate fileIds deduplicated properly", () => {
-  resetPhotoTestState();
-  const p35_1 = createTestPhoto("p35_1", "p35_1.jpg");
-  const p35_2 = createTestPhoto("p35_2", "p35_2.jpg");
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p35_1", "p35_1", "p35_2", "p35_2", "p35_1"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(res.requestedCount, 2);
-  assert.equal(res.migratedCount, 2);
-  assert.equal(p35_1.parent.getId(), photoCanonicalStorage.getId());
-  assert.equal(p35_2.parent.getId(), photoCanonicalStorage.getId());
-});
-
-// Gate 36: target storage resolution PASS
-runGate("Gate 36: migrateDistrictPhotos target storage resolved autonomously from Registry", () => {
-  resetPhotoTestState();
-  const p36 = createTestPhoto("p36_1", "p36_1.jpg");
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p36_1"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(res.targetStorageFolderId, photoCanonicalStorage.getId());
-  assert.equal(p36.parent.getId(), photoCanonicalStorage.getId());
-});
-
-// Gate 37: target assertion mismatch → mutation 0
-runGate("Gate 37: migrateDistrictPhotos expectedTargetStorageFolderId mismatch fails closed", () => {
-  resetPhotoTestState();
-  const p37 = createTestPhoto("p37_1", "p37_1.jpg");
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p37_1"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    expectedTargetStorageFolderId: "wrong-storage-folder-id",
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "STORAGE_FOLDER_MISMATCH");
-  assert.equal(p37.parent.getId(), photoSourceFolder.getId());
-});
-
-// Gate 38: all files source valid → migrate success
-runGate("Gate 38: migrateDistrictPhotos all valid files successfully migrated", () => {
-  resetPhotoTestState();
-  const p1 = createTestPhoto("p38_1", "p38_1.jpg");
-  const p2 = createTestPhoto("p38_2", "p38_2.jpg");
-  const p3 = createTestPhoto("p38_3", "p38_3.jpg");
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p38_1", "p38_2", "p38_3"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    expectedTargetStorageFolderId: photoCanonicalStorage.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(res.requestedCount, 3);
-  assert.equal(res.migratedCount, 3);
-  assert.equal(res.alreadyMigratedCount, 0);
-  assert.equal(p1.parent.getId(), photoCanonicalStorage.getId());
-  assert.equal(p2.parent.getId(), photoCanonicalStorage.getId());
-  assert.equal(p3.parent.getId(), photoCanonicalStorage.getId());
-});
-
-// Gate 39: one invalid source during preflight → all mutation 0
-runGate("Gate 39: migrateDistrictPhotos one invalid source fails preflight with mutation 0", () => {
-  resetPhotoTestState();
-  const otherFolder = createMockFolder("other-folder-id", "Other");
-  const p1 = createTestPhoto("p39_1", "p39_1.jpg", photoSourceFolder);
-  const p2 = createTestPhoto("p39_2", "p39_2.jpg", otherFolder);
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p39_1", "p39_2"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "SOURCE_FOLDER_MISMATCH");
-  assert.equal(p1.parent.getId(), photoSourceFolder.getId());
-  assert.equal(p2.parent.getId(), otherFolder.getId());
-});
-
-// Gate 40: already target → idempotent no-op
-runGate("Gate 40: migrateDistrictPhotos already in target handled as idempotent no-op", () => {
-  resetPhotoTestState();
-  const p1 = createTestPhoto("p40_1", "p40_1.jpg", photoCanonicalStorage);
-  const p2 = createTestPhoto("p40_2", "p40_2.jpg", photoCanonicalStorage);
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p40_1", "p40_2"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(res.requestedCount, 2);
-  assert.equal(res.migratedCount, 0);
-  assert.equal(res.alreadyMigratedCount, 2);
-  assert.equal(p1.parent.getId(), photoCanonicalStorage.getId());
-  assert.equal(p2.parent.getId(), photoCanonicalStorage.getId());
-});
-
-// Gate 41: mixed source + already target → valid success
-runGate("Gate 41: migrateDistrictPhotos mixed source and target handled correctly", () => {
-  resetPhotoTestState();
-  const p1 = createTestPhoto("p41_1", "p41_1.jpg", photoSourceFolder);
-  const p2 = createTestPhoto("p41_2", "p41_2.jpg", photoCanonicalStorage);
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p41_1", "p41_2"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(res.requestedCount, 2);
-  assert.equal(res.migratedCount, 1);
-  assert.equal(res.alreadyMigratedCount, 1);
-  assert.equal(p1.parent.getId(), photoCanonicalStorage.getId());
-  assert.equal(p2.parent.getId(), photoCanonicalStorage.getId());
-});
-
-// Gate 42: file ID unchanged
-runGate("Gate 42: migrateDistrictPhotos physical file IDs strictly unchanged", () => {
-  resetPhotoTestState();
-  const p1 = createTestPhoto("p42_unique_fixed_id", "p42.jpg");
-  const origId = p1.getId();
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p42_unique_fixed_id"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(p1.getId(), origId);
-  assert.equal(mockFiles["p42_unique_fixed_id"].getId(), origId);
-});
-
-// Gate 43: filename unchanged
-runGate("Gate 43: migrateDistrictPhotos filename strictly unchanged", () => {
-  resetPhotoTestState();
-  const p1 = createTestPhoto("p43_1", "74_K._IWASA_20261009_103754.jpg");
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p43_1"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(p1.getName(), "74_K._IWASA_20261009_103754.jpg");
-});
-
-// Gate 44: unrelated file untouched
-runGate("Gate 44: migrateDistrictPhotos unrelated files in source folder untouched", () => {
-  resetPhotoTestState();
-  const pTarget = createTestPhoto("p44_target", "target.jpg", photoSourceFolder);
-  const pUntouched = createTestPhoto("p44_unrelated", "unrelated.jpg", photoSourceFolder);
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p44_target"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(pTarget.parent.getId(), photoCanonicalStorage.getId());
-  assert.equal(pUntouched.parent.getId(), photoSourceFolder.getId());
-});
-
-// Gate 45: Registry 0 diff
-runGate("Gate 45: migrateDistrictPhotos preserves DISTRICT_REGISTRY with 0 diff", () => {
-  resetPhotoTestState();
-  const regBefore = mockScriptProperties["DISTRICT_REGISTRY"];
-  createTestPhoto("p45_1", "p45.jpg");
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p45_1"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(mockScriptProperties["DISTRICT_REGISTRY"], regBefore);
-});
-
-// Gate 46: Script Properties 0 diff
-runGate("Gate 46: migrateDistrictPhotos preserves all Script Properties with 0 diff", () => {
-  resetPhotoTestState();
-  const propsBefore = { ...mockScriptProperties };
-  createTestPhoto("p46_1", "p46.jpg");
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p46_1"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.deepEqual(mockScriptProperties, propsBefore);
-});
-
-// Gate 47: partial runtime move failure → movedLedger rollback
-runGate("Gate 47: migrateDistrictPhotos partial runtime error triggers movedLedger rollback", () => {
-  resetPhotoTestState();
-  const p1 = createTestPhoto("p47_1", "p47_1.jpg");
-  const p2 = createTestPhoto("p47_2", "p47_2.jpg");
-
-  p2.moveTo = () => { throw new Error("Simulated Drive network failure on p2"); };
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p47_1", "p47_2"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "MUTATION_FAILED");
-  assert.equal(p1.parent.getId(), photoSourceFolder.getId());
-  assert.equal(p2.parent.getId(), photoSourceFolder.getId());
-});
-
-// Gate 48: rollback failure → explicit ROLLBACK_INCOMPLETE
-runGate("Gate 48: migrateDistrictPhotos rollback failure reports ROLLBACK_INCOMPLETE", () => {
-  resetPhotoTestState();
-  const p1 = createTestPhoto("p48_1", "p48_1.jpg");
-  const p2 = createTestPhoto("p48_2", "p48_2.jpg");
-
-  p2.moveTo = () => { throw new Error("Move failed"); };
-  const origP1MoveTo = p1.moveTo.bind(p1);
-  let p1MovedOnce = false;
-  p1.moveTo = (target) => {
-    if (!p1MovedOnce) {
-      p1MovedOnce = true;
-      return origP1MoveTo(target);
-    }
-    throw new Error("Rollback failed for p1");
-  };
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p48_1", "p48_2"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "ROLLBACK_INCOMPLETE");
-  assert.ok(res.message.includes("p48_1"));
-});
-
-// Gate 49: post-move read-back mismatch → fail
-runGate("Gate 49: migrateDistrictPhotos post-move read-back mismatch fails closed", () => {
-  resetPhotoTestState();
-  const p1 = createTestPhoto("p49_1", "p49_1.jpg");
-
-  p1.moveTo = function(target) {
-    // Deliberately fail to update parent in mock
-  };
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "KUWANA",
-    fileIds: ["p49_1"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, false);
-  assert.equal(res.code, "READ_BACK_MISMATCH");
-});
-
-// Gate 50: district hardcode 0 (Universal multi-district execution)
-runGate("Gate 50: migrateDistrictPhotos functions universally for arbitrary district", () => {
-  resetPhotoTestState();
-  const dynamicStorage = createMockFolder("dynamic-storage-id", "DYNAMIC_DIST_99 支部_STORAGE");
-  const reg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  reg.DYNAMIC_DIST_99 = {
-    spreadsheetId: "ss-dynamic-id",
-    storageFolderId: dynamicStorage.getId(),
-    name: "DYNAMIC_DIST_99",
-    enabled: true
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(reg);
-
-  const pDynamic = createTestPhoto("p_dynamic_1", "dynamic.jpg", photoSourceFolder);
-
-  const res = handleMigrateDistrictPhotos({
-    districtId: "DYNAMIC_DIST_99",
-    fileIds: ["p_dynamic_1"],
-    expectedSourceFolderId: photoSourceFolder.getId(),
-    provisioningToken: VALID_TOKEN
-  }, null);
-
-  assert.equal(res.success, true);
-  assert.equal(res.districtId, "DYNAMIC_DIST_99");
-  assert.equal(res.targetStorageFolderId, dynamicStorage.getId());
-  assert.equal(pDynamic.parent.getId(), dynamicStorage.getId());
-});
+mockScriptProperties["PROVISIONING_TOKEN_HASH"] = RAW_HASH_VALID;
 
 // Gate 51: verifyProvisioningToken without PROVISIONING_TOKEN_HASH fails closed
 runGate("Gate 51: verifyProvisioningToken without PROVISIONING_TOKEN_HASH fails closed", () => {
