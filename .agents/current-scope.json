@@ -1,8 +1,7 @@
 {
-  "mission": "MIE-03 Phase 2 8-Column Master Completion & Full-Data Verification",
+  "mission": "MIE-03 Phase 2 Evidence-Bound Empty & Polygon Topology Rectification",
   "files": [
     ".agents/current-scope.json",
-    "scripts/fetch-district-raw-data.py",
     "scripts/build-district-master.py",
     "tests/test_district_phase2_universal.mjs"
   ]
