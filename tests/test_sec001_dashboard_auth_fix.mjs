@@ -240,12 +240,8 @@ const okayamaSS = new MockSpreadsheet("ss-okayama-id", "OKAYAMA", {
 mockSpreadsheets["ss-kuwana-id"] = kuwanaSS;
 mockSpreadsheets["ss-okayama-id"] = okayamaSS;
 
-// Wave A Bridge: set both TARGET_SPREADSHEET_ID (single-district) and DISTRICT_REGISTRY (legacy runtime)
+// 1地区完結設定: TARGET_SPREADSHEET_ID のみ設定（DISTRICT_REGISTRY 廃止）
 scriptPropertiesStore["TARGET_SPREADSHEET_ID"] = "ss-kuwana-id";
-scriptPropertiesStore["DISTRICT_REGISTRY"] = JSON.stringify({
-  "KUWANA": "ss-kuwana-id",
-  "OKAYAMA": "ss-okayama-id"
-});
 
 // スクリプト群を VM コンテキストで読み込み
 const sessionCode = fs.readFileSync(path.join(rootDir, "active/api/auth/session.js"), "utf8");

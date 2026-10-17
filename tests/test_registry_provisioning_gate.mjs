@@ -291,18 +291,10 @@ const templateFolder = createMockFolder("folder-01-template-id", "Templates", nu
 const templateSSFile = createMockFile("template-ss-empty-id", "TEMPLATE_EMPTY_DB", templateFolder);
 mockSpreadsheets["template-ss-empty-id"] = new MockSpreadsheet("template-ss-empty-id", "TEMPLATE_EMPTY_DB", "TEMPLATE");
 
-// 初期環境: 単一地区設定（Wave A Bridge として DISTRICT_REGISTRY も併設）
+// 初期環境: 1地区完結設定（TARGET_SPREADSHEET_ID のみ、DISTRICT_REGISTRY 廃止）
 mockScriptProperties["BRANCH_ROOT_FOLDER_ID"] = BRANCH_ROOT_ID;
 mockScriptProperties["TARGET_SPREADSHEET_ID"] = TEST_SS_ID;
 mockScriptProperties["GOOGLE_MAPS_API_KEY"] = "test-maps-key-kuwana";
-mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify({
-  [TEST_DISTRICT]: {
-    spreadsheetId: TEST_SS_ID,
-    storageFolderId: "folder-kuwana-storage-id",
-    name: TEST_DISTRICT,
-    enabled: true
-  }
-});
 
 let passCount = 0;
 let failCount = 0;
@@ -320,10 +312,24 @@ function runGate(gateName, fn) {
 
 console.log("\n▶ Running Single-District Resolution & Integrity Gates (Gates 1-7)...");
 
-// Gate 1: TARGET_SPREADSHEET_ID is configured in Script Properties
-runGate("Gate 1: TARGET_SPREADSHEET_ID configured in Script Properties", () => {
+// Gate 1: TARGET_SPREADSHEET_ID configured & DISTRICT_REGISTRY retired from Runtime
+runGate("Gate 1: TARGET_SPREADSHEET_ID configured & DISTRICT_REGISTRY retired from Runtime", () => {
   const targetSsId = PropertiesService.getScriptProperties().getProperty("TARGET_SPREADSHEET_ID");
   assert.equal(targetSsId, TEST_SS_ID, "TARGET_SPREADSHEET_ID must match configured DB ID");
+  assert.equal(
+    PropertiesService.getScriptProperties().getProperty("DISTRICT_REGISTRY"),
+    null,
+    "DISTRICT_REGISTRY must not be set in single-district runtime"
+  );
+  const driveCode = fs.readFileSync(path.join(REPO_ROOT, 'active/infrastructure/drive/drive_adapter.js'), 'utf8');
+  const batchCode = fs.readFileSync(path.join(REPO_ROOT, 'active/gas/v2_batch.js'), 'utf8');
+  assert.ok(!adapterCode.includes("DISTRICT_REGISTRY"), "spreadsheet_adapter.js must not reference DISTRICT_REGISTRY");
+  assert.ok(!driveCode.includes("DISTRICT_REGISTRY"), "drive_adapter.js must not reference DISTRICT_REGISTRY");
+  assert.ok(!batchCode.includes("DISTRICT_REGISTRY"), "v2_batch.js must not reference DISTRICT_REGISTRY");
+  assert.ok(!v2ApiCode.includes("DISTRICT_REGISTRY"), "v2_api.js must not reference DISTRICT_REGISTRY");
+  for (const deprecatedAction of ["bootstrapEnvironment", "switchDistrictSpreadsheet", "repairDistrictDriveBinding", "migrateDistrictPhotos"]) {
+    assert.ok(!v2ApiCode.includes(deprecatedAction), `v2_api.js must not expose deprecated parent-GAS action: ${deprecatedAction}`);
+  }
 });
 
 // Gate 2: SYSTEM_INFO sheet exists and B2 matches districtId
@@ -370,7 +376,7 @@ runGate("Gate 6: Unknown / Mismatched district rejection", () => {
   SpreadsheetResolver.getInstance().clearCache();
   assert.throws(() => {
     SpreadsheetResolver.getInstance().getSpreadsheet("UNKNOWN_XYZ");
-  }, /DISTRICT_MISMATCH|not found in DISTRICT_REGISTRY/, "Unknown/mismatched district must be rejected");
+  }, /DISTRICT_MISMATCH/, "Unknown/mismatched district must be rejected by verifyIntegrityGuard with DISTRICT_MISMATCH");
 });
 
 // Gate 7: Cross-district leakage prevented
@@ -381,7 +387,7 @@ runGate("Gate 7: Cross-district leakage prevented", () => {
     if (ss && ss.getId() === LEGACY_SS_ID) {
       throw new Error("CRITICAL: Leaked to legacy fallback!");
     }
-  }, /DISTRICT_MISMATCH|not found in DISTRICT_REGISTRY/);
+  }, /DISTRICT_MISMATCH/);
 });
 
 console.log("\n▶ Running Canonical Drive Physical Layout Gates (Gates 8-12)...");

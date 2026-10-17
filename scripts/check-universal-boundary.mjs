@@ -597,6 +597,16 @@ const DEPRECATED_PARENT_GAS_REGEX = new RegExp(
     '親\\s*(?:Standalone\\s*)?GAS|親\\s*Standalone\\s*GAS\\s*1本|親GAS\\s*(?:Registry|Gateway|Script\\s*Properties)|新地区追加時に\\s*GAS\\s*プロジェクトを複製することを永久に禁止)'
 );
 
+const DEPRECATED_RUNTIME_REGISTRY_REGEX = new RegExp(
+  '\\b(?:' +
+    'DISTRICT' + '_REGISTRY|' +
+    'bootstrap' + 'Environment|' +
+    'switchDistrict' + 'Spreadsheet|' +
+    'repairDistrict' + 'DriveBinding|' +
+    'migrateDistrict' + 'Photos' +
+  ')\\b'
+);
+
 const PERSON_FIELD_LINE_REGEX =
   /\b(?:staffName|displayName|holderName|requesterName|receiverName|userName|memberName|first|last|author|posterName)\s*:/;
 
@@ -1049,6 +1059,19 @@ function scanSingleFile(relPath, content, classification, dynamicTokens, stage) 
           lineNum,
           'STRUCTURAL',
           'Deprecated Single-Parent Shared GAS topology asserted/instructed as active contract'
+        );
+      }
+
+      if (
+        surface === 'Runtime' &&
+        DEPRECATED_RUNTIME_REGISTRY_REGEX.test(line) &&
+        !isNegationOrDeprecationContext(line)
+      ) {
+        pushFinding(
+          'S-05',
+          lineNum,
+          'STRUCTURAL',
+          'Deprecated Parent-GAS Registry / multi-district routing identifier in Runtime surface'
         );
       }
 
