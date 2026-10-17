@@ -1,8 +1,13 @@
 {
-  "mission": "MIE-03 Phase 2 Evidence-Bound Empty & Polygon Topology Rectification",
+  "mission": "Universal District Provisioning Skill Formalization & Topological Hardening",
   "files": [
     ".agents/current-scope.json",
     "scripts/build-district-master.py",
-    "tests/test_district_phase2_universal.mjs"
+    "tests/test_district_phase2_universal.mjs",
+    "docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md",
+    ".agents/skills/address-master-generation/SKILL.md",
+    ".agents/skills/district-data-provisioning/SKILL.md",
+    ".agents/os-registry.json",
+    ".agents/agents/deployer/agent.md"
   ]
 }
