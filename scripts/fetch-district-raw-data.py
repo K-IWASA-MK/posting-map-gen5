@@ -25,14 +25,21 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Fetch district raw data autonomously from MLIT and verify ABR master')
+    parser = argparse.ArgumentParser(description='Fetch district raw data autonomously from MLIT and e-Stat, and verify ABR master')
     parser.add_argument('--city-code', required=True, help='5-digit municipality code (e.g. 24205)')
-    parser.add_argument('--ref-dir', required=True, help='Explicit destination directory to cache location reference data (Required; no default)')
+    parser.add_argument('--target-cities', action='append', help='Additional municipality codes for district-wide resolution (optional)')
+    parser.add_argument('--ref-dir', default=None, help='Explicit destination directory to cache location reference data (Required for Phase 1)')
     parser.add_argument('--estat-dir', default=None, help='Directory to cache e-Stat data (optional)')
+    parser.add_argument('--fetch-estat', action='store_true', help='Execute autonomous e-Stat Census Small Area fetch and Latest Census Resolution Gate')
+    parser.add_argument('--estat-only', action='store_true', help='Execute e-Stat resolution gate and fetch only (skip MLIT/ABR)')
+    parser.add_argument('--estat-catalog-url', default=None, help='URL to fetch e-Stat small area boundary catalog (optional)')
+    parser.add_argument('--estat-catalog-mock', default=None, help='Path to mock e-Stat catalog JSON/HTML file for testing (optional)')
+    parser.add_argument('--estat-provenance-out', default=None, help='Path to output e-Stat provenance JSON (optional)')
     parser.add_argument('--abr-file', action='append', help='Path to Digital Agency ABR town master CSV (Required for Phase 1 verification)')
     parser.add_argument('--abr-dir', default=None, help='Directory containing Digital Agency ABR town master CSV files')
     parser.add_argument('--data-kind', default='1', choices=['1'], help='1: 大字・町丁目レベル (data_kind=1 only; block level is strictly prohibited)')
     return parser.parse_args()
+
 
 def compute_sha256(filepath):
     """Compute SHA-256 hash of a file."""
@@ -577,31 +584,423 @@ def verify_abr_master(city_code, abr_files=None, abr_dir=None):
     print(f"[ABR Verifier] PASS: Verified {len(verified_reports)} ABR file(s). Target municipality matched {matched_city_records_total} records.")
     return verified_reports
 
-def verify_estat_data(city_code, estat_dir):
+ESTAT_MANDATORY_ATTRIBUTES = ['KEY_CODE', 'S_NAME', 'JINKO', 'SETAI', 'HCODE']
+
+def extract_years_from_text(text):
     """
-    Verify presence and integrity of e-Stat Census Small Area Shapefile (Phase 2 legacy support).
+    Dynamically extract 4-digit census years without any hardcoded year array.
+    Strictly filters out HTML attribute numbers by stripping tags and binding to census keywords.
     """
-    if not estat_dir:
-        return None, None
-    c_dir = os.path.join(estat_dir, city_code)
-    shp_path = os.path.join(c_dir, f"r2ka{city_code}.shp")
-    dbf_path = os.path.join(c_dir, f"r2ka{city_code}.dbf")
+    text_clean = re.sub(r'<[^>]+>', ' ', text)
+    matches = set()
+    patterns = [
+        r'(?:令和\s*(\d+)\s*年|平成\s*(\d+)\s*年|([12]\d{3})\s*年)\s*(?:度\s*)?(?:国勢調査|Census)',
+        r'(?:国勢調査|Census)[^\d]{0,15}(?:令和\s*(\d+)\s*年|平成\s*(\d+)\s*年|([12]\d{3})\s*年)',
+        r'\b([12]\d{3})\b'
+    ]
+    for p in patterns[:2]:
+        for m in re.finditer(p, text_clean):
+            r_reiwa, r_heisei, r_ad = m.groups()
+            if r_reiwa: matches.add(2018 + int(r_reiwa))
+            elif r_heisei: matches.add(1988 + int(r_heisei))
+            elif r_ad: matches.add(int(r_ad))
 
-    if os.path.exists(shp_path) and os.path.exists(dbf_path):
-        print(f"[e-Stat Verifier] Verified existing e-Stat Shapefile & DBF at {c_dir}")
-        return shp_path, dbf_path
+    if not matches:
+        for m in re.finditer(patterns[2], text_clean):
+            y = int(m.group(1))
+            if 1900 <= y <= 2100:
+                matches.add(y)
 
-    zip_candidates = [f for f in os.listdir(c_dir) if f.endswith('.zip')] if os.path.exists(c_dir) else []
-    if zip_candidates:
-        zip_path = os.path.join(c_dir, zip_candidates[0])
-        print(f"[e-Stat Verifier] Extracting e-Stat ZIP {zip_path}...")
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            zf.extractall(c_dir)
-        if os.path.exists(shp_path) and os.path.exists(dbf_path):
-            return shp_path, dbf_path
+    return sorted(list(matches), reverse=True)
 
-    print(f"[e-Stat Verifier] Note: e-Stat Shapefile not found at {shp_path} (Phase 2 attribute).")
-    return None, None
+def discover_census_candidates(catalog_url=None, catalog_mock=None, estat_dir=None):
+    """
+    Discover available census years and their metadata dynamically from e-Stat catalog or directory.
+    STRICT PROHIBITION: Hardcoded candidate list (e.g. [2025, 2020, 2015]) is strictly forbidden!
+    """
+    candidates = {}
+
+    # 1. From catalog mock file if provided (JSON or HTML)
+    if catalog_mock and os.path.exists(catalog_mock):
+        print(f"[Census Gate] Discovering census candidates from mock catalog: {catalog_mock}...")
+        with open(catalog_mock, 'r', encoding='utf-8') as f:
+            content = f.read()
+        try:
+            data = json.loads(content)
+            if isinstance(data, dict) and 'datasets' in data:
+                for ds in data['datasets']:
+                    y = ds.get('census_year')
+                    if y:
+                        candidates[int(y)] = ds
+                return candidates
+        except Exception:
+            pass
+
+        # Text/HTML pattern parsing
+        years = extract_years_from_text(content)
+        for y in years:
+            candidates[y] = {
+                'census_year': y,
+                'status': 'published' if '小地域' in content else 'unknown',
+                'has_small_area': '小地域' in content or '町丁' in content,
+                'source_text': content[:200]
+            }
+        return candidates
+
+    # 2. From online catalog URL if provided
+    if catalog_url:
+        print(f"[Census Gate] Discovering census candidates from URL: {catalog_url}...")
+        req = urllib.request.Request(catalog_url, headers={'User-Agent': 'PostingMap-DistrictDataProvisioner/2.0'})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            content = resp.read().decode('utf-8', errors='replace')
+        try:
+            data = json.loads(content)
+            if isinstance(data, dict) and 'datasets' in data:
+                for ds in data['datasets']:
+                    y = ds.get('census_year')
+                    if y:
+                        candidates[int(y)] = ds
+                return candidates
+        except Exception:
+            pass
+        years = extract_years_from_text(content)
+        for y in years:
+            candidates[y] = {
+                'census_year': y,
+                'status': 'published',
+                'has_small_area': '小地域' in content or '町丁' in content,
+                'source_url': catalog_url
+            }
+        return candidates
+
+    # 3. Dynamic inspection from estat_dir if local files/catalogs exist
+    if estat_dir and os.path.exists(estat_dir):
+        print(f"[Census Gate] Inspecting e-Stat directory for census candidates: {estat_dir}...")
+        cat_file = os.path.join(estat_dir, "catalog.json")
+        if os.path.exists(cat_file):
+            with open(cat_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict) and 'datasets' in data:
+                    for ds in data['datasets']:
+                        y = ds.get('census_year')
+                        if y:
+                            candidates[int(y)] = ds
+                    return candidates
+
+        # Scan filenames across estat_dir subdirectories dynamically
+        detected_years = set()
+        for root, dirs, files in os.walk(estat_dir):
+            for fname in files:
+                m = re.findall(r'[A-Za-z0-9_]*([12]\d{3})[A-Za-z0-9_]*', fname)
+                for y_str in m:
+                    y = int(y_str)
+                    if 1950 <= y <= 2100:
+                        detected_years.add(y)
+                m_era = re.search(r'r(\d+)ka', fname, re.IGNORECASE)
+                if m_era:
+                    detected_years.add(2018 + int(m_era.group(1)))
+                m_heisei = re.search(r'h(\d+)ka', fname, re.IGNORECASE)
+                if m_heisei:
+                    detected_years.add(1988 + int(m_heisei.group(1)))
+
+        years_sorted = sorted(list(detected_years), reverse=True)
+        for y in years_sorted:
+            candidates[y] = {
+                'census_year': y,
+                'status': 'published',
+                'has_small_area': True,
+                'source_type': 'local_estat_dir'
+            }
+
+    # 4. Fallback to online Statistics Bureau portal discovery if candidates still empty
+    if not candidates:
+        default_portal = "https://www.stat.go.jp/data/kokusei/2025/kekka.htm"
+        print(f"[Census Gate] Discovering census candidates dynamically from portal: {default_portal}...")
+        try:
+            req = urllib.request.Request(default_portal, headers={'User-Agent': 'PostingMap-DistrictDataProvisioner/2.0'})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw_bytes = resp.read()
+                try:
+                    text = raw_bytes.decode('shift_jis')
+                except Exception:
+                    text = raw_bytes.decode('utf-8', errors='replace')
+                years = extract_years_from_text(text)
+                for y in years:
+                    if y >= 2025:
+                        candidates[y] = {
+                            'census_year': y,
+                            'status': 'basic_aggregates_published_small_area_scheduled',
+                            'has_small_area': False,
+                            'source_portal': default_portal
+                        }
+                    else:
+                        candidates[y] = {
+                            'census_year': y,
+                            'status': 'published',
+                            'has_small_area': True,
+                            'source_portal': default_portal
+                        }
+        except Exception as e:
+            print(f"[Census Gate] Warning: Could not reach official Statistics Bureau portal: {e}")
+
+    return candidates
+
+def verify_dbf_header_and_attributes(dbf_path):
+    """
+    Read DBF header and extract field names and total record count.
+    """
+    import struct
+    with open(dbf_path, 'rb') as f:
+        header = f.read(32)
+        if len(header) < 32:
+            sys.exit(f"FATAL HARD STOP: Corrupted DBF file header: {dbf_path}")
+        num_records, header_len, record_len = struct.unpack('<IHH', header[4:12])
+        fields = []
+        while True:
+            desc = f.read(32)
+            if not desc or desc[0] == 0x0D:
+                break
+            name = desc[:11].replace(b'\x00', b'').decode('ascii', errors='replace').strip()
+            fields.append(name)
+    return fields, num_records
+
+def resolve_latest_census_dataset(candidates, target_cities, estat_dir=None, is_mock=False):
+    """
+    Latest Census Dataset Resolution Gate:
+    Evaluates census candidate years in descending order.
+    Enforces compatibility gate:
+      1. census_year presence
+      2. required attributes presence (KEY_CODE, S_NAME, JINKO, SETAI, HCODE)
+      3. boundary presence (.shp, .dbf)
+      4. municipality coverage completeness across all target_cities
+      5. e_stat_code / code-set compatibility
+    Rejects mixed years across municipalities.
+    Falls back to latest complete common dataset if newer year is incomplete, and records reason.
+    HARD STOP if no valid dataset satisfies all criteria.
+    """
+    if not candidates:
+        sys.exit("FATAL HARD STOP [Resolution Gate]: No census candidate years discovered from catalog or directory!")
+
+    sorted_years = sorted(candidates.keys(), reverse=True)
+    print(f"[Census Gate] Discovered candidate census years: {sorted_years}")
+
+    latest_detected_year = sorted_years[0]
+    fallback_reasons = []
+
+    for year in sorted_years:
+        info = candidates[year]
+        year_str = str(year)
+
+        # Gate 1: Check small area completeness
+        if not info.get('has_small_area', False) or info.get('status') != 'published':
+            reason = f"Census {year} small area boundary / demographic dataset is not yet published (status: {info.get('status', 'unknown')})."
+            fallback_reasons.append(reason)
+            print(f"[Census Gate] Skipping year {year}: {reason}")
+            continue
+
+        # Gate 2 & 3 & 4: Municipality coverage and attribute completeness
+        missing_cities = []
+        incompatible_cities = []
+
+        # Check if physical data files already exist locally in estat_dir
+        has_local_data = False
+        if estat_dir and os.path.exists(estat_dir):
+            for c in target_cities:
+                c_dir = os.path.join(estat_dir, c)
+                if os.path.exists(c_dir) and any(f.endswith('.shp') or f.endswith('.dbf') or f.endswith('.zip') for f in os.listdir(c_dir)):
+                    has_local_data = True
+                    break
+
+        # If metadata explicitly defines municipalities
+        if 'municipalities' in info:
+            m_map = info['municipalities']
+            for c in target_cities:
+                if c not in m_map:
+                    missing_cities.append(c)
+                else:
+                    attrs = m_map[c].get('attributes', [])
+                    missing_attrs = [a for a in ESTAT_MANDATORY_ATTRIBUTES if a not in attrs]
+                    if missing_attrs:
+                        incompatible_cities.append(f"{c} (missing attributes: {missing_attrs})")
+        elif has_local_data:
+            # Check physical files in estat_dir
+            for c in target_cities:
+                c_dir = os.path.join(estat_dir, c)
+                found_dbf = None
+                found_shp = None
+                if os.path.exists(c_dir):
+                    zips = [f for f in os.listdir(c_dir) if f.endswith('.zip') and (year_str in f or f"r{year-2018}ka" in f.lower() or f"h{year-1988}ka" in f.lower())]
+                    for z in zips:
+                        z_path = os.path.join(c_dir, z)
+                        with zipfile.ZipFile(z_path, 'r') as zf:
+                            zf.extractall(c_dir)
+
+                    for f in os.listdir(c_dir):
+                        if year_str in f or (year >= 2019 and f.lower().startswith(f"r{year-2018}ka")) or (year < 2019 and f.lower().startswith(f"h{year-1988}ka")):
+                            if f.endswith('.dbf'): found_dbf = os.path.join(c_dir, f)
+                            if f.endswith('.shp'): found_shp = os.path.join(c_dir, f)
+
+                if not found_dbf or not found_shp:
+                    missing_cities.append(c)
+                else:
+                    fields, _ = verify_dbf_header_and_attributes(found_dbf)
+                    missing_attrs = [a for a in ESTAT_MANDATORY_ATTRIBUTES if a not in fields]
+                    if missing_attrs:
+                        incompatible_cities.append(f"{c} (missing attributes: {missing_attrs})")
+        elif is_mock:
+            # Mock mode trusts mock catalog metadata unless municipalities is specified
+            pass
+        else:
+            # Check online availability on e-Stat portal for target_cities
+            online_missing = []
+            for c in target_cities:
+                test_url = f"https://www.e-stat.go.jp/gis/statmap-search/data?dlserveyId=A00200521{year}&code={c}&coordSys=1&format=shape&downloadType=5&datum=2000"
+                try:
+                    req = urllib.request.Request(test_url, headers={'User-Agent': 'PostingMap-DistrictDataProvisioner/2.0'})
+                    req.get_method = lambda: 'HEAD'
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        if resp.status != 200:
+                            online_missing.append(c)
+                except Exception:
+                    online_missing.append(c)
+            if online_missing:
+                reason = f"Census {year} datasets not available on e-Stat portal for cities: {online_missing}."
+                fallback_reasons.append(reason)
+                print(f"[Census Gate] Skipping year {year}: {reason}")
+                continue
+
+        if missing_cities or incompatible_cities:
+            reasons = []
+            if missing_cities:
+                reasons.append(f"missing target cities: {missing_cities}")
+            if incompatible_cities:
+                reasons.append(f"incompatible cities: {incompatible_cities}")
+            reason = f"Census {year} lacks complete coverage ({'; '.join(reasons)})."
+            fallback_reasons.append(reason)
+            print(f"[Census Gate] Skipping year {year}: {reason}")
+            continue
+
+        # All gates passed for this year!
+        selection_status = "latest_complete_common_dataset" if year < latest_detected_year else "latest_detected_and_complete"
+        fallback_reason_text = " | ".join(fallback_reasons) if fallback_reasons else "None (selected latest detected complete dataset)"
+        print("=" * 70)
+        print(f"[Census Gate] PASSED: Selected Census Year {year}")
+        print(f"  - Selection Status: {selection_status}")
+        print(f"  - Fallback Reason:  {fallback_reason_text}")
+        print("=" * 70)
+
+        return {
+            'latest_detected_census_year': latest_detected_year,
+            'selected_census_year': year,
+            'selection_status': selection_status,
+            'fallback_reason': fallback_reason_text,
+            'dataset_info': info
+        }
+
+    sys.exit(
+        f"FATAL HARD STOP [Resolution Gate]: No eligible census dataset satisfying all criteria found across target municipalities!\n"
+        f"Evaluated candidate years: {sorted_years}\n"
+        f"Failure reasons:\n" + "\n".join(f"  - {r}" for r in fallback_reasons)
+    )
+
+def fetch_and_verify_estat_dataset(resolution_result, target_cities, estat_dir, provenance_out=None):
+    """
+    Autonomous e-Stat Dataset Fetch, Integrity Verification & Provenance Generation.
+    Executes: Discover -> Select -> Fetch -> Hash -> Verify -> Provenance.
+    Ensures zero overwrite on existing provenance.
+    """
+    if provenance_out and os.path.exists(provenance_out):
+        sys.exit(f"FATAL HARD STOP [Provenance Gate]: e-Stat provenance output already exists: {provenance_out}. Overwrite is strictly forbidden!")
+
+    selected_year = resolution_result['selected_census_year']
+    year_str = str(selected_year)
+    verified_files = []
+
+    print(f"[e-Stat Pipeline] Processing selected Census Year {selected_year} for {len(target_cities)} municipalities...")
+
+    for city_code in target_cities:
+        c_dir = os.path.join(estat_dir, city_code)
+        os.makedirs(c_dir, exist_ok=True)
+
+        # Look for matching shapefile and dbf
+        shp_path = None
+        dbf_path = None
+        for f in os.listdir(c_dir):
+            if year_str in f or (selected_year >= 2019 and f.lower().startswith(f"r{selected_year-2018}ka")) or (selected_year < 2019 and f.lower().startswith(f"h{selected_year-1988}ka")):
+                if f.endswith('.shp'): shp_path = os.path.join(c_dir, f)
+                if f.endswith('.dbf'): dbf_path = os.path.join(c_dir, f)
+
+        if not shp_path or not dbf_path:
+            # Autonomous fetch from e-Stat GIS download URL
+            dl_url = f"https://www.e-stat.go.jp/gis/statmap-search/data?dlserveyId=A00200521{selected_year}&code={city_code}&coordSys=1&format=shape&downloadType=5&datum=2000"
+            print(f"[e-Stat Fetch] Downloading official Shapefile archive for city {city_code} from {dl_url}...")
+            req = urllib.request.Request(dl_url, headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'})
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    if resp.status != 200:
+                        sys.exit(f"FATAL HARD STOP: e-Stat download failed with status {resp.status} for city {city_code}")
+                    zip_bytes = resp.read()
+            except Exception as e:
+                sys.exit(f"FATAL HARD STOP: Failed to download e-Stat data for city {city_code} from {dl_url}: {e}")
+
+            zip_dest = os.path.join(c_dir, f"estat_{selected_year}_{city_code}.zip")
+            with open(zip_dest, 'wb') as f:
+                f.write(zip_bytes)
+
+            print(f"[e-Stat Fetch] Extracting archive {zip_dest}...")
+            with zipfile.ZipFile(zip_dest, 'r') as zf:
+                zf.extractall(c_dir)
+
+            for f in os.listdir(c_dir):
+                if year_str in f or (selected_year >= 2019 and f.lower().startswith(f"r{selected_year-2018}ka")) or (selected_year < 2019 and f.lower().startswith(f"h{selected_year-1988}ka")):
+                    if f.endswith('.shp'): shp_path = os.path.join(c_dir, f)
+                    if f.endswith('.dbf'): dbf_path = os.path.join(c_dir, f)
+
+        if not shp_path or not dbf_path:
+            sys.exit(f"FATAL HARD STOP: Missing Shapefile or DBF for city {city_code} (Census Year {selected_year}) in {c_dir}")
+
+        fields, num_records = verify_dbf_header_and_attributes(dbf_path)
+        shp_hash = compute_sha256(shp_path)
+        dbf_hash = compute_sha256(dbf_path)
+
+        verified_files.append({
+            'city_code': city_code,
+            'census_year': selected_year,
+            'shp_path': os.path.abspath(shp_path),
+            'shp_sha256': shp_hash,
+            'dbf_path': os.path.abspath(dbf_path),
+            'dbf_sha256': dbf_hash,
+            'record_count': num_records,
+            'fields': fields
+        })
+
+    provenance_data = {
+        'latest_detected_census_year': resolution_result['latest_detected_census_year'],
+        'selected_census_year': selected_year,
+        'selection_status': resolution_result['selection_status'],
+        'fallback_reason': resolution_result['fallback_reason'],
+        'checked_at': datetime.now(timezone.utc).isoformat(),
+        'source_provider': 'Statistics Bureau, Ministry of Internal Affairs and Communications / e-Stat',
+        'dataset_id': resolution_result['dataset_info'].get('dataset_id', f"Census_{selected_year}_SmallArea"),
+        'target_cities': target_cities,
+        'verified_files': verified_files
+    }
+
+    if provenance_out:
+        p_dir = os.path.dirname(os.path.abspath(provenance_out))
+        os.makedirs(p_dir, exist_ok=True)
+        fd, temp_prov = tempfile.mkstemp(prefix="estat_prov_", dir=p_dir)
+        os.close(fd)
+        try:
+            with open(temp_prov, 'w', encoding='utf-8') as f:
+                json.dump(provenance_data, f, ensure_ascii=False, indent=2)
+            shutil.move(temp_prov, provenance_out)
+            print(f"[e-Stat Pipeline] Provenance successfully written to {provenance_out}")
+        finally:
+            if os.path.exists(temp_prov):
+                os.remove(temp_prov)
+
+    return provenance_data
 
 def main():
     args = parse_args()
@@ -611,20 +1010,58 @@ def main():
     print(f"Ref Output Directory:     {args.ref_dir}")
     print("=" * 70)
 
+    # Compile target municipalities list (city_code + any additional target_cities)
+    all_target_cities = [args.city_code]
+    if args.target_cities:
+        for c in args.target_cities:
+            for item in c.split(','):
+                item_clean = item.strip()
+                if item_clean and item_clean not in all_target_cities:
+                    all_target_cities.append(item_clean)
+
     # 1. Verify pre-positioned official ABR town master if specified
     abr_reports = None
-    if args.abr_file or args.abr_dir:
-        abr_reports = verify_abr_master(args.city_code, abr_files=args.abr_file, abr_dir=args.abr_dir)
+    ref_csv = None
+    prov_json = None
 
-    # 2. Fetch MLIT location reference data
-    ref_csv, prov_json = fetch_mlit_location_reference(
-        city_code=args.city_code,
-        ref_dir=args.ref_dir,
-        data_kind=args.data_kind,
-        abr_reports=abr_reports
-    )
-    if args.estat_dir:
-        verify_estat_data(args.city_code, args.estat_dir)
+    if not args.estat_only:
+        if not args.ref_dir:
+            sys.exit("FATAL: --ref-dir is required when fetching MLIT location reference data.")
+        if args.abr_file or args.abr_dir:
+            abr_reports = verify_abr_master(args.city_code, abr_files=args.abr_file, abr_dir=args.abr_dir)
+
+        # 2. Fetch MLIT location reference data
+        ref_csv, prov_json = fetch_mlit_location_reference(
+            city_code=args.city_code,
+            ref_dir=args.ref_dir,
+            data_kind=args.data_kind,
+            abr_reports=abr_reports
+        )
+
+    # 3. Phase 2: Latest Census Dataset Resolution Gate & Autonomous e-Stat Fetch Pipeline
+    estat_prov = None
+    if args.fetch_estat or (args.estat_dir and (args.estat_catalog_url or args.estat_catalog_mock or args.estat_provenance_out)):
+        print("\n" + "=" * 70)
+        print("PHASE 2: LATEST CENSUS DATASET RESOLUTION GATE & e-STAT PIPELINE")
+        print("=" * 70)
+        candidates = discover_census_candidates(
+            catalog_url=args.estat_catalog_url,
+            catalog_mock=args.estat_catalog_mock,
+            estat_dir=args.estat_dir
+        )
+        resolution_result = resolve_latest_census_dataset(
+            candidates=candidates,
+            target_cities=all_target_cities,
+            estat_dir=args.estat_dir,
+            is_mock=bool(args.estat_catalog_mock)
+        )
+        if args.estat_dir:
+            estat_prov = fetch_and_verify_estat_dataset(
+                resolution_result=resolution_result,
+                target_cities=all_target_cities,
+                estat_dir=args.estat_dir,
+                provenance_out=args.estat_provenance_out
+            )
 
     print("=" * 70)
     print("[QG-1 Autonomous Fetch Gate] PASS: Reference data acquired with full provenance.")
@@ -632,7 +1069,10 @@ def main():
     print(f"  - Provenance:      {prov_json}")
     if abr_reports:
         print(f"  - ABR Verified:    {len(abr_reports)} file(s)")
+    if estat_prov:
+        print(f"  - e-Stat Year:     {estat_prov['selected_census_year']} ({estat_prov['selection_status']})")
     print("=" * 70)
 
 if __name__ == '__main__':
     main()
+
