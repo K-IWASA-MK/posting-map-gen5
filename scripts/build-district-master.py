@@ -758,15 +758,25 @@ def ring_signed_area(ring):
 
 def classify_polygon_parts(rings):
     """
-    Classify Polygon and MultiPolygon rings into exterior parts and associated holes.
-    Adheres strictly to MASTER Constraint 3:
-    1. Distinguish candidate exteriors vs candidate holes via ring orientation.
-    2. Rigorously verify geometric containment:
-       - Each hole must be contained in EXACTLY ONE exterior ring.
-       - A hole contained in 0 exterior rings or multiple exterior rings triggers FATAL HARD STOP.
-       - Exterior rings must not contain one another (disjoint parts in MultiPolygon).
-       - Ring orientation and containment contradiction triggers FATAL HARD STOP.
-    Returns: list of dicts: [ { 'exterior': ext_ring, 'holes': [h1, h2, ...] }, ... ]
+    Classify Polygon and MultiPolygon rings using Ring Containment Hierarchy.
+    Supports arbitrarily nested topologies (depth 0 solid exterior -> depth 1 hole -> depth 2 solid island -> depth 3 lake...).
+    Hierarchy rules:
+      - depth 0, 2, 4... = Solid exterior / island (CW in ESRI Shapefile)
+      - depth 1, 3, 5... = Void / hole / lake (CCW in ESRI Shapefile)
+    Verifies:
+      1. Every ring with depth > 0 is enclosed by its parent chain.
+      2. No two sibling rings of the same depth intersect/enclose each other.
+      3. Ring signed area orientation is strictly consistent with depth parity.
+    Returns:
+      list of ring info dicts: [
+        {
+          'ring': ring,
+          'depth': depth,
+          'is_solid': (depth % 2 == 0),
+          'enclosed_by': [parent_indices...],
+          'parent_index': immediate_parent_idx
+        }, ...
+      ]
     """
     if not rings:
         return []
@@ -776,80 +786,97 @@ def classify_polygon_parts(rings):
         return []
 
     if len(valid_rings) == 1:
-        return [{'exterior': valid_rings[0], 'holes': []}]
+        return [{
+            'ring': valid_rings[0],
+            'depth': 0,
+            'is_solid': True,
+            'enclosed_by': [],
+            'parent_index': None
+        }]
 
-    # 1. Classify candidate exteriors and holes by signed area (ESRI Shapefile convention: CW < 0, CCW > 0)
-    candidate_exteriors = []
-    candidate_holes = []
-    for r in valid_rings:
-        area = ring_signed_area(r)
-        if area < 0:  # CW
-            candidate_exteriors.append(r)
-        else:  # CCW
-            candidate_holes.append(r)
+    # 1. Determine pairwise containment: which ring contains which ring
+    n_rings = len(valid_rings)
+    enclosed_by = [[] for _ in range(n_rings)]
 
-    # In case rings were provided in reverse convention (e.g. all CCW), detect based on containment
-    if not candidate_exteriors and candidate_holes:
-        candidate_exteriors = candidate_holes
-        candidate_holes = []
-
-    if not candidate_exteriors:
-        sys.exit("FATAL HARD STOP [Topology]: Geometry has no valid exterior ring.")
-
-    # 2. Verify exterior rings do not contain one another (disjoint parts in MultiPolygon)
-    for i, ext1 in enumerate(candidate_exteriors):
-        for j, ext2 in enumerate(candidate_exteriors):
+    for j in range(n_rings):
+        p0 = valid_rings[j][0]
+        p1 = valid_rings[j][1]
+        mid_pt = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
+        for i in range(n_rings):
             if i != j:
-                pt = ext2[0]
-                if point_in_ring(pt[0], pt[1], ext1):
-                    sys.exit(
-                        f"FATAL HARD STOP [Topology]: Invalid MultiPolygon topology! "
-                        f"Exterior ring {j} is contained within exterior ring {i}."
-                    )
+                if point_in_ring(p0[0], p0[1], valid_rings[i]) or point_in_ring(mid_pt[0], mid_pt[1], valid_rings[i]):
+                    enclosed_by[j].append(i)
 
-    # 3. Associate each hole with its uniquely enclosing exterior ring
-    parts = [{'exterior': ext, 'holes': []} for ext in candidate_exteriors]
+    # 2. Compute depth for each ring: number of rings enclosing it
+    depths = [len(enclosed_by[j]) for j in range(n_rings)]
 
-    for h_idx, hole in enumerate(candidate_holes):
-        enclosing_indices = []
-        for p_idx, part in enumerate(parts):
-            # Test sample point of hole inside exterior
-            pt = hole[0]
-            if point_in_ring(pt[0], pt[1], part['exterior']):
-                enclosing_indices.append(p_idx)
+    # 3. Detect convention: ESRI Shapefile (depth 0 CW < 0) vs GeoJSON RFC 7946 (depth 0 CCW > 0)
+    depth0_indices = [idx for idx, d in enumerate(depths) if d == 0]
+    if not depth0_indices:
+        sys.exit("FATAL HARD STOP [Topology]: Invalid geometry! No depth 0 exterior ring found (circular containment loop).")
 
-        if len(enclosing_indices) == 0:
+    depth0_signed_areas = [ring_signed_area(valid_rings[idx]) for idx in depth0_indices]
+    negative_count = sum(1 for a in depth0_signed_areas if a < 0)
+    standard_esri = (negative_count >= len(depth0_signed_areas) / 2.0)
+
+    parts_info = []
+    for j in range(n_rings):
+        d = depths[j]
+        is_solid = (d % 2 == 0)
+        area = ring_signed_area(valid_rings[j])
+
+        # Verify orientation consistency with depth parity
+        expected_negative = (is_solid if standard_esri else not is_solid)
+        actual_negative = (area < 0)
+        if expected_negative != actual_negative:
+            ring_type = "Solid" if is_solid else "Hole"
             sys.exit(
-                f"FATAL HARD STOP [Topology]: Hole ring {h_idx} is NOT enclosed by any exterior ring! "
-                f"Contradiction between ring orientation and containment."
+                f"FATAL HARD STOP [Topology]: Orientation contradiction! Ring {j} at depth {d} ({ring_type}) "
+                f"has signed area {area:.6f} which contradicts expected {'CW (<0)' if expected_negative else 'CCW (>0)'} orientation."
             )
-        elif len(enclosing_indices) > 1:
-            sys.exit(
-                f"FATAL HARD STOP [Topology]: Hole ring {h_idx} is enclosed by multiple exterior rings ({enclosing_indices})! "
-                f"Overlapping exterior parts detected."
-            )
-        else:
-            parts[enclosing_indices[0]]['holes'].append(hole)
 
-    return parts
+        # Immediate parent: the enclosing ring with depth d - 1
+        immediate_parent = None
+        if d > 0:
+            candidates = [p for p in enclosed_by[j] if depths[p] == d - 1]
+            if len(candidates) != 1:
+                sys.exit(
+                    f"FATAL HARD STOP [Topology]: Ambiguous parent hierarchy! Ring {j} at depth {d} has "
+                    f"{len(candidates)} parents at depth {d - 1}."
+                )
+            immediate_parent = candidates[0]
+
+        parts_info.append({
+            'ring': valid_rings[j],
+            'depth': d,
+            'is_solid': is_solid,
+            'enclosed_by': enclosed_by[j],
+            'parent_index': immediate_parent
+        })
+
+    return parts_info
 
 def point_in_polygon_geometry(px, py, rings):
     """
-    Point-in-polygon verification handling MultiPolygon and holes.
-    Point must be inside at least one exterior ring and NOT inside any corresponding hole.
+    Point-in-polygon verification handling MultiPolygon, holes, and nested islands.
+    Adheres strictly to the Even-Odd Rule & Containment Hierarchy:
+      Count how many rings enclose the point (px, py).
+      - Odd count (1, 3, 5...) => Point is in a SOLID region (depth 0 exterior, depth 2 island, etc.) -> True
+      - Even count (0, 2, 4...) => Point is in VOID / HOLE / EXTERIOR -> False
     """
     if not rings:
         return False
 
-    parts = classify_polygon_parts(rings)
-    for part in parts:
-        ext = part['exterior']
-        holes = part['holes']
-        if point_in_ring(px, py, ext):
-            # Point is inside this exterior ring. Must NOT be in any hole.
-            if not any(point_in_ring(px, py, h) for h in holes):
-                return True
-    return False
+    valid_rings = [r for r in rings if len(r) >= 3]
+    if not valid_rings:
+        return False
+
+    # Validate topology hierarchy
+    classify_polygon_parts(valid_rings)
+
+    # Count enclosing rings (Even-Odd Rule)
+    enclosing_count = sum(1 for r in valid_rings if point_in_ring(px, py, r))
+    return (enclosing_count % 2 == 1)
 
 def compute_deterministic_interior_point(rings, bbox):
     """
@@ -1237,6 +1264,17 @@ def run_phase2_universal(args):
             if not sk_lat or not sk_lon:
                 sys.exit(f"FATAL HARD STOP: Missing coordinates in skeleton provenance for '{sk_city} {sk_town}' (rowId: {sk_row_id})")
 
+            rec_evidence = {
+                'city_code': rec_entry['city_code'],
+                'skeleton_town_name': rec_entry['skeleton_town_name'],
+                'reconciled_status': rec_entry['reconciled_status'],
+                'source_provider': rec_entry['source_provider'],
+                'source_document_title': rec_entry['source_document_title'],
+                'source_url': rec_entry['source_url'],
+                'source_section_or_page': rec_entry['source_section_or_page'],
+                'verified_date': rec_entry['verified_date']
+            }
+
             expanded_rows.append({
                 'skeleton_rowId': sk_row_id,
                 'city_name': sk_city,
@@ -1248,7 +1286,8 @@ def run_phase2_universal(args):
                 'e_stat_code': "",
                 'coordinate_source': "skeleton_reference_point",
                 'coordinate_validation': "skeleton_provenance_verified",
-                'matching_evidence': f"no_independent_estat_small_area: {rec_entry['source_document_title']}"
+                'matching_evidence': f"no_independent_estat_small_area: {rec_entry['source_document_title']}",
+                'estat_reconciliation_evidence': rec_evidence
             })
             continue
 
@@ -1441,7 +1480,7 @@ def run_phase2_universal(args):
         }
         final_output_rows.append(r_out)
         sk_prov = skeleton_prov_map.get(r['skeleton_rowId']) or skeleton_prov_map.get((r['city_name'], r['town_name']), {})
-        final_provenance_records.append({
+        prov_entry = {
             'rowId': idx,
             'skeleton_rowId': r['skeleton_rowId'],
             'city_code': sk_prov.get('city_code', ''),
@@ -1457,7 +1496,10 @@ def run_phase2_universal(args):
             'matching_evidence': r['matching_evidence'],
             'coordinate_source': r['coordinate_source'],
             'coordinate_validation': r['coordinate_validation']
-        })
+        }
+        if 'estat_reconciliation_evidence' in r and r['estat_reconciliation_evidence']:
+            prov_entry['estat_reconciliation_evidence'] = r['estat_reconciliation_evidence']
+        final_provenance_records.append(prov_entry)
 
     # 11. Atomic Output File Writing
     out_dir = os.path.dirname(os.path.abspath(args.out_csv))

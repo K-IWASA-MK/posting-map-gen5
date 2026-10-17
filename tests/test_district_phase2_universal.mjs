@@ -906,4 +906,163 @@ describe('Universal Phase 2 & Latest Census Dataset Resolution Gate Contract Tes
     const prov = JSON.parse(fs.readFileSync(outProv, 'utf-8'));
     assert.equal(prov.records[0].coordinate_validation, 'point_in_polygon: pass');
   });
+
+  // -------------------------------------------------------------
+  // Test 18: Full Evidence Provenance Persistence
+  // -------------------------------------------------------------
+  it('Requirement 18 & MASTER Condition 2: Full 8-field evidence is completely persisted in final provenance', () => {
+    const testDir = path.join(TEST_TMP_DIR, 'case_full_evidence_provenance');
+    fs.mkdirSync(testDir, { recursive: true });
+
+    const skelCsv = path.join(testDir, 'skeleton.csv');
+    fs.writeFileSync(skelCsv, "rowId,city_name,town_name\n1,証跡市,証跡町\n");
+
+    const skelProv = path.join(testDir, 'skel_prov.json');
+    fs.writeFileSync(skelProv, JSON.stringify({
+      records: [
+        { city_name: '証跡市', town_name: '証跡町', latitude: '35.111222', longitude: '136.333444', city_code: '99002' }
+      ]
+    }));
+
+    const estatDir = path.join(testDir, 'estat');
+    fs.mkdirSync(estatDir, { recursive: true });
+    const fields = [
+      { name: 'KEY_CODE', len: 11 }, { name: 'S_NAME', len: 20 },
+      { name: 'JINKO', len: 10 }, { name: 'SETAI', len: 10 }, { name: 'HCODE', len: 4 }
+    ];
+    fs.writeFileSync(path.join(estatDir, 'mock.dbf'), buildMockDbf([], fields));
+
+    const reconJson = path.join(testDir, 'reconciliations.json');
+    const expectedEvidence = {
+      city_code: "99002",
+      skeleton_town_name: "証跡町",
+      reconciled_status: "no_independent_estat_small_area",
+      source_provider: "総務省統計局 / 証跡市企画課",
+      source_document_title: "令和X年国勢調査 境界データ（境界未設定・独立小地域不確定調査）",
+      source_url: "https://example.gov.jp/census/99002",
+      source_section_or_page: "別添表3 無住新田・境界未画定大字一覧",
+      verified_date: "2026-10-17"
+    };
+
+    fs.writeFileSync(reconJson, JSON.stringify({
+      "99002:証跡町": expectedEvidence
+    }, null, 2));
+
+    const outCsv = path.join(testDir, 'out.csv');
+    const outProv = path.join(testDir, 'out_prov.json');
+
+    runPython([
+      path.join(REPO_ROOT, 'scripts', 'build-district-master.py'),
+      '--phase1-skeleton', skelCsv,
+      '--skeleton-provenance', skelProv,
+      '--estat-dir', estatDir,
+      '--estat-reconciliation', reconJson,
+      '--out-csv', outCsv,
+      '--provenance-out', outProv
+    ]);
+
+    const prov = JSON.parse(fs.readFileSync(outProv, 'utf-8'));
+    assert.equal(prov.records.length, 1);
+    const rec = prov.records[0];
+
+    assert.ok(rec.estat_reconciliation_evidence, 'estat_reconciliation_evidence must exist in provenance record');
+    assert.deepEqual(rec.estat_reconciliation_evidence, expectedEvidence, 'All 8 evidence fields must match exactly');
+  });
+
+  // -------------------------------------------------------------
+  // Test 19: Nested Polygon Topology (Depth 0 -> Depth 1 -> Depth 2 -> Depth 3)
+  // -------------------------------------------------------------
+  it('Requirement 19 & MASTER Condition 3: Nested Ring Hierarchy (Exterior -> Hole -> Island -> Crater Lake) evaluates Even-Odd rule', () => {
+    const testDir = path.join(TEST_TMP_DIR, 'case_nested_ring_hierarchy');
+    fs.mkdirSync(testDir, { recursive: true });
+
+    const skelCsv = path.join(testDir, 'skeleton.csv');
+    fs.writeFileSync(skelCsv, "rowId,city_name,town_name\n1,架空市,多重島町\n");
+
+    const skelProv = path.join(testDir, 'skel_prov.json');
+    fs.writeFileSync(skelProv, JSON.stringify({
+      records: [
+        { city_name: '架空市', town_name: '多重島町', latitude: '35.0', longitude: '136.0', city_code: '99003' }
+      ]
+    }));
+
+    const estatDir = path.join(testDir, 'estat');
+    fs.mkdirSync(estatDir, { recursive: true });
+    const fields = [
+      { name: 'KEY_CODE', len: 11 }, { name: 'S_NAME', len: 20 },
+      { name: 'JINKO', len: 10 }, { name: 'SETAI', len: 10 }, { name: 'HCODE', len: 4 }
+    ];
+    const dbfBuf = buildMockDbf([
+      { KEY_CODE: '990030010', S_NAME: '多重島町', JINKO: '500', SETAI: '200', HCODE: '8101' }
+    ], fields);
+    fs.writeFileSync(path.join(estatDir, 'mock.dbf'), dbfBuf);
+
+    // Geometry:
+    // Ring 0 (Depth 0 Solid CW): [136.00, 35.00] to [136.20, 35.20]
+    // Ring 1 (Depth 1 Hole CCW): [136.04, 35.04] to [136.16, 35.16]
+    // Ring 2 (Depth 2 Island CW): [136.07, 35.07] to [136.13, 35.13]
+    // Ring 3 (Depth 3 Lake CCW): [136.09, 35.09] to [136.11, 35.11]
+    const shpBuf = buildMockShp([
+      {
+        bbox: [136.00, 35.00, 136.20, 35.20],
+        rings: [
+          // Depth 0 Exterior (CW)
+          [
+            [136.00, 35.00], [136.00, 35.20], [136.20, 35.20], [136.20, 35.00], [136.00, 35.00]
+          ],
+          // Depth 1 Hole (CCW)
+          [
+            [136.04, 35.04], [136.16, 35.04], [136.16, 35.16], [136.04, 35.16], [136.04, 35.04]
+          ],
+          // Depth 2 Solid Island (CW)
+          [
+            [136.07, 35.07], [136.07, 35.13], [136.13, 35.13], [136.13, 35.07], [136.07, 35.07]
+          ],
+          // Depth 3 Crater Lake (CCW)
+          [
+            [136.09, 35.09], [136.11, 35.09], [136.11, 35.11], [136.09, 35.11], [136.09, 35.09]
+          ]
+        ]
+      }
+    ]);
+    fs.writeFileSync(path.join(estatDir, 'mock.shp'), shpBuf);
+
+    const outCsv = path.join(testDir, 'out.csv');
+    const outProv = path.join(testDir, 'out_prov.json');
+
+    runPython([
+      path.join(REPO_ROOT, 'scripts', 'build-district-master.py'),
+      '--phase1-skeleton', skelCsv,
+      '--skeleton-provenance', skelProv,
+      '--estat-dir', estatDir,
+      '--out-csv', outCsv,
+      '--provenance-out', outProv
+    ]);
+
+    const csvContent = fs.readFileSync(outCsv, 'utf-8').trim().split('\n');
+    assert.equal(csvContent.length, 2);
+    const r = csvContent[1].split(',');
+    const lat = parseFloat(r[3]);
+    const lon = parseFloat(r[4]);
+
+    // Check point is NOT in Depth 1 hole ([136.04..136.16, 35.04..35.16] excluding island)
+    const inHoleRing1 = (lon > 136.04 && lon < 136.16 && lat > 35.04 && lat < 35.16);
+    const inIslandRing2 = (lon >= 136.07 && lon <= 136.13 && lat >= 35.07 && lat <= 35.13);
+    const inLakeRing3 = (lon > 136.09 && lon < 136.11 && lat > 35.09 && lat < 35.11);
+
+    if (inHoleRing1 && !inIslandRing2) {
+      assert.fail(`Coordinate (${lat}, ${lon}) must NOT fall inside Depth 1 hole!`);
+    }
+    if (inLakeRing3) {
+      assert.fail(`Coordinate (${lat}, ${lon}) must NOT fall inside Depth 3 crater lake!`);
+    }
+
+    // Verify coordinate falls either in Depth 0 solid or Depth 2 island solid
+    const inSolidOuter = (lon >= 136.00 && lon <= 136.20 && lat >= 35.00 && lat <= 35.20) && !inHoleRing1;
+    const inSolidIsland = inIslandRing2 && !inLakeRing3;
+    assert.equal(inSolidOuter || inSolidIsland, true, `Coordinate (${lat}, ${lon}) must be on a solid surface!`);
+
+    const prov = JSON.parse(fs.readFileSync(outProv, 'utf-8'));
+    assert.equal(prov.records[0].coordinate_validation, 'point_in_polygon: pass');
+  });
 });

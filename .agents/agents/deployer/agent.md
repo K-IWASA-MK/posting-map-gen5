@@ -11,7 +11,7 @@ tools:
   - list_dir
 skills:
   - official-data-audit
-  - district-data-provisioning
+  - address-master-generation
 model: inherit
 ---
 
@@ -59,7 +59,7 @@ Execution AI（Chief Orchestrator）からの内部ディスパッチ（`invoke_
    - `BRANCH_ROOT_FOLDER_ID` から `03_BRANCH/{districtId}/`、`{districtId} 支部_STORAGE/`、`SOURCE_ARCHIVE/`、および `{districtId}`（スプレッドシートDB）を決定論的に解決・導出（`EXTERNAL_WRITE: YES` 認可時）。
 2. **Phase 2: Data Acquisition & Master Generation**:
    - 公式データ自律取得。
-   - `district-data-provisioning` および `official-data-audit` プロトコル執行（境界GeoJSON・住所マスター・自治体マスター生成）。
+   - `address-master-generation` および `official-data-audit` プロトコル執行（住所マスター・境界GeoJSON・自治体マスター生成）。
 3. **Phase 3: Parent GAS Registry Dynamic Binding**:
    - 親GASの `DISTRICT_REGISTRY` に対し新地区 entry を非破壊追記・更新（導出済み `spreadsheetId`, `storageFolderId` を登録）。
 4. **Phase 4: Acceptance Gate 機械的検証**:

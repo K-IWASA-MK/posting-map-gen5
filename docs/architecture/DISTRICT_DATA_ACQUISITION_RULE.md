@@ -1,11 +1,11 @@
 # POSTING MAP 地区データ自律調達・2段階マスター生成規程
 ## DISTRICT_DATA_ACQUISITION_RULE.md
 
-Version: 2.1 (Phase 1 母集合・区割り適用・名称整列規則 確定版)
-Date: 2026-10-16
+Version: 2.2 (8列マスターCSV 13工程パイプライン & 多重トポロジー階層 & Full Evidence Provenance 確定版)
+Date: 2026-10-17
 Author: AI Architecture Team (承認審査: 岩佐CEO)
 System: Universal POSTING MAP Engine / 289 District Expansion OS
-関連規程: `docs/architecture/01_DESIGN_CONTRACT.md` / `docs/architecture/ADDRESS_EXTRACTION_RULE.md` / `.agents/rules/district-data-transition-rule.md`
+関連規程: `docs/architecture/01_DESIGN_CONTRACT.md` / `docs/architecture/ADDRESS_EXTRACTION_RULE.md` / `.agents/rules/district-data-transition-rule.md` / `.agents/skills/address-master-generation/SKILL.md`
 
 ---
 
@@ -36,7 +36,7 @@ System: Universal POSTING MAP Engine / 289 District Expansion OS
 
 2. **第 2 段階（Phase 2: 後段属性・境界付与 — Attribute & Boundary Enrichment）**:
    - Phase 1 で確定した3列 Area Skeleton（`rowId,city_name,town_name`）を不変の基準（Authority）として受け取る。
-   - 総務省統計局「e-Stat 国勢調査小地域境界データ」等の公定統計・地理データから、代表座標（`latitude`, `longitude`）、世帯数（`households`）、人口（`population`）、小地域コード（`e_stat_code`）、および境界ポリゴン（`boundaries.geojson`）を後段責務として付与し、最終 Master Triad（`data/address_master.csv`, `data/boundaries.geojson`, `data/municipality_master.csv`）を完成させる。
+   - 最新の国勢調査小地域境界データを動的解決（§4.6）し、代表座標（`latitude`, `longitude`）、世帯数（`households`）、人口（`population`）、小地域コード（`e_stat_code`）、および境界ポリゴン（`boundaries.geojson`）を後段責務として付与し、最終 8列マスターCSV（`data/address_master.csv`）および `provenance.json` を完成させる。
 
 ### 【原則 3】公式町字粒度原則（Official Town Granularity Doctrine）— ABSOLUTE
 - `docs/architecture/ADDRESS_EXTRACTION_RULE.md` に基づき、`town_name` は公式に存在する町字名（公式に丁目が存在する場合は丁目まで含めた名称）で確定する。
@@ -51,42 +51,32 @@ System: Universal POSTING MAP Engine / 289 District Expansion OS
 
 ---
 
-## 2. 2段階生成アーキテクチャ（Two-Phase Generation Architecture）
+## 2. 8列マスターCSV作成 13工程パイプライン（13-Step Production Pipeline）
+
+8列マスターCSV（`address_master.csv`）および追跡Provenanceの自律調達・生成は、以下の **13工程（Step 1 〜 Step 13）** の厳格なシーケンスに従って執行される：
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│   Step 1: 対象選挙・適用法令の施行版・経過措置 ➔ 公式区割り確定   │
-│            （構成市町村および市町村内の区域記述）             │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│        【Phase 1: Area Skeleton 生成（第1段階・骨格確定）】     │
-│  ・住所の母集合 = 国交省 位置参照情報 大字・町丁目レベル 最新版 │
-│  ・区割りを町丁目単位で当てはめ、対象町域の期待集合を確定      │
-│  ・正規化（郡名除去・先頭の大字除去）、丁目まで town_name に含む│
-│  ・town_name より下位の小字/方角/通称/人工括弧は探索・生成しない │
-│  ・e-Stat / 人口 / 世帯数 / 座標 / 境界は一切使用しない        │
-│  ・名称衝突検査 ➔ 公式読み仮名で整列 ➔ rowId = 1..N 採番      │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-                               ▼
-               ［Phase 1 成果物: 3列 Area Skeleton］
-                    rowId,city_name,town_name
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│   【Phase 2: 後段属性・境界付与（Attribute & Boundary 付与）】  │
-│  ・確定済み Area Skeleton (rowId,city_name,town_name) を基準に │
-│    e-Stat 国勢調査データ等から後段属性を付与                   │
-│  ・付与項目: latitude, longitude, households, population,    │
-│    e_stat_code, および boundaries.geojson                    │
-└──────────────┬───────────────────────────────┬──────────────┘
-               ▼                               ▼
-┌──────────────────────────────┐ ┌──────────────────────────────┐
-│   data/address_master.csv    │ │    data/boundaries.geojson   │
-│ (Skeleton 3列 + 後段属性5列)   │ │  (rowId 1..N 対応ポリゴン)    │
-└──────────────────────────────┘ └──────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ 【Phase 1: Area Skeleton 確定 — 3列骨格生成】                            │
+│  Step 1: 自治体コードを入力（city_code群）                             │
+│  Step 2: 国土交通省 位置参照情報「大字・町丁目レベル」データ取得       │
+│  Step 3: デジタル庁 アドレス・ベース・レジストリ（ABR）照合            │
+│  Step 4: 案A衝突回避正規化・ABR五十音順整列 ➔ 3列Skeleton生成           │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼ 3列 Area Skeleton (rowId,city_name,town_name)
+┌───────────────────────────────────┴────────────────────────────────────┐
+│ 【Phase 2: 後段統計・空間属性付与 — 8列マスターCSV確定】                │
+│  Step 5: 最新国勢調査年度を動的確認（最新完全共通年度の自律採用）       │
+│  Step 6: e-Stat小地域境界データ（DBF/SHP）取得                          │
+│  Step 7: 空間結合カーディナリティ監査（1:1 / 1:N / 1:0 / N:1 判定）     │
+│  Step 8: 必要時だけ外部Reconciliation（1:0 空小地域 8属性Evidence検証） │
+│  Step 9: 座標・人口・世帯数・e_stat_code付与（PIP内部点決定論的導出）   │
+│  Step 10: Polygon / MultiPolygon / hole 多重包含トポロジー検証         │
+│  Step 11: 8列マスターCSV生成（rowId,city_name,town_name,lat,lon,hh,pop,estat）│
+│  Step 12: 構造化Provenance生成（全42件空小地域の完全8属性Evidence保持） │
+│  Step 13: sort-address-master.py による再整列・全件監査（diff -u == 0）│
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -182,6 +172,37 @@ System: Universal POSTING MAP Engine / 289 District Expansion OS
 - 新規地区の Phase 1 Area Skeleton 生成では、ルール 4.4 で全 `(city_name, town_name)` の最終順序を確定した後に、先頭から **`rowId` を `1..N`（1始まりの連続整数）で一意に採番**する。
 - 一方、**既存稼働地区の確定済みデータ** については、既存の `rowId`（`1..N`）を100%保護し、遡及的な改番・振り直し（Migration）を絶対に行わない。
 
+### ルール 4.6: 空間結合カーディナリティ監査と 1:0 空小地域8属性Evidence完全保存
+1. **空間結合カーディナリティ（0:1 / 1:1 / 1:N / N:1 / 1:0）の厳格判定**:
+   - `1:1`: 骨格町域と e-Stat 小地域が 1 対 1 で一意一致。統計・座標属性を直接付与。
+   - `1:N`: 1つの骨格町域が複数の e-Stat 小地域に分割されている場合、各小地域レコードを行として展開し、それぞれの決定論的内部点（PIP）を導出。
+   - `N:1`: 複数の骨格町域が同一の `e_stat_code` を主張した場合は即時 **FATAL HARD STOP**（二重計上防止）。
+   - `0:1`: 対象選挙区外の自治体・小地域レコードは厳格に除外（混入防止）。
+   - `1:0`: 骨格町域に対応する e-Stat 小地域が存在しない場合、原則 **FATAL HARD STOP**。
+2. **1:0 空小地域の例外成立条件（8属性Evidence Gate）**:
+   - 当該町域に独立した小地域集計境界が存在しない公的事由が客観確認され、外部Reconciliationファイル（`--estat-reconciliation`）にキー `"<city_code>:<skeleton_town_name>"` で以下の **8必須項目すべてが非空文字列** で登録されている場合のみ、統計列を空欄（`households=""`, `population=""`, `e_stat_code=""`）とし、Phase 1 骨格のMLIT基準点座標を保持して通過を認める：
+     1. `city_code`: 5桁自治体コード
+     2. `skeleton_town_name`: 骨格町域名
+     3. `reconciled_status`: `"no_independent_estat_small_area"`
+     4. `source_provider`: 発行元・公定調査元機関名
+     5. `source_document_title`: 公定資料名
+     6. `source_url`: 公定URL
+     7. `source_section_or_page`: 当該事由・該当箇所
+     8. `verified_date`: 確認年月日（YYYY-MM-DD）
+3. **最終 Provenance への 8属性Evidence 完全永続化（Full Evidence Persistence）**:
+   - 一時的な外部Reconciliationファイルを破棄・削除した後も、完成地区の `provenance.json` 単体で空欄理由・公的根拠が恒久追跡できるよう、対象レコードの `estat_reconciliation_evidence` オブジェクトに上記8項目すべてを完全保存する。
+
+### ルール 4.7: 多重入れ子トポロジー幾何契約（Ring Containment Hierarchy & Even-Odd Rule）
+1. **多重包含トポロジー（Nested Topology）の普遍的解法**:
+   - 全国小地域境界における「外周（depth 0）➔ 穴/湖（depth 1）➔ 穴の中の島（depth 2）➔ 島の中の池（depth 3）...」という入れ子構造を幾何学的に正しく処理するため、単一外周＋穴の制約を廃止し、**リング包含深度階層（Ring Containment Hierarchy）** を採用する。
+2. **深度偶奇と回転方向（CW/CCW）の厳格整合性**:
+   - 偶数深度（depth 0, 2, 4...）: **Solid 実領域（外周・島）** ➔ CW（符号付き面積 < 0）
+   - 奇数深度（depth 1, 3, 5...）: **Void 空間（穴・湖）** ➔ CCW（符号付き面積 > 0）
+   - 深度偶奇と符号付き面積の回転方向が矛盾するリングはトポロジー不整合として即時 **FATAL HARD STOP**。
+3. **Even-Odd 包含判定と代表点導出**:
+   - 点 $P(x, y)$ を包含する境界リング総数 $K$ が奇数（$K \pmod 2 == 1$）の場合のみ実領域内部（INSIDE）と判定し、偶数の場合は穴・外部（OUTSIDE）として厳格排除する。
+   - 代表座標導出（Point-in-Polygon）において、単純頂点平均を絶対禁止し、上記 Even-Odd 判定を満たす決定論的内部点（point-on-surface 相当）のみを採用する。
+
 ---
 
 ## 5. 品質保証ゲート（Verification Gates: QG-1 〜 QG-5）
@@ -193,8 +214,8 @@ System: Universal POSTING MAP Engine / 289 District Expansion OS
 | **QG-1: 完全自律調達ゲート** | 人間介入ゼロの客観証明 | スクリプト実行で公式データ取得から生成までエラーなく完走し、原本構造健全性（ヘッダー列・コード形式）が検証され、人間の手動操作や地区固有ハードコード辞書が介在していないこと。 |
 | **QG-2: Phase 1 Area Skeleton 純度・完全性ゲート** | 3列骨格の純粋性・集合一致・重複ゼロ | 次をすべて満たすこと。(a) Phase 1 Skeleton が `rowId,city_name,town_name` の3列のみで、e-Stat等の後段データ非依存であり、人工的括弧名称が0件。(b) **期待集合**（母集合にルール 4.1 の区割り適用と 4.2 の正規化・案A衝突回避を行った `(city_name, town_name)` の集合）と出力集合を照合し、**混入ゼロ**（出力 ⊆ 期待）かつ **漏れゼロ**（期待 ⊆ 出力）。(c) 出力の `(city_name, town_name)` に**重複行が0件**で、出力行数 = 期待集合の要素数。(d) 区割り判定不能・名称衝突の未解決・読み仮名欠落がいずれも0件（表記乖離・読み欠損はルール 4.4 の外部根拠JSONにより公的に解決されていること）。 |
 | **QG-3: `rowId` 採番・参照整合性ゲート** | `rowId` 1..N 完全性 | 新規地区では Phase 1 出力の `rowId` が `1..N`（N = 出力行数）の連続整数で、欠番・重複なく採番され、Master Triad 間で 1:1 完全一致すること（既存稼働地区は既存 `rowId` 不変）。 |
-| **QG-4: Phase 2 後段属性整合ゲート** | 統計・座標属性の整合性 | Phase 2 で付与された `latitude`, `longitude`, `households`, `population`, `e_stat_code` が欠損・不正値なく Area Skeleton に結合されていること。 |
-| **QG-5: 幾何トポロジーゲート** | GeoJSON正常性 | `boundaries.geojson` の Feature 数が Area Skeleton 行数 $N$ と完全一致し、自己交差が0件、CRSがCRS84であること。 |
+| **QG-4: Phase 2 後段属性・証跡整合ゲート** | 統計・座標属性およびEvidence完全性 | (a) 最新国勢調査年度が全自治体で共通動的解決されていること。(b) 人口・世帯数合計が Expected e-Stat Set と完全一致（diff == 0）すること。(c) 代表座標が Even-Odd トポロジー検証済み内部点であること。(d) 1:0 空小地域の全レコードに 8属性完全Evidenceがバインドされ、最終 Provenance に完全永続化されていること。(e) 再整列実行（`sort-address-master.py`）により生成直後CSVと `diff -u == 0` を満たすこと。 |
+| **QG-5: 幾何トポロジーゲート** | GeoJSON & MultiPolygon 正常性 | `boundaries.geojson` の Feature 数が Area Skeleton 行数 $N$ と完全一致し、自己交差が0件、CRSがCRS84であり、多重入れ子トポロジーが Ring Containment Hierarchy 整合性を満たすこと。 |
 
 ---
 

@@ -60,7 +60,7 @@
     ],
     "deployer": [
       "official-data-audit",
-      "district-data-provisioning"
+      "address-master-generation"
     ]
   },
   "capabilityPacks": {
@@ -218,13 +218,13 @@
         "docs/research/evidence_kuwana_historical_lessons.md"
       ]
     },
-    "district-data-provisioning": {
-      "manifestPath": ".agents/skills/district-data-provisioning/SKILL.md",
-      "description": "District master data generation, GeoJSON boundary build, area mapping protocol",
+    "address-master-generation": {
+      "manifestPath": ".agents/skills/address-master-generation/SKILL.md",
+      "description": "13-step address master 8-column CSV generation, census dynamic resolution, PIP topology, provenance",
       "canonicalSources": [
         {
-          "path": ".agents/rules/district-data-transition-rule.md",
-          "sha256": "2432068e334ef7bcd816a2344f453fc0508ad0e3e60cd938ea736562d420032d"
+          "path": "docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md",
+          "sha256": "f7bd027593965d6de35780d98502a91709540f99c8ae8f7f4b8bc77480dd09d3"
         }
       ],
       "evidenceSources": [
@@ -265,7 +265,7 @@
     "TC-DISTRICT-PROVISION": {
       "name": "District Data Provisioning Contract",
       "requiredPacks": [
-        "district-data-provisioning",
+        "address-master-generation",
         "official-data-audit"
       ],
       "maxFiles": 5,
@@ -311,7 +311,7 @@
     "District Provisioner": {
       "baseRole": "deployer",
       "capabilityPacks": [
-        "district-data-provisioning",
+        "address-master-generation",
         "official-data-audit"
       ],
       "defaultTaskContract": "TC-DISTRICT-PROVISION"
@@ -350,6 +350,6 @@
     ".agents/skills/release-integrity/SKILL.md",
     ".agents/skills/knowledge-governance/SKILL.md",
     ".agents/skills/official-data-audit/SKILL.md",
-    ".agents/skills/district-data-provisioning/SKILL.md"
+    ".agents/skills/address-master-generation/SKILL.md"
   ]
 }
