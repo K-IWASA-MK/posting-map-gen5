@@ -1,10 +1,7 @@
 {
-  "mission": "Phase 1 Universal Rule Formalization & Skill Integration",
+  "mission": "Phase 1 Data Provisioning Quality & Provenance Verification Rectification",
   "files": [
     ".agents/current-scope.json",
-    "docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md",
-    ".agents/skills/district-data-provisioning/SKILL.md",
-    ".agents/skills/official-data-audit/SKILL.md",
     "scripts/fetch-district-raw-data.py",
     "scripts/build-district-master.py",
     "scripts/sort-address-master.py",
