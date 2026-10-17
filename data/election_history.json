@@ -13,6 +13,27 @@
   },
   "elections": [
     {
+      "electionId": "HR-2026-02",
+      "electionType": "general",
+      "electionName": "第51回衆議院議員総選挙",
+      "year": "2026",
+      "electionDate": "2026-02-08",
+      "eligibleVoters": 406846,
+      "voters": 239220,
+      "turnout": 58.8,
+      "districtTurnout": 58.8,
+      "municipalities": {
+        "いなべ市": 62.17,
+        "四日市市": 57.24,
+        "川越町": 56.31,
+        "朝日町": 64.07,
+        "木曽岬町": 59.57,
+        "東員町": 63.16,
+        "桑名市": 58.25,
+        "菰野町": 62.23
+      }
+    },
+    {
       "electionId": "HR-2024-10",
       "electionType": "general",
       "electionName": "第50回衆議院議員総選挙",
@@ -53,28 +74,7 @@
         "桑名市": 55.16,
         "菰野町": 60.04
       }
-    },
-    {
-      "electionId": "HR-2017-10",
-      "electionType": "general",
-      "electionName": "第48回衆議院議員総選挙",
-      "year": "2017",
-      "electionDate": "2017-10-22",
-      "eligibleVoters": 414000,
-      "voters": 231300,
-      "turnout": 55.87,
-      "districtTurnout": 55.87,
-      "municipalities": {
-        "いなべ市": 61.48,
-        "四日市市": 53.86,
-        "川越町": 54.71,
-        "朝日町": 65.17,
-        "木曽岬町": 60.93,
-        "東員町": 61.79,
-        "桑名市": 54.21,
-        "菰野町": 60.02
-      }
     }
   ],
-  "lastUpdated": "2026-10-17T12:40:00+09:00"
+  "lastUpdated": "2026-10-17T13:00:00+09:00"
 }
