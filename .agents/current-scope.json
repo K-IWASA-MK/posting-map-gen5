@@ -9,6 +9,7 @@
     "scripts/check-universal-invariants.mjs",
     "scripts/check-auditor-gate.mjs",
     "tests/test_auditor_gate.mjs",
-    "tests/test_auditor_effectiveness_regression.mjs"
+    "tests/test_auditor_effectiveness_regression.mjs",
+    ".agents/os-registry.json"
   ]
 }
