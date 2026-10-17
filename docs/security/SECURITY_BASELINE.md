@@ -29,7 +29,7 @@
 │         │ (LINE ID Token)                        │ (Shared PIN / Auth) │
 │         ▼                                        ▼                     │
 │   ┌────────────────────────────────────────────────────────────────┐   │
-│   │               Universal Standalone GAS Gateway                 │   │
+│   │       Universal 1-District GAS Gateway (`v2_api.js`)           │   │
 │   │                                                                │   │
 │   │  [SEC-006: Method Boundary]  doGet / doPost 厳格分離           │   │
 │   │  [SEC-003: Identity 導出]    LINE User ID → Staff 解決         │   │
@@ -42,14 +42,14 @@
 │   ┌────────────────────────────────────────────────────────────────┐   │
 │   │                 Tenant Isolation & Data Layer                  │   │
 │   │                                                                │   │
-│   │  [SEC-003: Routing Guard]    DISTRICT_REGISTRY 動的解決        │   │
+│   │  [SEC-003: DB Resolution]    getActiveSpreadsheet / TARGET_SS  │   │
 │   │  [SEC-003: Integrity Guard]  SYSTEM_INFO districtId 照合       │   │
 │   │  [SEC-002: Injection Guard]  Formula / CSV Injection 無害化   │   │
 │   │  [SEC-004: XSS Guard]        escapeHtml サニタイズ             │   │
 │   └────────────────────────────────────────────────────────────────┘   │
 │                                │                                       │
 │                                ▼                                       │
-│             [Pure DB (Spreadsheet per District)]                       │
+│             [1-District Dedicated DB (Spreadsheet per District)]       │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -78,7 +78,7 @@
 
 ### 2.2 SEC-002: Formula / CSV Injection 防御
 
-スプレッドシートをデータベース（Pure DB）として利用するため、ユーザー入力値が数式として解釈・実行される攻撃（Formula Injection / CSV Injection）を完全に防護する。
+スプレッドシートをデータベースとして利用するため、ユーザー入力値が数式として解釈・実行される攻撃（Formula Injection / CSV Injection）を完全に防護する。
 
 1. **危険先頭文字のエスケープ**:
    - 文字列データの先頭が以下のいずれかである場合、先頭にシングルクォート（`'`）を強制付与して格納する：
@@ -101,11 +101,11 @@
    - `LINE User ID (verified) → Person / Staff Identity → Branch → Branch Activity Target Regions`
    - クライアントが自己申告する `staffId` や `staffName` を認証・認可の根拠として信用しない。
    - サーバー側で LINE プラットフォームにより検証された `lineUserId` から `staffId` を逆引きし、クライアント送信値を強制上書きする。
-2. **DISTRICT_REGISTRY 動的解決**:
-   - 親GASは、リクエストに含まれる `districtId` をもとに `DISTRICT_REGISTRY` を参照し、接続先 `spreadsheetId` を動的に決定する。
-   - フォールバックによるデフォルト地区への誤接続は禁止する。
+2. **1地区専用スプレッドシート解決 (`SpreadsheetResolver`)**:
+   - 当該Spreadsheetに付属する1地区専用GASは、`SpreadsheetApp.getActiveSpreadsheet()` 優先および `TARGET_SPREADSHEET_ID` フォールバックにより、自地区専用のスプレッドシート（DB）を1対1で解決する。
+   - 複数地区共用親GASによる越境ルーティングは行わない。
 3. **SYSTEM_INFO Integrity Guard**:
-   - 接続先スプレッドシートを開いた直後、`SYSTEM_INFO` シートの `district_id` を読み出し、リクエストの `districtId` と一致することを検証する。
+   - 接続先スプレッドシートを開いた直後、`SYSTEM_INFO` シートの `地区コード` を読み出し、リクエストの `districtId` と一致することを検証する。
    - 万が一不一致の場合は `DISTRICT_MISMATCH` 例外をスローし、即時トランザクションを中断する。
 4. **クライアント側 HMAC 共有鍵の完全却下 (REJECT - ADR-006)**:
    - Hアプリはブラウザおよび PWA 環境（HTML/JavaScript）で動作するクライアントアプリケーションである。クライアントに共有鍵（HMAC Secret）を保持させた場合、開発者ツールや逆コンパイルにより即座に鍵が抽出・漏洩し、認証境界が根本から崩壊する。
@@ -156,8 +156,8 @@
 
 1. **地区別環境変数命名規則**:
    - `GOOGLE_MAPS_API_KEY_<DISTRICT_ID>`（例: `GOOGLE_MAPS_API_KEY_KUWANA`）
-2. **親GASでの動的解決**:
-   - `getMapsApiKey` アクション時、リクエストされた `districtId` に対応するキーを Script Properties から取得して返却する。
+2. **1地区専用GASでの解決**:
+   - `getMapsApiKey` アクション時、リクエストされた `districtId` に対応するキー（または当該地区専用プロパティ）を Script Properties から取得して返却する。
 3. **Legacy Fallback の廃止方針**:
    - 無印 `GOOGLE_MAPS_API_KEY` へのフォールバックは移行期間中のみ許容され、新設地区での利用は禁止する。全地区の移行完了後に完全廃止する。
 4. **GCP 側の二重制限**:
@@ -183,18 +183,18 @@
 | フェーズ | 運用ルール / 制約 |
 |:---|:---|
 | **発行 (Creation)** | 最小権限原則。API制限およびHTTPリファラー制限を必ず付与して作成。 |
-| **登録 (Storage)** | 親GAS Script Properties に格納。`.env` やソースコード、ドキュメントに実値を残さない。 |
+| **登録 (Storage)** | 当該1地区専用GASの Script Properties に格納。`.env` やソースコード、ドキュメントに実値を残さない。 |
 | **利用 (Usage)** | メモリ内でのみ一時参照。監査ログやエラーログに平文を出力しない。 |
 | **ローテーション (Rotation)** | 年1回または鍵漏洩疑惑時に実施。旧キーと新キーの並行運用期間（Grace Period）を設けず即時入替。 |
 | **破棄 (Revocation)** | 地区廃止時（Deprovisioning）または漏洩時に、GCP Console から即時キーを失効（Delete）。 |
 
 ### 3.1 LINE Developers プラットフォーム統合構成
-現場活動員の本人認証（LIFF）およびプッシュ通信を安全に維持するため、LINE Developers コンソール上の構造を以下のように統一管理する：
+現場活動員の本人認証（LIFF）およびプッシュ通信を安全に維持するため、LINE Developers コンソール上の構造を以下のように管理する：
 1. **Provider**: `Civic Tech Inc.` (最上位組織コンテナ)
-2. **LINE Login Channel**: `POSTING MAP Login` (共通認証チャネル、App type: Web app、Callback URL: `https://app.posting-map.jp/`)
+2. **LINE Login Channel**: `POSTING MAP Login` (App type: Web app、Callback URL: `https://<district-domain>/`)
 3. **Messaging API Channel**: `POSTING MAP Official` (Auto-reply: OFF, Greeting: ON, Webhook: ON)
-4. **LIFF Application**: `POSTING MAP Field` (Size: `Full`, Endpoint: `https://app.posting-map.jp/active/h-app/index.html`, Scopes: `profile`, `openid`, Bot Prompt: `Aggressive`)
-5. **シークレット隔離**: 長期チャネルアクセストークン等の機密情報は、リポジトリやフロントエンドへ配置せず、親GASの `ScriptProperties` に隔離保管する。
+4. **LIFF Application**: `POSTING MAP Field` (Size: `Full`, Endpoint: `https://<district-domain>/`, Scopes: `profile`, `openid`, Bot Prompt: `Aggressive`)
+5. **シークレット隔離**: 長期チャネルアクセストークン等の機密情報は、リポジトリやフロントエンドへ配置せず、当該1地区専用GASの `ScriptProperties` に隔離保管する。
 
 ---
 

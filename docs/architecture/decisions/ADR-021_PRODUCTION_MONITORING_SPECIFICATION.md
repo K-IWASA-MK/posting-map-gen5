@@ -37,7 +37,7 @@ POSTING MAP Universal Engine は、フィールドオペレーション（現場
 | **2** | **queue backlog** | 端末側 `DurableQueue`（IndexedDB `syncQueue`）の未送信保留滞留 | Hアプリ `getQueue()`, `getSyncQueueRowIds()`, UI同期バッジ | 未送信滞留件数 > 10件<br>またはリトライ上限（5回）到達 | **Severity 2** (警告) | 現場端末の電波状況確認、機内モードON/OFF、手動再送ボタン操作、アプリ再起動（IndexedDBデータ保持） |
 | **3** | **duplicate events** | 同一ピン/行への重複報告、多重キューイング、二重LINE Push | クライアント `Duplicate enqueue avoided` ログ、バックエンド `[IDEMPOTENCY] Cache hit` ログ | 同一 `rowId` / `requestId` の重複送信が短時間に頻発 | **Severity 3** (情報)<br>**Severity 2** (多発時) | べき等性による二重書き込み遮断の確認、クライアント側の連打防止・多重実行フラグ確認 |
 | **4** | **latency** | API 往復時間 (RTT) および画面描画遅延 | ブラウザ Performance API (`performance.now()`)、Cloud Monitoring 実行時間 | **ADR-015 SSOT 準拠**：<br>- Warm/Offline $T_2 > 250\text{ ms}$<br>- Cold $T_2 > 1000\text{ ms}$<br>- API P95 > 10,000ms | **Severity 2** (警告) | スプレッドシート行数・セル過多確認、Lock競合確認、通信帯域・ネットワーク環境確認 |
-| **5** | **GAS errors** | GAS ランタイム例外、実行時間上限、Quota 枯渇 | Google Cloud Error Reporting、GASダッシュボード「失敗数」 | 実行時間超過（Web App 30秒 / Batch 6分）、Quota 枯渇例外 | **Severity 1** (停止級)<br>**Severity 2** (バッチ失敗) | エラースタックトレース分析、Script Properties（`DISTRICT_REGISTRY`）健全性確認、バッチ手動再実行 |
+| **5** | **GAS errors** | GAS ランタイム例外、実行時間上限、Quota 枯渇 | Google Cloud Error Reporting、GASダッシュボード「失敗数」 | 実行時間超過（Web App 30秒 / Batch 6分）、Quota 枯渇例外 | **Severity 1** (停止級)<br>**Severity 2** (バッチ失敗) | エラースタックトレース分析、Script Properties（`TARGET_SPREADSHEET_ID`, `MAPS_API_KEY` 等）健全性確認、バッチ手動再実行 |
 | **6** | **Spreadsheet lock** | `LockService.getScriptLock()` 排他制御の獲得タイムアウト | GAS実行ログ `Lock Timeout: Failed to acquire lock within 10000ms.` | 発生頻度 > 5回 / 10分 | **Severity 1** (重大混雑) | 同時アクセス負荷の分散、長時間書き込み処理の非同期化・バッチ化 |
 | **7** | **map failure** | Google Maps JS API / Leaflet / OSM タイル・GeoJSON障害 | ブラウザ `window.onerror`、地図初期化ガード (`!window.google.maps`) | 地図コンテナ描画不能、タイルロード失敗、ポリゴンパース失敗 | **Severity 2** (UI不全) | APIキー/クォータ確認、ブラウザキャッシュクリア、オフライン案内UI表示 |
 | **8** | **authentication failure** | LINE認証拒否、GET経由トークン拒否、`UNAUTHORIZED`, `FORBIDDEN`, `DISTRICT_MISMATCH` | GAS実行ログ (`Authentication Error`), Cloud Logging HTTP 401/403 | 連続認証失敗（ブルートフォース疑い）、他地区アクセス試行 | **Severity 2** (警告) | LINE LIFF設定確認、端末登録用URL再発行、不正アクセスIP特定・遮断 |
@@ -99,7 +99,7 @@ POSTING MAP Universal Engine は、フィールドオペレーション（現場
 - **一次対応**:
   1. Web App タイムアウト（30秒）またはバッチタイムアウト（6分）の有無を確認。
   2. `UrlFetchApp` 日次クォータ（20,000回/日）の消費状況を Google Workspace 管理コンソールで確認。
-  3. `ScriptProperties`（`DISTRICT_REGISTRY` 等）の破損が疑われる場合は、[ADR-018](ADR-018_PRODUCTION_DEPLOYMENT_SPECIFICATION.md) に基づきプロパティを再設定。
+  3. `ScriptProperties`（`TARGET_SPREADSHEET_ID`, `MAPS_API_KEY` 等）の破損が疑われる場合は、[ADR-018](ADR-018_PRODUCTION_DEPLOYMENT_SPECIFICATION.md) に基づきプロパティを再設定。
 
 #### (6) Spreadsheet lock 監視運用
 - **検知メカニズム**:

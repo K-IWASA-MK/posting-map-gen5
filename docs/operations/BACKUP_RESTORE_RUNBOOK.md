@@ -14,12 +14,12 @@
 本書は、Universal POSTING MAP におけるデータ損失、スプレッドシート破損、誤操作、インフラ障害等のインシデントから迅速・確実にデータを復旧するための **バックアップおよびリストア運用手順（SSOT）** を規定する。
 
 ### 基本方針
-1. **Pure DB の定期保全**:
+1. **1地区専用スプレッドシートDBの定期保全**:
    - 各地区の業務データ（配布実績、スタッフ名簿、在庫等）が蓄積される Google スプレッドシートを主要バックアップ対象とする。
 2. **Secret の平文保存絶対禁止**:
    - Google Maps API Key、LINE Channel Secret、管理者PIN 等の機密情報は、**いかなるバックアップアーカイブにも平文で保存してはならない**。
 3. **4層物理分離による復元安全性**:
-   - スプレッドシート（Pure DB）の復元・差し替え作業を行っても、独立した Standalone GAS コードおよび Git 管理下の Master Data には一切影響を与えず、プログラム破壊リスクがゼロであること（ADR-001 4層物理分離の恩恵）。
+   - スプレッドシート（DB）の復元・差し替え作業を行っても、Universal Runtime コード（`active/`）および Git 管理下の Master Data（`data/`）には一切影響を与えず、プログラム破壊リスクがゼロであること（ADR-001 4層物理分離の恩恵）。
 4. **客観的指標の明記 (RPO / RTO)**:
    - 根拠のない目標復旧値は設定せず、現行インフラ（Google Drive / GAS）の制約を踏まえた現実的な指標を定義する（未確定事項は Decision Required と明記）。
 
@@ -41,23 +41,23 @@
 
 | 対象区分 | 対象リソース | バックアップ手法 | 取得頻度 | 保持期間 (Retention) | 保存先 |
 |:---|:---|:---|:---:|:---:|:---|
-| **業務データ (Pure DB)** | 各地区 Google スプレッドシート | Google Drive 版履歴 + 自動スナップショット複製 | 日次 (定期バッチ) | **TBD / Decision Required**<br>(組織規程・業務合意に基づき決定) | バックアップ専用 Drive フォルダ (隔離) |
-| **構成メタデータ** | 親GAS `DISTRICT_REGISTRY`, Script Properties キー定義 | 設定エクスポートスクリプト (Secret値はマスク) | 変更時随時 | **TBD / Decision Required**<br>(監査要件に基づき決定) | Git (暗号化) または保護リポジトリ |
+| **業務データ (1地区DB)** | 当該地区 Google スプレッドシート | Google Drive 版履歴 + 自動スナップショット複製 | 日次 (定期バッチ) | **TBD / Decision Required**<br>(組織規程・業務合意に基づき決定) | バックアップ専用 Drive フォルダ (隔離) |
+| **構成メタデータ** | 1地区専用GAS Script Properties キー定義（`TARGET_SPREADSHEET_ID` 等） | 設定エクスポートスクリプト (Secret値はマスク) | 変更時随時 | **TBD / Decision Required**<br>(監査要件に基づき決定) | Git (暗号化) または保護リポジトリ |
 | **マスターデータ** | `data/` (住所・境界GeoJSON・自治体) | Git コミット履歴 | 変更時随時 | 永続 (Git) | GitHub リポジトリ |
 | **監査証跡 (Audit)** | 配布完了タイムスタンプ、操作ログ | スプレッドシート内 `DISTRIBUTION_RECORDS` | リアルタイム | **TBD / Decision Required**<br>(法的要件・規約に基づき決定) | スプレッドシート DB |
 
 > [!CAUTION]
 > **Secret の除外原則**:
-> `DISTRICT_REGISTRY` 内の ID やメタデータはバックアップ対象とするが、`GOOGLE_MAPS_API_KEY_<DISTRICT_ID>` 等の鍵実値はバックアップ対象外とする。鍵情報は GCP Console およびマスター機密保管庫（KMS / 1Password等）にて独立管理する。
+> `TARGET_SPREADSHEET_ID` 等の非機密接続識別子はバックアップ対象とするが、`GOOGLE_MAPS_API_KEY_<DISTRICT_ID>` や `MAPS_API_KEY` 等の鍵実値はバックアップ対象外とする。鍵情報は GCP Console およびマスター機密保管庫（KMS / 1Password等）にて独立管理する。
 
 ---
 
 ## 4. バックアップ取得手順 (Daily Backup Procedure)
 
 ### 自動バックアップ（標準運用）
-1. スケジュール実行スクリプト（GAS タイムトリガーまたは外部管理バッチ）が起動。
-2. `DISTRICT_REGISTRY` に登録された有効地区のスプレッドシートIDを順次取得。
-3. 各スプレッドシートを、指定のバックアップ専用 Drive フォルダ（一般配布員・外部権限完全遮断）へ複製コピー。
+1. スケジュール実行スクリプト（当該地区専用GAS タイムトリガーまたは管理バッチ）が起動。
+2. 当該地区のスプレッドシート（`getActiveSpreadsheet()` または `TARGET_SPREADSHEET_ID`）を取得。
+3. 当該スプレッドシートを、指定のバックアップ専用 Drive フォルダ（一般配布員・外部権限完全遮断）へ複製コピー。
 4. ファイル名規則: `BACKUP_<districtId>_YYYYMMDD_HHmmss`
 5. コピー完了後、正式合意された保持期間ポリシー（TBD / Decision Required）に基づき古いバックアップファイルをパージ。
 
@@ -91,7 +91,7 @@
        ↓
 [SYSTEM_INFO 及び シート構造（DATA_DICTIONARY.md 準拠）の確認]
        ↓
-[DISTRICT_REGISTRY の spreadsheetId 差替え]
+[1地区専用GASバインド / TARGET_SPREADSHEET_ID の差替え]
        ↓
 [API Smoke Test & 導通確認]
        ↓
@@ -101,23 +101,22 @@
 ### 5.1 スプレッドシート復旧ステップ詳細
 
 1. **地区の一時停止 (Safety Suspension)**:
-   - 二重書き込みや不整合拡大を防ぐため、親GASの `DISTRICT_REGISTRY` において当該地区の `enabled` を `false` に変更する。
+   - 二重書き込みや不整合拡大を防ぐため、当該地区のスプレッドシート `SYSTEM_INFO` の `状態` を `SUSPENDED` に変更（または1地区専用GAS Web Appを一時停止）する。
 2. **バックアップファイルの特定と検証**:
    - 障害発生直前の健全なバックアップスプレッドシート（`BACKUP_<districtId>_YYYYMMDD_HHmmss`）をバックアップフォルダから特定。
 3. **本番用スプレッドシートの再配備**:
-   - バックアップファイルを本番フォルダへ複製し、ファイル名を `<districtId>` に設定。
+   - バックアップファイルを本番フォルダ（`03_BRANCH/<districtId>/`）へ複製し、ファイル名を `<districtId>` に設定。
    - 新しいスプレッドシートID（`RESTORED_SPREADSHEET_ID`）を取得。
 4. **Integrity Guard の確認**:
-   - 複製したシートの `SYSTEM_INFO` を開き、`district_id` が対象地区と完全一致していることを確認。
-   - コンテナバインドスクリプトが混入していないこと（Pure DB）を確認。
-5. **DISTRICT_REGISTRY の参照先更新**:
-   - 親GASの `DISTRICT_REGISTRY` を更新し、当該地区の `spreadsheetId` を `RESTORED_SPREADSHEET_ID` に差し替える。
-   - `enabled` を `false` のまま（検証中）として保存。
+   - 複製したシートの `SYSTEM_INFO` を開き、`地区コード` が対象地区と完全一致していることを確認。
+   - シート面内に不要なカスタム関数や `onEdit` トリガーが混入していないことを確認。
+5. **1地区専用GASの参照先更新**:
+   - 当該地区専用GASの Script Properties `TARGET_SPREADSHEET_ID` を `RESTORED_SPREADSHEET_ID` に更新（または付属GASを再配備）する。
 6. **復旧検証 (Restore Verification)**:
    - 管理者権限で Dashboard にログインし、直近の実績データが正しく表示されるか確認。
    - API Smoke Test を実行し、データ取得・登録が正常に行われることを確認。
 7. **サービス再開 (Re-activation)**:
-   - `DISTRICT_REGISTRY` の `enabled` を `true` に戻し、`SYSTEM_INFO` の `active` を `TRUE` に設定。
+   - `SYSTEM_INFO` の `状態` を `ACTIVE` に戻す。
    - 関係者へ復旧完了を通知。
 
 ### 5.2 Cutover & Rollback 標準運用手順 (Cutover & Rollback Standard Operating Procedure)
@@ -134,7 +133,7 @@
    - サーバー側がメンテナンス中・一時遮断時でも、現場での配布入力データは端末内で暗号学的 UUID と共に安全に保留される。
 2. **書き込み停止の実施**:
    - 管理者による事前アナウンスを実施。
-   - 親GAS `DISTRICT_REGISTRY` の `enabled: false`、またはスプレッドシート `SYSTEM_INFO` / GAS `LockService` を用いて、業務更新 API への書き込みを一時的に遮断・保留する。
+   - スプレッドシート `SYSTEM_INFO` の状態変更または GAS `LockService` を用いて、業務更新 API への書き込みを一時的に遮断・保留する。
 3. **インフライトリクエストのドレイン**:
    - 停止宣言後、30 秒間待機して通信中のリクエストが完全に完了（ドレイン）したことを確認する。
 
@@ -187,7 +186,7 @@
 | ロール | 担当者 / 組織 | 責務 |
 |:---|:---|:---|
 | **Primary Owner** | システム運用責任者 (Site Reliability Engineer) | 日次バックアップ監視、障害検知、一次リストア作業の執行 |
-| **Secondary Owner** | バックエンド開発リード | 整合性検証、`DISTRICT_REGISTRY` の安全な更新、トラブルシューティング |
+| **Secondary Owner** | バックエンド開発リード | 整合性検証、1地区専用GAS設定（`TARGET_SPREADSHEET_ID` 等）の安全な更新、トラブルシューティング |
 | **Escalation Point** | プロジェクト最高責任者 (MASTER) | サービス停止判断、長期データ欠損時の意思決定、関係先への障害報告 |
 
 - **エスカレーション基準**:

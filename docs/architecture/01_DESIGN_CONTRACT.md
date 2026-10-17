@@ -15,9 +15,9 @@
 
 ### 物理構成の不変条件
 
-- **1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン**
+- **1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定**
 
-共通Runtime（`active/**`）は Universal Engine として全地区共通であり、コピーして勝手に変更しない。地域・支部・対象地域等の差異はすべて **データ（`data/**`）および正式な外部設定として分離・吸収** する。
+共通Runtime（`active/**`）は Universal Engine として全地区共通であり、コピーして勝手に変更しない。地域・支部・対象地域等の差異はすべて **データ（`data/**`）および地区専用の外部設定として分離・吸収** する。
 
 ```text
                     Universal Engine (`active/**`)
@@ -35,18 +35,14 @@
 │ │ data/ (地区A)│ │    │ │ data/ (地区B)│ │    │ │ data/ (地区C)│ │
 │ └──────────────┘ │    │ └──────────────┘ │    │ └──────────────┘ │
 └────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
+         │ HTTPS POST            │ HTTPS POST            │ HTTPS POST
+         ▼                       ▼                       ▼
+  地区A専用GAS (v2_api)   地区B専用GAS (v2_api)   地区C専用GAS (v2_api)
+  (当該Spreadsheet付属)   (当該Spreadsheet付属)   (当該Spreadsheet付属)
          │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 │ HTTPS POST (API Request)
-                                 ▼
-                    親 Standalone GAS 1本
-                    単一固定 Web App URL
-                    (動的地区ルーティング)
-                                 │
-              ┌──────────────────┼──────────────────┐
-              ▼                  ▼                  ▼
-        地区A Spreadsheet  地区B Spreadsheet  地区C Spreadsheet
-        Pure DB (13シート) Pure DB (13シート) Pure DB (13シート)
+         ▼                       ▼                       ▼
+  地区A Spreadsheet       地区B Spreadsheet       地区C Spreadsheet
+  地区専用DB (13シート)   地区専用DB (13シート)   地区専用DB (13シート)
 ```
 
 ### 4層物理分離アーキテクチャ (4-Tier Physical Separation)
@@ -62,24 +58,23 @@
                                     │ HTTPS POST (API Request)
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Layer 2: API Gateway Layer (Universal Standalone GAS Web App)          │
-│  - 単一 Web App URL によるマルチテナント集中ルーティング               │
+│ Layer 2: API Gateway Layer (当該Spreadsheetに付属する1地区専用GAS)     │
+│  - 地区専用 Web App URL による自地区完結バックエンド                   │
 │  - LINE LIFF 検証 / サーバーサイドセッション管理 / 悲観的排他ロック    │
 │  - 全業務ロジック・入力検証・集計責務の集中実行                        │
 └─────────────────┬────────────────────────────────────┬─────────────────┘
                   │                                    │
                   ▼                                    ▼
 ┌──────────────────────────────────┐ ┌───────────────────────────────────┐
-│ Layer 3: Storage Layer           │ │ Layer 4: Pure Database Layer      │
-│  - Google Drive (原本ファイル)   │ │  - Google Spreadsheet (純粋DB)    │
-│  - 配布証跡写真 (Photo Files)    │ │  - Script / Trigger / 関数埋込禁止│
+│ Layer 3: Storage Layer           │ │ Layer 4: Database Layer           │
+│  - Google Drive (原本ファイル)   │ │  - Google Spreadsheet (地区専用DB)│
+│  - 配布証跡写真 (Photo Files)    │ │  - 当該Spreadsheet付属GASと1対1結合│
 │  - GeoJSON 境界データ            │ │  - 単純な行・列データ保持に特化   │
 └──────────────────────────────────┘ └───────────────────────────────────┘
 ```
 
-### Pure DB の絶対原則 (ADR-001)
-- スプレッドシート（Layer 4）内に Apps Script、カスタム関数（`=QUERY`, `=IMPORTRANGE` 等の動的集計）、トリガーを配置することを永久に禁止する（Container-bound Apps Script 永久廃止）。
-- 集計・計算責務はすべて Layer 2（Standalone GAS）が担い、Spreadsheet は純粋な RDBMS / ストレージとして機能させる。これにより他地区への完全な可搬性とバージョン管理容易性を担保する。
+### 地区専用DBと付属1地区専用GASの原則 (ADR-001)
+- スプレッドシート（Layer 4）内のシート数式による動的集計（`=QUERY`, `=IMPORTRANGE` 等）に依存せず、集計・計算・認証・排他ロック責務はすべて Layer 2（当該Spreadsheetに付属する1地区専用GAS `v2_api.js`）が担い、Spreadsheet は13シート標準台帳として機能させる。これにより他地区への完全な可搬性とバージョン管理容易性を担保する。
 
 ### 絶対に採用しない構造
 
@@ -87,6 +82,7 @@
 地区固有の共通Runtime（active/**）個別フォーク
 地区固有の個別コード分岐（if (district === 'A') ...）
 地区名のプログラムコード内ハードコード
+複数地区を1本の共有親GAS（DISTRICT_REGISTRY）へ束ねるマルチテナント共有構造
 ```
 
 共通Runtime（`active/**`）のコードを地区展開のために複製・改変・分岐させる設計は絶対に採用しない。
@@ -349,7 +345,7 @@ POSTING MAPは「1地区 = 1完成アプリ = 1単独フォルダー = 1単独�
 - 自分の担当エリア
 - 他人の本人性
 
-## Standalone GAS API
+## 1地区専用GAS API (当該Spreadsheet付属)
 
 ### 決めてよい
 
@@ -368,11 +364,11 @@ POSTING MAPは「1地区 = 1完成アプリ = 1単独フォルダー = 1単独�
 
 ## Spreadsheet
 
-Pure DBとして扱う。
+地区専用DBとして扱う。
 
-- スクリプト内包なし
-- トリガー依存なし
-- 業務ロジック依存なし
+- 当該Spreadsheetに付属する1地区専用GAS（`v2_api.js`）と1対1結合
+- シート数式による動的集計に依存しない
+- API層のみが業務ルールを担う
 
 ## Dashboard
 
@@ -589,16 +585,16 @@ T5 最新差分同期完了
 
 最低限以下を管理する。
 
-- ADR-001 LINE Identity
-- ADR-002 Standalone GAS API
-- ADR-003 Spreadsheet Pure DB
-- ADR-004 Hアプリ / Dashboard分離
-- ADR-005 共通エンジン / 地域データ分離
-- ADR-006 Offline Queue / Idempotency
-- ADR-007 Google Maps Loader
-- ADR-008 担当エリアなし・自律選択モデル
-- ADR-003 Universal エンジンと地域差データ吸収（1地区=1完成アプリ=1単独repo=1単独domain）
-- ADR-010 個人ランキング
+- ADR-001 地区専用DB・付属1地区専用GASアーキテクチャ
+- ADR-002 自由ポスティング・担当エリア非存在原則
+- ADR-003 個人ランキング（モチベーション機能）原則
+- ADR-004 15秒悲観的スクリプト排他ロック
+- ADR-005 PinStatus と DistributionRecord の分離
+- ADR-006 LINE LIFF Bearer Token 認証
+- ADR-007 Google Maps Loader 統合
+- ADR-008 4層物理分離アーキテクチャ
+- ADR-009 H-App Core 仕様
+- ADR-010 Hアプリ / Dashboard 責務分離
 
 ---
 
@@ -622,7 +618,7 @@ T5 最新差分同期完了
 5. Offline未考慮
 6. Mock成功・実機失敗
 7. clasp pushのみで本番完了と誤認
-8. container-bound GAS残存
+8. 旧式非管理GASコードの残存
 9. 大量ポリゴンによるモバイル負荷
 10. Antigravity用のクリーン構造不足
 11. AIによる未依頼変更
@@ -647,8 +643,8 @@ T5 最新差分同期完了
 
 🔵を根拠なく継承・廃止へ変更してはならない。
 
-### 19.1 13シート Pure DB 台帳構成 (DATA_DICTIONARY 整合)
-スプレッドシートを純粋なリレーショナルDBとして運用するための13シート台帳：
+### 19.1 13シート地区専用DB台帳構成 (DATA_DICTIONARY 整合)
+スプレッドシートを地区専用の標準DBとして運用するための13シート台帳：
 
 | # | シート名 | 用途・分類 | 変更特性 | 備考 |
 |---|---|---|---|---|
@@ -780,7 +776,7 @@ data/
 
 ## Phase 6 — API境界
 
-Standalone GASをJSON APIとして構築する。
+当該Spreadsheetに付属する1地区専用GASをJSON APIとして構築する。
 
 - Request validation
 - Auth
@@ -792,14 +788,13 @@ Standalone GASをJSON APIとして構築する。
 
 ---
 
-## Phase 7 — Pure DB
+## Phase 7 — Database Layer
 
-SpreadsheetをPure DBとして整理する。
+Spreadsheetを地区専用DBとして整理する。
 
-- Scriptなし
-- Trigger依存なし
-- 業務ロジックなし
-- APIのみが業務ルールを担う
+- 13シート標準台帳
+- シート数式による動的集計に依存しない
+- 業務ロジックはAPI層（`v2_api.js`）のみが担う
 
 ---
 
@@ -1068,10 +1063,8 @@ graph TD
    - `POST /exec { "action": "getDashboardSnapshot" }` ➔ HTTP 200 正常データ返却
    - `POST /exec { "action": "getRanking" }` ➔ HTTP 200 正常ランキング返却
    - `POST /exec { "action": "getFlyerStock" }` ➔ HTTP 200 正常在庫返却
-3. **セキュリティ & 整合性ガード (Generation 2 Routing Error Contract)**:
-   - `districtId missing` ➔ HTTP 200 `{ success: false, code: "MISSING_DISTRICT_ID" }` による安全遮断。
-   - `DISTRICT_REGISTRY unregistered` ➔ HTTP 200 `{ success: false, code: "DISTRICT_NOT_FOUND" }` による未登録地区遮断。
-   - `registered district + SYSTEM_INFO district-code mismatch` (Integrity Guard) ➔ HTTP 200 `{ success: false, code: "DISTRICT_MISMATCH" }` による越境・取り違え遮断。
+3. **セキュリティ & 整合性ガード (Single-District Integrity & Safety Guard)**:
+   - `SYSTEM_INFO district-code mismatch` (Integrity Guard) ➔ HTTP 200 `{ success: false, code: "DISTRICT_MISMATCH" }` による越境・取り違え遮断。
    - `expired district` ➔ HTTP 200 `{ success: false, code: "CONTRACT_EXPIRED" }` による安全側遮断 (Fail-Closed)。
    - `SYSTEM_INFO / contract verification failure` ➔ HTTP 200 `{ success: false, code: "CONTRACT_CHECK_FAILED" }` による安全遮断。
 
@@ -1159,7 +1152,7 @@ graph TD
 異なる地域データ（data/**）
 ```
 
-による独立完成アプリ（1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン）として成立すること。
+による独立完成アプリ（1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定）として成立すること。
 
 ---
 
@@ -1301,7 +1294,7 @@ POSTING MAPでは、以下をすべて満たして初めて「実装完了」と
 
 - [ ] Hアプリ
 - [ ] API
-- [ ] Pure DB
+- [ ] Database
 - [ ] Dashboard
 - [ ] 個人ランキング
 - [ ] Offline
@@ -1327,7 +1320,7 @@ POSTING MAPでは、以下をすべて満たして初めて「実装完了」と
 - [ ] GAS deployment
 - [ ] Production API verification
 - [ ] Production reflection verification
-- [ ]必要なmigration
+- [ ] 必要なmigration
 - [ ] Cutover
 - [ ] Rollback確認
 
@@ -1343,7 +1336,7 @@ POSTING MAPでは、以下をすべて満たして初めて「実装完了」と
 
 汎用POSTING MAPは、
 
-> **「1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン」のアーキテクチャ原則のもと、共通Runtime（`active/**`）は全地区共通のUniversal Engineとして維持し、地域ごとの差異をデータ（`data/**`）として吸収する。**
+> **「1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定」のアーキテクチャ原則のもと、共通Runtime（`active/**`）は全地区共通のUniversal Engineとして維持し、地域ごとの差異をデータ（`data/**`）として吸収する。**
 
 その上で、
 
@@ -1386,7 +1379,7 @@ Identity / Tenant
   ↓
 API
   ↓
-Pure DB
+Database
   ↓
 HアプリCore
   ↓
@@ -1431,7 +1424,7 @@ Universal POSTING MAP は、Phase 0 から Phase 21 に至る全再構築フェ�
 
 ### Universal Engine 完成の定義
 1. **アーキテクチャの完成**:
-   - 1地区=1完成アプリ=1単独フォルダー=1単独リポジトリ=1単独ドメイン原則、単一親 Standalone GAS プロジェクト、単一 Web App URL による全国動的ルーティング構造が確立されていること。
+   - 1地区=1完成アプリ=1単独フォルダー=1単独リポジトリ=1単独ドメイン=1単独スプレッドシート（DB）=当該Spreadsheetに付属する1地区専用GAS=地区専用外部設定原則が確立されていること。
 2. **再構築フェーズの終了と製品ライフサイクルの開始**:
    - 以後、開発作業は「再構築（Reconstruction）」から「製品ライフサイクル管理（Product Lifecycle Operations: 展開・運用・監視・復旧・更新・廃止）」へと正式に昇格・移行する。
 3. **地域差＝データ原則の達成**:
@@ -1446,9 +1439,9 @@ Universal Engine の完成状態を固定し、無秩序な改変を防ぐため
 
 ### 凍結対象 (Frozen Scope)
 - **Universal Engine Core (`active/**`)**: フロントエンド、バックエンドGAS、共通ライブラリ
-- **API Contract (`docs/api/API_CONTRACT.md`)**: 全27アクションおよび通信プロトコル
+- **API Contract (`docs/api/API_CONTRACT.md`)**: 公開・管理アクションおよび通信プロトコル
 - **Data Schema (`docs/data/DATA_DICTIONARY.md`)**: 13シート標準構造（初期プロビジョニング時 11 Core Sheets 複製 ➔ 現場2シートオンデマンド生成）およびカラム定義
-- **Identity / Tenant Boundary**: LINE User ID からの正規導出、DISTRICT_REGISTRY ルーティング、SYSTEM_INFO Integrity Guard
+- **Identity / Tenant Boundary**: LINE User ID からの正規導出、`SpreadsheetApp.getActiveSpreadsheet()` / `TARGET_SPREADSHEET_ID` 解決、`SYSTEM_INFO` Integrity Guard
 - **Offline / Idempotency Model**: Durable Queue、requestId による重複遮断
 - **Universal Invariants**: INV-001 〜 INV-009
 
@@ -1481,11 +1474,11 @@ Universal Engine の完成状態を固定し、無秩序な改変を防ぐため
   ↓
 データ完全性検証 (境界・世帯数突合)
   ↓
-Spreadsheet Template 複製 (Pure DB)
+Spreadsheet Template 複製 (地区専用DB & 当該Spreadsheetに付属する1地区専用GAS)
   ↓
 SYSTEM_INFO 設定 (district_id / 初期設定)
   ↓
-DISTRICT_REGISTRY 登録 (親GAS Script Properties)
+GAS Script Properties 設定 (TARGET_SPREADSHEET_ID / STORAGE_FOLDER_ID 等)
   ↓
 地区 Secrets 設定 (GOOGLE_MAPS_API_KEY_<districtId>)
   ↓
@@ -1546,7 +1539,7 @@ ACTIVE (本番運用開始)
        ┌────────────────┐
        │ DEPROVISIONING │
        └──────┬─────────┘
-              │ [鍵Revoke・データ退避・Registry抹消]
+              │ [鍵Revoke・データ退避・アクセス遮断]
               ▼
        ┌────────────────┐
        │ DECOMMISSIONED │
@@ -1558,11 +1551,11 @@ ACTIVE (本番運用開始)
 | 状態名 | Entry Condition (開始条件) | Allowed Operations (許可される操作) | Exit Condition (終了条件) | 必須 Evidence (証跡) |
 |:---|:---|:---|:---|:---|
 | **PLANNED** | 展開対象自治体・選挙区の決定 | 地区ID確定、マスターデータ調達・検証 | 境界・住所データ整合確認 | 地区基本情報票、e-Stat突合ログ |
-| **PROVISIONING** | マスターデータ調達完了 | スプレッドシート複製、Registry登録、API Key設定 | 全インフラリソース構築完了 | リソースID一覧、GCP制限設定証跡 |
+| **PROVISIONING** | マスターデータ調達完了 | スプレッドシート複製、付属GAS設定、API Key設定 | 全インフラリソース構築完了 | リソースID一覧、GCP制限設定証跡 |
 | **VALIDATING** | リソース構築完了 | テストアクセス、実機検証、API Smoke Test | Production Acceptance 20項目全件PASS | 受入検品レポート、実機ログ |
 | **ACTIVE** | Production Acceptance 合格 + MASTER承認 | 配布員・管理者の通常業務利用、監視 | 契約終了、または緊急停止事由の発生 | 昇格承認記録、本番稼働ログ |
-| **SUSPENDED** | 支払遅延、契約更新協議中、緊急障害 | 一時停止、障害調査、復旧作業 | 障害解消・契約更新、または解約合意 | 停止理由書、Registry `enabled:false` 記録 |
-| **DEPROVISIONING** | 正式解約合意、契約満了確定 | バックアップ取得、鍵Revoke、個人情報消去 | 全リソース回収・Registry抹消完了 | 最終バックアップURL、鍵削除証跡 |
+| **SUSPENDED** | 支払遅延、契約更新協議中、緊急障害 | 一時停止、障害調査、復旧作業 | 障害解消・契約更新、または解約合意 | 停止理由書、`SYSTEM_INFO` 停止設定記録 |
+| **DEPROVISIONING** | 正式解約合意、契約満了確定 | バックアップ取得、鍵Revoke、個人情報消去 | 全リソース回収・WebApp停止完了 | 最終バックアップURL、鍵削除証跡 |
 | **DECOMMISSIONED** | 廃止作業完了検証合格 | アーカイブデータの保管・法的照会対応のみ | （終局状態） | 廃止完了報告書、アクセス拒絶ログ |
 
 ---
@@ -1574,8 +1567,8 @@ Universal POSTING MAP が「運用可能（Operable）」であると判定さ�
 
 - [ ] **Universal Release Baseline 固定**: v1.0.0 ベースラインコミットおよび凍結規程が確定していること。
 - [ ] **District Provisioning Runbook 存在**: 属人的判断を排除した手順書が存在すること。
-- [ ] **District Configuration Inventory 存在**: 全稼働地区のID・DB・設定一覧が保全されていること。
-- [ ] **Backup 取得方法確立**: Pure DB およびメタデータの日次・手動バックアップ手順が確立していること。
+- [ ] **District Configuration Inventory 存在**: 稼働地区のID・DB・設定一覧が保全されていること。
+- [ ] **Backup 取得方法確立**: 地区専用DBおよびメタデータの日次・手動バックアップ手順が確立していること。
 - [ ] **Restore 手順確立**: スプレッドシート破損等の障害時に差し替え復旧できる手順が存在すること。
 - [ ] **Restore 検証可能 (Drill)**: バックアップからの復旧訓練が定期実施可能であること。
 - [ ] **GAS 障害切り分け手順存在**: Google障害、クォータ枯渇、権限失効時の切り分け手順が存在すること。
@@ -1583,11 +1576,11 @@ Universal POSTING MAP が「運用可能（Operable）」であると判定さ�
 - [ ] **Secret Rotation 手順存在**: APIキー等の定常ローテーション手順が存在すること。
 - [ ] **Maps Key Revoke 手順存在**: 鍵漏洩疑惑時に即座に失効できる手順が存在すること。
 - [ ] **LINE / LIFF 設定管理方法確立**: 地区別チャネルの作成・更新・削除手順が確立していること。
-- [ ] **DISTRICT_REGISTRY 管理方法確立**: 親GAS Script Properties の安全な更新手順が確立していること。
-- [ ] **Deployment ID 管理方法確立**: 単一親GAS Web App のデプロイID管理方法が確立していること。
+- [ ] **Script Properties 管理方法確立**: 当該Spreadsheetに付属する1地区専用GASの Script Properties（`TARGET_SPREADSHEET_ID` 等）の安全な更新手順が確立していること。
+- [ ] **Deployment ID 管理方法確立**: 地区専用GAS Web App のデプロイID管理方法が確立していること。
 - [ ] **Monitoring 確認可能**: 本番ログ、エラーレート、レイテンシが観測可能であること。
 - [ ] **Incident 対応経路存在**: SEV-1〜SEV-3 の初動・エスカレーション体制が存在すること。
-- [ ] **District Suspend 可能**: 稼働中地区を他地区に影響を与えず即座に一時停止できること。
+- [ ] **District Suspend 可能**: 稼働中地区を即座に一時停止できること。
 - [ ] **District Deprovision 可能**: 解約地区を安全に廃止・個人情報消去できること。
 - [ ] **Evidence 保存可能**: 全運用操作の証跡が保存・追跡可能であること。
 
@@ -1616,8 +1609,8 @@ Phase 20 で確立された監視項目を恒久的な運用指標として整�
 ## 26.7 Incident Response Lifecycle (インシデント対応規程)
 
 ### Severity 定義
-- **SEV-1 (Critical)**: 全地区停止、テナント分離の崩壊（他地区データ漏洩）、認証バイパス、機密情報重大漏洩。
-- **SEV-2 (Major)**: 単一地区の業務停止、ポスティング確定処理の不能、Dashboard全面障害、Maps API全面停止。
+- **SEV-1 (Critical)**: システム全面停止、テナント分離の崩壊（他地区データ漏洩）、認証バイパス、機密情報重大漏洩。
+- **SEV-2 (Major)**: 業務停止、ポスティング確定処理の不能、Dashboard全面障害、Maps API全面停止。
 - **SEV-3 (Minor)**: 一部画面の描画遅延、オフライン同期の散発的遅延、軽微なUI表示不整合。
 
 ### 対応ライフサイクルフロー
@@ -1647,7 +1640,7 @@ Phase 20 で確立された監視項目を恒久的な運用指標として整�
 
 1. **Universal Engine Version (`v1.0.0`)**: 共通Runtime全体のバージョン。
 2. **API Contract Version (`v2.0.0`)**: フロント・バックエンド通信インターフェース。
-3. **Data Schema Version (`v1.0.0`)**: 13シート標準構造 Pure DB のデータ構造（DATA_DICTIONARY.md 準拠）。
+3. **Data Schema Version (`v1.0.0`)**: 13シート標準構造の地区専用DBのデータ構造（DATA_DICTIONARY.md 準拠）。
 4. **District Provisioning Spec Version (`v1.0.0`)**: プロビジョニング手順・マスター構造。
 
 ### 地区互換性追跡 (DESIGNED / PROPOSED)
@@ -1698,7 +1691,7 @@ Create (作成) ──► Use (利用) ──► Retain (保持) ──► Archi
    - Legacy（無印 `GOOGLE_MAPS_API_KEY`）へのフォールバックは新規地区では禁止し、段階的に完全廃止する。
 2. **保管と伝達の境界**:
    - ローカル環境（`.env`）から Git への混入を `.gitignore` で完全遮断。
-   - 親GASの Script Properties へ直接設定し、ソースコードやドキュメントに平文を記載しない。
+   - 当該Spreadsheetに付属する1地区専用GASの Script Properties へ直接設定し、ソースコードやドキュメントに平文を記載しない。
 3. **GCP 側の二重制限**:
    - HTTP リファラー制限および許可 API 制限を必須とする。
 4. **漏洩・インシデント時対応**:

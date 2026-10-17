@@ -370,8 +370,8 @@ assert.ok(fs.existsSync(provisioningRunbookPath), 'DISTRICT_PROVISIONING_RUNBOOK
 const provisioningRunbookContent = fs.readFileSync(provisioningRunbookPath, 'utf8');
 
 assert.ok(provisioningRunbookContent.includes('Zero Code Duplication / Zero Runtime Modification'), 'Runbook must enforce Zero Code Duplication / Zero Runtime Modification');
-assert.ok(provisioningRunbookContent.includes('単一親GAS・単一Web App維持'), 'Runbook must enforce single parent GAS and Web App URL');
-assert.ok(provisioningRunbookContent.includes('DISTRICT_REGISTRY'), 'Runbook must enforce dynamic DB resolution via DISTRICT_REGISTRY');
+assert.ok(provisioningRunbookContent.includes('当該Spreadsheetに付属する1地区専用GAS'), 'Runbook must enforce 1-district dedicated GAS bound to the spreadsheet');
+assert.ok(provisioningRunbookContent.includes('TARGET_SPREADSHEET_ID'), 'Runbook must enforce 1-district DB resolution via getActiveSpreadsheet / TARGET_SPREADSHEET_ID');
 
 // 3. 最上位基本就業規則 (AGENTS.md) における不変契約の確認
 const agentsRulePath = path.join(REPO_ROOT, 'AGENTS.md');

@@ -1,5 +1,5 @@
 ---
-principleVersion: "2026-10-15"
+principleVersion: "2026-10-17"
 status: "CURRENT"
 ---
 
@@ -44,9 +44,10 @@ status: "CURRENT"
 
 ---
 
-### 第3条：One District = One Complete App Boundary（物理製品境界原則）
-- **1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン**
-共通Runtime（`active/**`）は Universal Engine として全地区同一内容を維持し、地区ごとのコード改変・個別分岐・ハードコードを永久に禁止する。地域差はデータ（`data/**`）および正式な外部設定として分離・吸収する。
+### 第3条：One District = One Complete App Boundary（物理製品境界・地区内完全閉塞原則）
+- **1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定**
+- フォルダー、Gitリポジトリ、配信ドメイン、Googleスプレッドシート（DB）、当該Spreadsheetに付属する1地区専用GAS、および外部設定（Script Properties・LINE LIFF・Google Drive ストレージ階層）に至るまで、すべて1地区単位で物理的に独立・閉塞させる。複数地区を単一の親GASや共有レジストリ（`DISTRICT_REGISTRY`）へ集約・混在させる構造は採用しない。
+- 共通Runtime（`active/**`）は Universal Engine として全地区同一内容を維持し、地区ごとのコード改変・個別分岐・ハードコードを永久に禁止する。地域差はデータ（`data/**`）および正式な外部設定として分離・吸収する。
 
 ---
 

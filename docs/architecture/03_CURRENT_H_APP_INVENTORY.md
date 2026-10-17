@@ -33,7 +33,7 @@
 
 ---
 
-## 2. データベース現物構造（Spreadsheet Pure DB / ADR-024 Dual Lifecycle 準拠）
+## 2. データベース現物構造（地区専用 Spreadsheet DB / ADR-024 Dual Lifecycle 準拠）
 
 `active/business/system/district_provisioner.js`、`monthly_sheet_resolver.js`、`bulletin_service.js`、および ADR-024 に基づく実シート構成：
 

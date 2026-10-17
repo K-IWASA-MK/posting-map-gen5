@@ -123,12 +123,12 @@ backdrop-filter: blur(20px);
 
 ---
 
-## 7. Unified Domain & Endpoint Architecture
+## 7. Unified Domain & Endpoint Architecture (1地区 = 1単独ドメイン原則)
 
-全仕様書共通の統制ドメインポリシーに基づくエンドポイント定義。
+最高位原則（`1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定`）に基づく地区独立エンドポイント定義。
 
-- **Root Domain**: `https://posting-map.jp/`
-- **App URL**: `https://app.posting-map.jp/`
-- **Dashboard URL**: `https://admin.posting-map.jp/`
-- **API Proxy Gateway**: `https://api.posting-map.jp/`
-- **LIFF Endpoint URL**: `https://app.posting-map.jp/active/h-app/index.html`
+- **District Custom Domain**: `https://<district-domain>/`（各地区のリポジトリ `CNAME` で定義される地区専用独自ドメイン）
+- **App URL**: `https://<district-domain>/active/h-app/index.html`（またはルート `https://<district-domain>/` 経由）
+- **Dashboard URL**: `https://<district-domain>/active/manager/dashboard.html`
+- **Backend API Endpoint**: 当該地区のSpreadsheetに付属する1地区専用GAS Web App URL（`data/config.js` の `GAS_EXEC_URL` に設定）
+- **LIFF Endpoint URL**: `https://<district-domain>/`（当該地区専用の LIFF ID と 1対1 でバインド）

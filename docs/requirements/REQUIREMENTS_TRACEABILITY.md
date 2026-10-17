@@ -32,11 +32,11 @@
 
 | REQ-ID | 要件 | 不変条件 / Design Contract | ADR | Data / API Contract | Implementation Target | Verification | Status |
 |:---|:---|:---|:---|:---|:---|:---|:---|
-| **REQ-ARCH-001** | 4層物理分離 | Client / Backend Standalone GAS / Pure DB / Master Data の物理的分離 | [ADR-001](../architecture/decisions/ADR-001.md) | `DATA_LIFECYCLE.md` §1<br>`API_CONTRACT.md` §2 | `index.html`<br>`active/h-app/`<br>`active/api/v2_api.js`<br>`data/` | アーキテクチャ・境界検証ゲート（No bound scripts / No regional code） | **VERIFIED** |
+| **REQ-ARCH-001** | 4層物理分離 | Client / 当該Spreadsheetに付属する1地区専用GAS / 1地区DB / Master Data の物理的分離 | [ADR-001](../architecture/decisions/ADR-001.md) | `DATA_LIFECYCLE.md` §1<br>`API_CONTRACT.md` §2 | `index.html`<br>`active/h-app/`<br>`active/api/v2_api.js`<br>`data/` | アーキテクチャ・境界検証ゲート（No regional code） | **VERIFIED** |
 | **REQ-ARCH-002** | Universal Engine | 1地区=1完成アプリ=1単独フォルダー=1単独リポジトリ=1単独ドメイン。共通Runtime改変禁止、地域差はdata/で吸収 | [ADR-003](../architecture/decisions/ADR-003.md) | `01_DESIGN_CONTRACT.md` §1<br>`DATA_DICTIONARY.md` §0 | Git Root<br>`active/`<br>`data/` | Universal Boundary 検証ゲート（Universal Engine pureness） | **VERIFIED** |
 | **REQ-ARCH-003** | `active/` 不可侵境界と共通進化 | 地区特化のための変更は禁止。共通改善・バグ修正はGate統制下で許容 | [ADR-003](../architecture/decisions/ADR-003.md) | `AGENTS.md` §1<br>`01_DESIGN_CONTRACT.md` §1 | `active/` 全域 | 変更前の事前宣言および事後 `git diff` 差分照合 | **VERIFIED** |
 | **REQ-ARCH-004** | レガシー互換性・実行環境制約 | IIFE / グローバル Singleton 構造の当面尊重と近代化境界の分離 | [ADR-007](../architecture/decisions/ADR-007.md) | `API_CONTRACT.md` §2 | `active/h-app/app.js`<br>`active/api/v2_api.js`<br>`active/business/` | コード構造監査（既存の即時実行関数および単一インスタンス管理を確認） | **VERIFIED** |
-| **REQ-ARCH-005** | Pure DB 原則 | スプレッドシート内にスクリプト、カスタム関数、トリガーを内包しない | [ADR-001](../architecture/decisions/ADR-001.md) | `01_DESIGN_CONTRACT.md` §2<br>`DATA_LIFECYCLE.md` §1 | 外部 Google Spreadsheet DB | Standalone GAS / Pure DB 境界検査 | **VERIFIED** |
+| **REQ-ARCH-005** | シート面 Pure DB 原則 | スプレッドシートのシート面内にカスタム関数、シート編集トリガー、マクロを内包しない | [ADR-001](../architecture/decisions/ADR-001.md) | `01_DESIGN_CONTRACT.md` §2<br>`DATA_LIFECYCLE.md` §1 | Google Spreadsheet DB | 1地区専用GAS / DB 境界検査 | **VERIFIED** |
 
 ---
 
@@ -96,10 +96,10 @@
 | REQ-ID | 要件 | 不変条件 / Design Contract | 仕様書 / Runbook | ADR / Standard | Implementation Target | Verification | Status |
 |:---|:---|:---|:---|:---|:---|:---|:---|
 | **REQ-LIFE-001** | Release Baseline & Freeze Policy | Universal Engine v1.0 完成後の共通Runtime・API・Schemaの凍結とUniversal Gap管理 | `01_DESIGN_CONTRACT.md` §26.2<br>`UNIVERSAL_RELEASE_BASELINE.md` | [ADR-022](../architecture/decisions/ADR-022_MULTI_REGION_ARCHITECTURE_SPECIFICATION.md) | `active/**`<br>`index.html` | Git Baseline Commit固定、回帰テスト通過 | **VERIFIED** |
-| **REQ-LIFE-002** | District Provisioning & Acceptance Gate | 共通コード変更ゼロによる新地区投入、および20項目受入検査によるACTIVE昇格判定 | `01_DESIGN_CONTRACT.md` §26.3, §26.9<br>`DISTRICT_PROVISIONING_RUNBOOK.md` | [ADR-010](../architecture/decisions/ADR-010.md)<br>[ADR-022](../architecture/decisions/ADR-022_MULTI_REGION_ARCHITECTURE_SPECIFICATION.md) | `DISTRICT_REGISTRY`<br>`SYSTEM_INFO`<br>`data/` | Acceptance Gate 20項目全件合格証跡 | **VERIFIED** |
+| **REQ-LIFE-002** | District Provisioning & Acceptance Gate | 共通コード変更ゼロによる新地区投入、1地区専用GAS配備、および受入検査によるACTIVE昇格判定 | `01_DESIGN_CONTRACT.md` §26.3, §26.9<br>`DISTRICT_PROVISIONING_RUNBOOK.md` | [ADR-010](../architecture/decisions/ADR-010.md)<br>[ADR-022](../architecture/decisions/ADR-022_MULTI_REGION_ARCHITECTURE_SPECIFICATION.md) | `TARGET_SPREADSHEET_ID`<br>`SYSTEM_INFO`<br>`data/` | Acceptance Gate 21項目全件合格証跡 | **VERIFIED** |
 | **REQ-LIFE-003** | Security Baseline (SEC-001〜007) | サーバーセッション、数式注入防御、テナント分離、PIN秘匿、地区別MapsKeyの恒久境界 | `01_DESIGN_CONTRACT.md` §26.11<br>`SECURITY_BASELINE.md` | [ADR-016](../architecture/decisions/ADR-016_SECURITY_ARCHITECTURE.md)<br>[ADR-023](../architecture/decisions/ADR-023_DASHBOARD_SHARED_PIN_SESSION_SPECIFICATION.md) | `active/api/`<br>`active/business/`<br>`active/h-app/` | SEC-001〜007 専用回帰テストスイート通過 | **VERIFIED** |
-| **REQ-LIFE-004** | Backup & Restore Architecture | Pure DB・メタデータの日次保全、秘密情報の平文除外、リストア手順および定期訓練 | `01_DESIGN_CONTRACT.md` §26.5<br>`BACKUP_RESTORE_RUNBOOK.md` | `DATA_LIFECYCLE.md` | Google Drive / Backup Folder | リストア手順・整合性検証チェックリスト | **VERIFIED** |
-| **REQ-LIFE-005** | District Deprovisioning & Privacy | 一時停止と完全廃止の分離、API Key即時Revoke、個人情報消去、Registry抹消 | `01_DESIGN_CONTRACT.md` §26.4, §26.10<br>`DISTRICT_DEPROVISIONING_RUNBOOK.md` | `DATA_LIFECYCLE.md` | 親GAS Properties<br>GCP Console<br>Spreadsheet | 廃止完了検証チェックリスト通過 | **VERIFIED** |
+| **REQ-LIFE-004** | Backup & Restore Architecture | 1地区DB・メタデータの日次保全、秘密情報の平文除外、リストア手順および定期訓練 | `01_DESIGN_CONTRACT.md` §26.5<br>`BACKUP_RESTORE_RUNBOOK.md` | `DATA_LIFECYCLE.md` | Google Drive / Backup Folder | リストア手順・整合性検証チェックリスト | **VERIFIED** |
+| **REQ-LIFE-005** | District Deprovisioning & Privacy | 一時停止と完全廃止の分離、API Key即時Revoke、個人情報消去、1地区専用GAS停止 | `01_DESIGN_CONTRACT.md` §26.4, §26.10<br>`DISTRICT_DEPROVISIONING_RUNBOOK.md` | `DATA_LIFECYCLE.md` | 1地区専用GAS Properties<br>GCP Console<br>Spreadsheet | 廃止完了検証チェックリスト通過 | **VERIFIED** |
 | **REQ-LIFE-006** | Continuous Monitoring & Incident SLO | APIエラー、レイテンシ、排他ロック、障害Severity定義、復旧エスカレーション | `01_DESIGN_CONTRACT.md` §26.6, §26.7<br>`UNIVERSAL_RELEASE_BASELINE.md` | [ADR-021](../architecture/decisions/ADR-021_PRODUCTION_MONITORING_SPECIFICATION.md) | Cloud Logging<br>GAS Executions | 暫定SLO定義、インシデントフロー確立 | **VERIFIED** |
 
 ---

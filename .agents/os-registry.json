@@ -4,8 +4,8 @@
   "activationState": "active",
   "principleContract": {
     "canonicalSource": "docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md",
-    "expectedVersion": "2026-10-15",
-    "sha256": "4ae42a8370432b4f4b6a8e637d0b71d0fe0ca59655ded5ce23363c1ba2a46a7a"
+    "expectedVersion": "2026-10-17",
+    "sha256": "c9a4f540b15e06dd8118d1bbace4f6786e2efdc14c227ef3c2deaa447b6e6730"
   },
   "universalContract": {
     "oneDistrictOneApp": true,
@@ -70,11 +70,11 @@
       "canonicalSources": [
         {
           "path": "docs/architecture/01_DESIGN_CONTRACT.md",
-          "sha256": "204cd4e55e61b2875141a18de0014e04fd1709b20b747770edd8d9595ee7a1c9"
+          "sha256": "0bc70b1a05d73e95eb30e2c19dcd68919132879d20efa4b37a7c9d064f67842f"
         },
         {
           "path": "docs/architecture/03_CURRENT_H_APP_INVENTORY.md",
-          "sha256": "a5c50ccc374b0e5cf97e160f3d8dfea7b122a841bb0f3094074f6200c63f558d"
+          "sha256": "3cb84e8d0a5ced55e3ba56441557f8f440b2c762e3bb702ae767f505906165cf"
         }
       ],
       "evidenceSources": [
@@ -87,7 +87,7 @@
       "canonicalSources": [
         {
           "path": "docs/architecture/01_DESIGN_CONTRACT.md",
-          "sha256": "204cd4e55e61b2875141a18de0014e04fd1709b20b747770edd8d9595ee7a1c9"
+          "sha256": "0bc70b1a05d73e95eb30e2c19dcd68919132879d20efa4b37a7c9d064f67842f"
         }
       ],
       "evidenceSources": [
@@ -96,11 +96,11 @@
     },
     "backend-architecture": {
       "manifestPath": ".agents/skills/backend-architecture/SKILL.md",
-      "description": "Standalone GAS backend, Pure DB spreadsheet design, concurrency control",
+      "description": "1-district dedicated GAS backend, Pure DB spreadsheet design, concurrency control",
       "canonicalSources": [
         {
           "path": "docs/api/API_CONTRACT.md",
-          "sha256": "db006430002a98163b1695e33d206d3ab31b30ecd8912839dfafa658c6ee74be"
+          "sha256": "095f345f19eb8da37fe293c9620c9a79f24bfc042159a6ee33441e55f1af1001"
         },
         {
           "path": "active/api/v2_api.js",
@@ -117,11 +117,11 @@
       "canonicalSources": [
         {
           "path": "docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md",
-          "sha256": "4ae42a8370432b4f4b6a8e637d0b71d0fe0ca59655ded5ce23363c1ba2a46a7a"
+          "sha256": "c9a4f540b15e06dd8118d1bbace4f6786e2efdc14c227ef3c2deaa447b6e6730"
         },
         {
           "path": "docs/architecture/UNIVERSAL_QUALITY_DOCTRINE.md",
-          "sha256": "92e31cb2e365ec652a33c7cdf6b0e628c0f982d93ae58a4cf09b332f8c21bad0"
+          "sha256": "c1ca5eb87b3cce9ee3f3a09403b51f762fdeda30a95ced97baf180191827c3ac"
         }
       ],
       "evidenceSources": [
@@ -134,7 +134,7 @@
       "canonicalSources": [
         {
           "path": "docs/architecture/01_DESIGN_CONTRACT.md",
-          "sha256": "204cd4e55e61b2875141a18de0014e04fd1709b20b747770edd8d9595ee7a1c9"
+          "sha256": "0bc70b1a05d73e95eb30e2c19dcd68919132879d20efa4b37a7c9d064f67842f"
         }
       ],
       "evidenceSources": [
@@ -147,11 +147,11 @@
       "canonicalSources": [
         {
           "path": "docs/api/API_CONTRACT.md",
-          "sha256": "db006430002a98163b1695e33d206d3ab31b30ecd8912839dfafa658c6ee74be"
+          "sha256": "095f345f19eb8da37fe293c9620c9a79f24bfc042159a6ee33441e55f1af1001"
         },
         {
           "path": "docs/security/SECURITY_BASELINE.md",
-          "sha256": "2e201c9ea9cda515568fe6724ba3ecad992c0ebf9303d0bbc19ed2651d502156"
+          "sha256": "840b1b5a44b8cab84a4b22f19f95f2334dc116f4cd8e177367b1ec04eca3f5ac"
         }
       ],
       "evidenceSources": [
@@ -164,7 +164,7 @@
       "canonicalSources": [
         {
           "path": "docs/architecture/UNIVERSAL_QUALITY_DOCTRINE.md",
-          "sha256": "92e31cb2e365ec652a33c7cdf6b0e628c0f982d93ae58a4cf09b332f8c21bad0"
+          "sha256": "c1ca5eb87b3cce9ee3f3a09403b51f762fdeda30a95ced97baf180191827c3ac"
         }
       ],
       "evidenceSources": [
@@ -194,11 +194,11 @@
       "canonicalSources": [
         {
           "path": "docs/ai-foundation.md",
-          "sha256": "0f0de7537a9b983645a2c5429882c83e743de594b26e0cee53334e9eeec9257f"
+          "sha256": "c22bbd17627e0575fa5a75583ac1dd41a5985f25c501b1781258aed01e7dba33"
         },
         {
           "path": "AGENTS.md",
-          "sha256": "380373fff602d2a1803ad78685a132032537b81d689ad23b29bd7e3a09e61342"
+          "sha256": "835262de01b454eec41aed7f575746f0e754b269b12e8e80d34e72e97ce4c09a"
         }
       ],
       "evidenceSources": [
@@ -211,7 +211,7 @@
       "canonicalSources": [
         {
           "path": "docs/architecture/UNIVERSAL_QUALITY_DOCTRINE.md",
-          "sha256": "92e31cb2e365ec652a33c7cdf6b0e628c0f982d93ae58a4cf09b332f8c21bad0"
+          "sha256": "c1ca5eb87b3cce9ee3f3a09403b51f762fdeda30a95ced97baf180191827c3ac"
         }
       ],
       "evidenceSources": [
@@ -244,14 +244,14 @@
       "stopCondition": "Unit test passes and zero global scope pollution"
     },
     "TC-BACKEND-API": {
-      "name": "Backend / Standalone GAS Implementation Contract",
+      "name": "Backend / 1-District GAS Implementation Contract",
       "requiredPacks": [
         "backend-architecture",
         "auth-security",
         "behavior-preservation"
       ],
       "maxFiles": 2,
-      "stopCondition": "API contract validation passes and zero container-bound dependency"
+      "stopCondition": "API contract validation passes and zero cross-district dependency"
     },
     "TC-SEC-AUDIT": {
       "name": "Security Audit Contract",

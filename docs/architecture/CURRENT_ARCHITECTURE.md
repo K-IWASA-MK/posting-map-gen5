@@ -8,14 +8,14 @@
 
 ## 1. 最上位原則 (Supreme Principles)
 
-### ① 1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン
-- POSTING MAPは、**「1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン」** を基本アーキテクチャとする（AGENTS.md §1）。
+### ① 1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定
+- POSTING MAPは、**「1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定」** を基本アーキテクチャとする（AGENTS.md §1）。
 - 共通Runtime（`active/`）は **Universal Engine** として全地区共通であり、コピーして変更しない。
-- 地域間の差異（所属支部・活動対象地域・マスターデータ等）は、すべて **「データ（`data/`）」** および不可避の外部設定（`data/config.js`）として分離・吸収する。
+- 地域間の差異（所属支部・活動対象地域・マスターデータ等）は、すべて **「データ（`data/`）」** および不可避の地区専用外部設定（`data/config.js` 等）として分離・吸収する。
 
 ### ② 共通エンジンとデータ層の完全分離 (Universal Engine vs. Master Data)
 - **`active/` = 汎用 Universal Engine**
-  - 全地域で100%同一の実行プログラム（JavaScript / HTML / CSS / Standalone GAS）。
+  - 全地域で100%同一の実行プログラム（JavaScript / HTML / CSS / 当該Spreadsheetに付属する1地区専用GAS）。
   - 地域固有のコード改変・条件分岐の混入を永久に禁止する。
 - **`data/` = 地域データ & クライアント設定 (Regional Data & Config)**
   - 住所マスター、境界GeoJSON、自治体定義、クライアント接続情報が集約されるデータ領域。
@@ -48,19 +48,19 @@
 │                              │ API通信 (POST / JSON)             │
 │                              ▼                                   │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │           Standalone Google Apps Script (APIサーバー)       │  │
+│  │    当該Spreadsheetに付属する1地区専用GAS (APIサーバー)     │  │
 │  │  active/api/ , active/business/                             │  │
-│  │  ※ Script Properties から接続情報を動的解決                  │  │
+│  │  ※ getActiveSpreadsheet() 優先 + TARGET_SPREADSHEET_ID     │  │
 │  └───────────────────────────┬────────────────────────────────┘  │
 │                              │ Sheets API                        │
 │                              ▼                                   │
 └──────────────────────────────┼───────────────────────────────────┘
                                │
-                               ▼ 外部独立クラウド
+                               ▼ 地区専用クラウド資産
               ┌──────────────────────────────────┐
-              │     Google Spreadsheet (Pure DB) │
+              │     Google Spreadsheet (地区専用DB) │
               │     ※ 13シート標準構造（初期11 Core複製+現場2生成） │
-              │     ※ コード内包ゼロ（DATA_DICTIONARY.md 準拠）       │
+              │     ※ 当該Spreadsheet付属1地区専用GASと1対1結合     │
               └──────────────────────────────────┘
 ```
 
@@ -104,13 +104,13 @@
 - 接続情報は `data/config.js` を唯一の参照先とする。
 
 ### 3. API & Backend Business Domain (`active/api/`, `active/business/`)
-- Standalone GAS 上で稼働する共通REST/RPC風APIサーバー。
+- 当該Spreadsheetに付属する1地区専用GAS上で稼働する共通REST/RPC風APIサーバー。
 - `active/business/` は **Backend Business Domain** であり、フロントエンド側の `active/h-app/modules/` (Browser-side Feature Module) とは明確に区別される。
-- 認証、進捗集計、受渡要請、在庫管理、名簿管理を実行し、Spreadsheet（Pure DB）へアクセス。
+- 認証、進捗集計、受渡要請、在庫管理、名簿管理を実行し、当該地区のSpreadsheet（DB）へアクセス。
 
-### 4. Spreadsheet = Pure DB (純粋データベース)
-- スプレッドシートは **「純粋なデータベース（データ層）」** としてのみ存在する。
-- プログラムコード（スクリプト）、独自マクロ、トリガー関数は一切内包しない。
+### 4. Spreadsheet = 1地区専用データベース (District Database)
+- スプレッドシートは地区ごとに1対1で独立したデータベースとして存在する。
+- シート数式（`=QUERY`, `=IMPORTRANGE` 等）による動的集計や旧式マクロには依存せず、業務ロジックはすべて付属の1地区専用GAS（`active/api/v2_api.js`）に一元化する。
 - **13シート標準構造**:
   - システム管理 (1): `SYSTEM_INFO`
   - 原本 (5): 配布実績、名簿、保有チラシ枚数、受渡要請履歴、PinStatus の各原本
@@ -121,13 +121,12 @@
   - 公式原本テンプレートからのプロビジョニング初期複製時は **11 Core Sheets** が展開される。
   - 現場系2シート（`掲示板`, `掲示板連絡履歴`）は現場での初回利用時にオンデマンド自動生成され、定常運用時の 13シート標準構造へ収束する。
 
-### 5. GAS = Standalone only (独立APIサーバー)
-- Google Apps Script はスプレッドシートから完全に切り離された **「スタンドアロンプロジェクト」** として作成・配備する。
-- 接続先スプレッドシートIDやDriveフォルダIDは、デプロイ時に `PropertiesService.getScriptProperties()` へ外部注入する（ハードコード禁止）。
+### 5. GAS = 当該Spreadsheetに付属する1地区専用GAS
+- Google Apps Script は各地区の Spreadsheet に1対1で付属する **「当該Spreadsheetに付属する1地区専用GAS」** として配備し、`SpreadsheetApp.getActiveSpreadsheet()` を第1優先で解決する（非コンテナ実行時やテスト等のフォールバックとして `PropertiesService.getScriptProperties()` の `TARGET_SPREADSHEET_ID` を使用）。
+- 複数地区を1本の共有親GAS（`DISTRICT_REGISTRY`）で束ねる構造は採用せず、地区ごとに物理的に自己完結させる。
 
-### 6. Container-bound GAS = 現行アーキテクチャ外 (廃止・絶対禁止)
-- スプレッドシートに付随するコンテナバウンドGAS（拡張機能 → Apps Script）は、現行アーキテクチャ外のレガシー残骸である。
-- コンテナバウンドGASの作成、復元、同期、依存、編集は永久に禁止する。
+### 6. 旧式非管理スクリプト・共有親GASの廃止
+- Git管理外のアドホックな旧式スクリプトや、他地区DBを混在ルーティングする共有親GASは現行アーキテクチャ外であり、採用しない。
 
 ### 7. 認証 / LINE LIFF (`active/api/auth/`)
 - Hアプリは LINE LIFF ID Token による本人確認・セッション管理。
@@ -184,11 +183,11 @@ Hアプリの「保有チラシ」機能において、チラシ保管場所（�
 ## 4. 外部リソースとデプロイメントメタデータ
 
 ### 1. 外部独立リソース (External Resources)
-Universal POSTING MAP は以下の外部クラウドインフラと連携する：
-1. **Googleスプレッドシート**: Pure DB（スクリプト内包なし・トリガー依存なし）。
-2. **Google Driveフォルダ**: 写真・添付データ等の保管フォルダ。
-3. **LINE Developers**: LIFF アプリおよび本人性確認。
-4. **Standalone GAS プロジェクト**: APIサーバーとして独立配備。
+Universal POSTING MAP は各地区ごとに独立した以下の外部クラウドインフラと連携する：
+1. **Googleスプレッドシート**: 1地区専用DB（13シート標準台帳）。
+2. **Google Driveフォルダ**: 写真・添付データ等の地区専用保管フォルダ。
+3. **LINE Developers**: 地区専用 LIFF アプリおよび本人性確認。
+4. **当該Spreadsheetに付属する1地区専用GAS**: 地区専用APIサーバーとして配備。
 
 ### 2. Deployment Metadata (`deployment.json`)
 - インフラ接続の物理ID（`scriptId`, `deploymentId`, `webAppUrl`, `productionLiffUrl`）および地区識別子（`districtId`）を保持するローカル設定ファイル（Git追跡除外）。
@@ -203,6 +202,6 @@ Universal POSTING MAP の運用・開発において、以下の原則はいか�
 1. **`active/` ゼロ改変原則**:  
    地域展開や機能追加において、地域固有のハードコードや分岐を `active/` 内に混入させてはならない。
 2. **共通Runtime（`active/`）コード複製・改変禁止原則**:
-   共通Runtime（`active/`）は Universal Engine として全地区共通であり、地区固有の個別コピー・改変を行ってはならない。「1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン」の原則のもと、地区差はすべて `data/` および外部設定で吸収する。
+   共通Runtime（`active/`）は Universal Engine として全地区共通であり、地区固有の個別コピー・改変を行ってはならない。「1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定」の原則のもと、地区差はすべて `data/` および地区専用外部設定で吸収する。
 3. **リポジトリ境界絶対遵守原則**:
    作業中のリポジトリ以外を参照・探索・比較しない。他地区のコードやデータを推測で流用しない。

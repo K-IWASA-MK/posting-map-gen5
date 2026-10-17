@@ -18,9 +18,9 @@
    - 新地区追加は **「データ投入（Provisioning）」** であり、開発ではない。
    - `active/` 配下のソースコード、HTML、共通GASスクリプトを1行たりとも変更してはならない。
    - プロビジョニング中に `active/` 変更が必要と判明した場合は、直ちに **HARD STOP（プロビジョニング失敗）** とする。
-2. **単一親GAS・単一Web App維持**:
-   - 新地区のために `clasp create` 等で別GASプロジェクトを作成することは永久に禁止する。
-   - 全地区は単一の親GAS Standalone Web App URLを共有し、`DISTRICT_REGISTRY` によってスプレッドシート（DB）を動的分離する。
+2. **1地区自己完結型バックエンド（当該Spreadsheetに付属する1地区専用GAS）**:
+   - `1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定` の最高位物理境界を厳守する。
+   - 各地区は当該Spreadsheetに付属する1地区専用GASプロジェクトを持ち、`SpreadsheetApp.getActiveSpreadsheet()` 優先および `TARGET_SPREADSHEET_ID` フォールバックによって自地区のスプレッドシート（DB）と1対1で結合する（複数地区共用親GASの廃止）。
 3. **再現性・自律性の担保**:
    - 各ステップには明確な 入力・アクション・検証・エビデンス・ロールバック・HARD STOP条件 を規定し、属人的判断を排除する。
 
@@ -33,9 +33,9 @@
        ↓
 [Stage 2: マスターデータ調達 & 検証 (CSV / GeoJSON)]
        ↓
-[Stage 3: Spreadsheet Pure DB プロビジョニング (Template複製 & 整合性ガード)]
+[Stage 3: 1地区単独 Spreadsheet DB プロビジョニング (Template複製 & 整合性ガード)]
        ↓
-[Stage 4: DISTRICT_REGISTRY & Routing 登録]
+[Stage 4: 当該Spreadsheetに付属する1地区専用GAS 配備 & TARGET_SPREADSHEET_ID 設定]
        ↓
 [Stage 5: 地区別 Secrets & Maps API Key 設定 (GCP制限)]
        ↓
@@ -114,10 +114,10 @@
 
 ---
 
-### Stage 3: Spreadsheet Pure DB プロビジョニング (Spreadsheet Provisioning / Canonical Drive Layout 準拠)
+### Stage 3: 1地区単独 Spreadsheet DB プロビジョニング (Spreadsheet Provisioning / Canonical Drive Layout 準拠)
 
 - **Preconditions**:
-  - 親GAS Script Properties に `BRANCH_ROOT_FOLDER_ID`（`03_BRANCH` フォルダID）が設定されていること（未設定時は Fail-Closed）。
+  - GAS Script Properties に `BRANCH_ROOT_FOLDER_ID`（`03_BRANCH` フォルダID）が設定されていること（未設定時は Fail-Closed）。
   - Google Drive 内に Universal 共通 Empty Template (`POSTING_MAP_EMPTY_TEMPLATE`) が存在すること。
 - **Input**:
   - 共通 Empty Template ID (`POSTING_MAP_EMPTY_TEMPLATE`)
@@ -150,7 +150,7 @@
   - `SYSTEM_INFO` の `地区コード` とリクエスト `districtId` が完全一致すること（Integrity Guard）。
   - `SYSTEM_INFO` の `運用モード` が `ELECTION` または `SUBSCRIPTION` として確定していること。
   - 実運用 5 シートが欠損なく 5/5 生成されていること。原本5種が存在しないこと。
-  - コンテナバインドスクリプト（Apps Script）が **存在しない** こと（Pure DB の完全維持）。
+  - シート面内にカスタム関数や `onEdit` トリガーが存在しないこと。
 - **Evidence**:
   - 新規スプレッドシートの URL / ID
   - `SYSTEM_INFO` 設定スナップショット
@@ -160,44 +160,35 @@
 - **HARD STOP Condition**:
   - `BRANCH_ROOT_FOLDER_ID` が Script Properties に設定されていない場合。
   - スプレッドシートが `03_BRANCH/{districtId}/` 以外のフォルダ（Templates 等）に生成された場合。
-  - スプレッドシート内にコンテナバインドスクリプトが混入している場合。
   - 運用モードが未設定または不明な値の場合。
   - 実運用 5 シートの生成が 1〜4/5 の不完全状態で停止した場合（All-or-Nothing 違反）。
 
 ---
 
-### Stage 4: DISTRICT_REGISTRY & Routing 登録 (Routing Configuration)
+### Stage 4: 当該Spreadsheetに付属する1地区専用GAS 配備 & TARGET_SPREADSHEET_ID 設定 (1-District GAS Binding)
 
 - **Preconditions**:
   - Stage 3 で `spreadsheetId` および正規 `storageFolderId` が決定論的に発行されていること。
-  - 親GAS Script Properties へのアクセス権限を有すること。
+  - 当該Spreadsheetに付属する1地区専用GASプロジェクトへのアクセス権限を有すること。
 - **Input**:
   - `districtId`
   - `spreadsheetId` (Stage 3 導出値)
   - `storageFolderId` (Stage 3 導出値: `{districtId} 支部_STORAGE`)
 - **Action**:
-  1. 親GASの Script Properties から `DISTRICT_REGISTRY` を取得。
-  2. JSON をパースし、新規エントリを追加（または `bootstrapEnvironment` API で一元登録）：
-     ```json
-     {
-       "spreadsheetId": "<CANONICAL_SPREADSHEET_ID>",
-       "storageFolderId": "<CANONICAL_STORAGE_FOLDER_ID>",
-       "name": "<DISTRICT_NAME>",
-       "enabled": false
-     }
-     ```
-     ※ Acceptance完了までは `enabled: false` または検証専用フラグとする。
-  3. 更新した JSON を `DISTRICT_REGISTRY` に保存。
+  1. 当該Spreadsheetに付属する1地区専用GASへ Universal Runtime（`active/`）を `clasp push` で配備する（コード変更ゼロ）。
+  2. 当該1地区専用GASの Script Properties に以下を設定：
+     - `TARGET_SPREADSHEET_ID`: `<CANONICAL_SPREADSHEET_ID>`
+     - `BRANCH_ROOT_FOLDER_ID`: `<03_BRANCH_FOLDER_ID>`
+  3. 1地区専用GASを Web App としてデプロイし、専用 `GAS_EXEC_URL` を取得。
 - **Validation**:
-  - JSON 構文が妥当であること。
-  - 登録された `spreadsheetId` および `storageFolderId` が Stage 3 の正規導出値と完全一致すること。
-  - 既存の他地区設定が1件も破壊・消失・変更されていないこと（テナント分離保全）。
+  - `SpreadsheetResolver.resolve(districtId)` が `SpreadsheetApp.getActiveSpreadsheet()` または `TARGET_SPREADSHEET_ID` から対象DBを解決し、`verifyIntegrityGuard`（`SYSTEM_INFO` の `地区コード` 一致）を通過すること。
+  - 既存の他地区のGAS・DB・設定に一切接触していないこと（完全な1地区自律閉塞）。
 - **Evidence**:
-  - `DISTRICT_REGISTRY` 更新前後の比較ログ（他地区不変の確認）
+  - 1地区専用GAS デプロイ完了ログおよび Script Properties キー設定確認ログ
 - **Rollback**:
-  - `DISTRICT_REGISTRY` を更新前スナップショットへ即座に戻す。
+  - 当該1地区専用GASの Web App デプロイを無効化。
 - **HARD STOP Condition**:
-  - `DISTRICT_REGISTRY` のパース失敗、または他地区IDが意図せず書き換わった場合。
+  - `TARGET_SPREADSHEET_ID` と `SYSTEM_INFO` の `地区コード` が一致しない場合（`DISTRICT_MISMATCH`）。
 
 ---
 
@@ -209,16 +200,16 @@
 - **Input**:
   - GCP Console アクセス
   - `districtId`
-  - クライアント配信元ドメイン（GitHub Pages 等の公開URL）
+  - クライアント配信元ドメイン（GitHub Pages / 地区独自ドメインの公開URL）
 - **Action**:
   1. GCP Console にて、当該地区専用の Google Maps API Key を新規発行。
   2. **API制限**: Maps JavaScript API, Places API, Geocoding API のみに厳格制限。
-  3. **アプリケーション制限**: HTTP リファラー制限を適用（本番Web Appドメイン、LINE LIFF URLのみを許可。ワイルドカード `*` 単独の全開放は禁止）。
-  4. 親GASの Script Properties に以下を設定：
-     - キー名: `GOOGLE_MAPS_API_KEY_<districtId>`
+  3. **アプリケーション制限**: HTTP リファラー制限を適用（当該地区の本番ドメイン、LINE LIFF URLのみを許可。ワイルドカード `*` 単独の全開放は禁止）。
+  4. 当該1地区専用GASの Script Properties に以下を設定：
+     - キー名: `GOOGLE_MAPS_API_KEY_<districtId>`（または `MAPS_API_KEY`）
      - 値: 発行したAPIキー
 - **Validation**:
-  - キー名が `GOOGLE_MAPS_API_KEY_<districtId>` で完全一致していること（SEC-007 準拠）。
+  - キー名が `GOOGLE_MAPS_API_KEY_<districtId>` で設定されていること（SEC-007 準拠）。
   - APIキー実値が Git、ログ、チャット、ドキュメントに露出していないこと。
 - **Evidence**:
   - Script Properties 設定完了ログ（キー名のみ。値は `[SECURED]`）
@@ -237,27 +228,27 @@
 - **Preconditions**:
   - 当該地区用の LINE Developers 設定（Provider: `Civic Tech Inc.` 配下）が存在すること。
 - **Input**:
-  - LINE Login チャネル ID（`POSTING MAP Login`）
-  - LIFF ID（`POSTING MAP Field`）
+  - LINE Login チャネル ID
+  - 当該地区専用 LIFF ID
   - 契約終了日
 - **Action**:
   1. **LINE Developers プラットフォーム設計仕様の適用**:
-     - **Provider**: `Civic Tech Inc.` (共通最上位コンテナ)
-     - **LINE Login Channel**: `POSTING MAP Login` (共通認証チャネル、App type: Web app、Callback URL: `https://app.posting-map.jp/`、Linked Messaging API: `POSTING MAP Official`)
-     - **Messaging API Channel**: `POSTING MAP Official` (Auto-reply: OFF, Greeting messages: ON [アプリ起動案内], Webhook: ON)
-     - **LIFF Application**: `POSTING MAP Field`
+     - **Provider**: `Civic Tech Inc.`
+     - **LINE Login Channel**: Web app、Callback URL: `https://<district-domain>/`
+     - **Messaging API Channel**: Auto-reply: OFF, Greeting messages: ON [アプリ起動案内]
+     - **LIFF Application**:
        - Size: `Full` (全画面表示)
-       - Endpoint URL: `https://app.posting-map.jp/active/h-app/index.html` (独自ドメイン絶対パス)
+       - Endpoint URL: `https://<district-domain>/` (当該地区の独自ドメイン絶対パス)
        - Scopes: `profile`, `openid`
        - Bot Prompt: `Aggressive` (友だち追加自動推奨)
        - Module Mode: 無効 (OFF)
   2. **トークン・リッチメニューの配備**:
-     - 親GASの `ScriptProperties` に Messaging API 長期チャネルアクセストークンを設定。
+     - 当該1地区専用GASの `ScriptProperties` に Messaging API 長期チャネルアクセストークン（`LINE_CHANNEL_ACCESS_TOKEN`）および `PRODUCTION_LIFF_URL` を設定。
      - LIFF URL を組み込んだリッチメニューを適用（`createRichMenuForHApp()`）。
   3. **地区契約情報設定**:
-     - 地区の `SYSTEM_INFO` シートに `contract_expiry`（契約終了日）を設定。
+     - 地区の `SYSTEM_INFO` シートに `契約終了日` を設定。
   4. **クライアント設定バインド**:
-     - クライアント配信設定ファイル（`data/config.js`）に `districtId` と `liffId` を設定。
+     - クライアント配信設定ファイル（`data/config.js`）に `DISTRICT_ID`, `LIFF_ID`, `GAS_EXEC_URL` を設定。
 - **Validation**:
   - LINE ログインから LIFF アプリが正常に全画面起動すること。
   - LIFF 初期化時に `liffToken` が正しく取得できること。
@@ -281,11 +272,11 @@
   - 検証用テスター端末（スマートフォン実機 iOS/Android）
   - 管理者用ブラウザ（PC）
 - **Action**:
-  1. 機械的受入ゲート `node tests/test_registry_provisioning_gate.mjs` を実行し、全13ゲート（Registry整合、enabled検証、Pure DB完全性、フォールバック不発生、MapsKey、Drive物理階層契約・Human Navigation等）の全件合格を確認する。
+  1. 機械的受入ゲート `node tests/test_registry_provisioning_gate.mjs` を実行し、全ゲート（1地区DB解決、SYSTEM_INFO整合、MapsKey、Drive物理階層契約・Human Navigation、PROVISIONING_TOKEN_HASH Fail-Closed等）の全件合格を確認する。
   2. 本書第4章「District Production Acceptance Gate」の全21項目を順次実行・検品する。
 - **Validation**:
   - `test_registry_provisioning_gate.mjs` が 100% PASS すること。
-  - 全20項目がすべて **PASS** すること（1項目でもFAILなら不合格）。
+  - 全21項目がすべて **PASS** すること（1項目でもFAILなら不合格）。
 - **Evidence**:
   - `test_registry_provisioning_gate.mjs` 実行ログ
   - Production Acceptance レポート
@@ -293,7 +284,7 @@
   - API Smoke Test 通信ログ
 - **Rollback**:
   - 発見された不具合の是正（データ・設定のみ。`active/` は不可侵）。
-  - 是正不能な場合は Stage 4 の `DISTRICT_REGISTRY` 削除および Stage 3 の DB 破棄。
+  - 是正不能な場合は Stage 4 の 1地区専用GAS デプロイ停止および Stage 3 の DB 破棄。
 - **HARD STOP Condition**:
   - 他地区のデータが閲覧・更新できる（テナント分離破壊）。
   - `active/` のコード修正を行わないと動かない事象が判明した場合。
@@ -303,15 +294,14 @@
 ### Stage 8: ACTIVE 昇格 & 監視開始 (Activation & Monitoring)
 
 - **Preconditions**:
-  - MASTER の初回 Proceed で承認された Scope に、本 Stage 8（本番有効化: `enabled: true`）が含まれていること。
-  - Stage 7 の Production Acceptance（実機・API・セキュリティ全20項目実環境検証および機械受入ゲート全件合格）と必要な検証証跡について、Independent Auditor AI の PASS 判定を取得していること。
+  - MASTER の初回 Proceed で承認された Scope に、本 Stage 8（本番有効化）が含まれていること。
+  - Stage 7 の Production Acceptance（実機・API・セキュリティ全21項目実環境検証および機械受入ゲート全件合格）と必要な検証証跡について、Independent Auditor AI の PASS 判定を取得していること。
   - ※上記2条件を満たす場合、追加の MASTER 承認なしで自律的に本番昇格を実行する（AGENTS.md §6.2, §7.2 準拠）。
 - **Input**:
   - Acceptance 完了エビデンス
 - **Action**:
-  1. 親GAS Script Properties の `DISTRICT_REGISTRY` において、当該地区の `enabled` を `true` に更新（Gateway レベルでの本番ルーティング有効化）。
-  2. 地区ステータスを正式に `ACTIVE` に更新・記録。
-  3. Phase 20 / 本番監視システムに当該地区を監視対象として登録。
+  1. 当該地区の `SYSTEM_INFO` シートにおいて「状態」が `ACTIVE` であることを最終確認し、本番公開を有効化する。
+  2. Phase 20 / 本番監視システムに当該地区を監視対象として登録。
 - **Validation**:
   - 一般配布員端末から H App が正常に稼働開始できること。
   - 管理者が Dashboard に正常ログインできること。
@@ -320,7 +310,7 @@
   - ACTIVE 昇格完了通知
   - 初回稼働ログ証跡
 - **Rollback**:
-  - `enabled: false` および `active: FALSE` への即時切り戻し（一時停止）。
+  - `SYSTEM_INFO` の `状態: SUSPENDED` への即時切り戻し（一時停止）。
 - **HARD STOP Condition**:
   - 昇格直後に予期せぬシステム例外・アクセス拒絶が発生した場合。
 
@@ -333,10 +323,10 @@
 | No | 検査項目 | 検証内容 | 合否基準 |
 |:---:|:---|:---|:---:|
 | 1 | **districtId 正規化** | 英大文字・数字・ハイフンのみ、他地区と重複なし | PASS / FAIL |
-| 2 | **DISTRICT_REGISTRY 整合** | 親GAS Registry に登録され、対象 spreadsheetId と一致 | PASS / FAIL |
-| 3 | **SYSTEM_INFO Integrity Guard** | DB側 `district_id` とリクエスト `districtId` が一致 | PASS / FAIL |
-| 4 | **Pure DB 完全性** | スプレッドシート内にバインドスクリプトが存在しない | PASS / FAIL |
-| 5 | **シート構造整合** | `DATA_DICTIONARY.md` 準拠（初期11 Core Sheets複製、運用時13シート標準構造）のヘッダー完全一致 | PASS / FAIL |
+| 2 | **1地区専用GAS DB解決整合** | 当該Spreadsheetに付属する1地区専用GAS（`getActiveSpreadsheet` / `TARGET_SPREADSHEET_ID`）で対象DBと1対1結合 | PASS / FAIL |
+| 3 | **SYSTEM_INFO Integrity Guard** | DB側 `地区コード` とリクエスト `districtId` が一致（不一致時 `DISTRICT_MISMATCH`） | PASS / FAIL |
+| 4 | **シート面 Pure DB 完全性** | シート内にカスタム関数や `onEdit` トリガーが存在しない | PASS / FAIL |
+| 5 | **シート構造整合** | `DATA_DICTIONARY.md` / ADR-024 準拠（`SYSTEM_INFO` + 実運用5種シート構造）のヘッダー完全一致 | PASS / FAIL |
 | 6 | **地区別 Maps Key 運用** | `GOOGLE_MAPS_API_KEY_<districtId>` が設定済み | PASS / FAIL |
 | 7 | **Legacy Fallback 不使用** | 新規地区において無印 `GOOGLE_MAPS_API_KEY` を参照しない | PASS / FAIL |
 | 8 | **Maps API 制限確認** | HTTPリファラー制限および許可API制限が有効 | PASS / FAIL |

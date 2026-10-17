@@ -54,7 +54,7 @@ LINE User ID ≠ Staff ID ≠ Person ID ≠ Branch ID ≠ Activity Record ID ≠
 
 ※1 **重要**: 「支部の活動対象地域マスター」は、支部組織としての管轄・観測対象地域を定義する地理マスターであり、「党員のポスティング可能範囲」ではない。党員個人に対する活動場所の制限・限定・選択肢化は一切行わない。
 
-### 【Spreadsheet Pure DB 標準構造台帳 (ADR-024 Dual Lifecycle 準拠)】
+### 【Spreadsheet DB 標準構造台帳 (1地区1DB・ADR-024 Dual Lifecycle 準拠)】
 ADR-024 および本番運用規程に基づく実シート構成:
 1. **システム管理シート (1シート)**:
    - `SYSTEM_INFO`: 2列 (A〜B列: 項目・内容) ＋ 14標準設定キー・値（地区コード、地区名、HアプリURL、Dashboard URL、LIFFアプリ名、LIFF ID、LIFF URL、Endpoint URL、Manager認証パスワード、状態、契約終了日、**運用モード**、**Active Dataset Key**、**契約開始日時**）。

@@ -13,7 +13,7 @@
 > 3. **配布実績（事実）の記録**: 「誰が・いつ・どこで・何枚配ったか」という発生した客観的事実のみを記録する。
 > 4. **Hアプリのランキングは動機付け機能**: 配布員本人のモチベーション・活動意欲を高めるための機能であり、管理・監督・評価のための機能ではない。評価スコア（`rankingScore` 等）は新設しない。
 > 5. **操作単位の冪等性と月次進捗保護**: `rowId`（町丁目識別子）と `requestId`（操作単位の冪等性キー）を厳格に分離し、同一 `requestId` の再送のみを duplicate 扱いとし、当月完了行に対する別 `requestId` は `alreadyCompleted` として既存実績を保護する（同月再配布なし、翌月新月シートで新規開始）。
-> 6. **基盤適合性**: Google Apps Script (GAS) および Google Spreadsheet (Pure DB) の実行環境・制約と整合した、実現可能な契約として定義する（非現実的なRDB前提の一般論を排除）。
+> 6. **基盤適合性**: Google Apps Script（当該Spreadsheetに付属する1地区専用GAS）および Google Spreadsheet（地区専用DB）の実行環境・制約と整合した、実現可能な契約として定義する（非現実的なRDB前提の一般論を排除）。
 > 7. **AI Agent / MCP ガバナンスの確立**: 最小権限、読み書き分離、リポジトリ境界、人間による承認（Human-in-the-Loop）を強制する。
 
 ---
@@ -26,7 +26,7 @@
 4. [Authentication (認証アーキテクチャ)](#4-authentication-認証アーキテクチャ)
 5. [Identity Resolution (Identity強制解決)](#5-identity-resolution-identity強制解決)
 6. [Authorization (認可モデル)](#6-authorization-認可モデル)
-   - [6.1 District Routing & Authorization Boundary (地区ルーティングと認可境界)](#61-district-routing--authorization-boundary-地区ルーティングと認可境界)
+   - [6.1 District Integrity Verification & Authorization Boundary (地区整合性検証と認可境界)](#61-district-integrity-verification--authorization-boundary-地区整合性検証と認可境界)
 7. [Data Model (データモデル整合性)](#7-data-model-データモデル整合性)
 8. [DistributionRecord API (配布実績登録契約)](#8-distributionrecord-api-配布実績登録契約)
 9. [Ranking API (個人ランキング契約)](#9-ranking-api-個人ランキング契約)
@@ -48,16 +48,13 @@
 25. [未確定事項 (Unconfirmed Items)](#25-未確定事項-unconfirmed-items)
 26. [現行実装との対比・GAP分析 (EXISTING / REQUIRED / GAP)](#26-現行実装との対比gap分析-existing--required--gap)
 27. [Production Smoke Test & Migration API Contracts (本番スモークテストおよびマイグレーションAPI契約)](#27-production-smoke-test--migration-api-contracts-本番スモークテストおよびマイグレーションapi契約)
-   - [27.3 地区Spreadsheet世代切替管理 API 契約 (switchDistrictSpreadsheet)](#273-地区spreadsheet世代切替管理-api-契約-switchdistrictspreadsheet)
-   - [27.4 新地区プロビジョニング・環境ブートストラップ管理 API 契約 (bootstrapEnvironment / createDistrictDatabase)](#274-新地区プロビジョニング環境ブートストラップ管理-api-契約-bootstrapenvironment--createdistrictdatabase)
-   - [27.5 ACTIVE地区Driveバインディング是正管理 API 契約 (repairDistrictDriveBinding)](#275-active地区driveバインディング是正管理-api-契約-repairdistrictdrivebinding)
-   - [27.6 ACTIVE地区写真ファイル群安全移動管理 API 契約 (migrateDistrictPhotos)](#276-active地区写真ファイル群安全移動管理-api-契約-migratedistrictphotos)
+   - [27.3 新地区データベース生成管理 API 契約 (createDistrictDatabase)](#273-新地区データベース生成管理-api-契約-createdistrictdatabase)
 
 ---
 
 ## 1. Purpose (目的)
 
-Universal POSTING MAP において、現場で活動する配布員が利用する「Hアプリ」、組織の観測者が利用する「Dashboard」、業務ロジック・永続化を司る「Backend (Standalone GAS / Spreadsheet)」、および開発・保守・監査を自律的・半自律的に支援する「AI Agent / MCP ツール群」の間で交換されるすべてのデータ通信契約・運用規範を定義する。
+Universal POSTING MAP において、現場で活動する配布員が利用する「Hアプリ」、組織の観測者が利用する「Dashboard」、業務ロジック・永続化を司る「Backend (当該Spreadsheetに付属する1地区専用GAS / 地区専用Spreadsheet)」、および開発・保守・監査を自律的・半自律的に支援する「AI Agent / MCP ツール群」の間で交換されるすべてのデータ通信契約・運用規範を定義する。
 
 本書は単なるエンドポイント一覧にとどまらず、ネットワーク寸断、端末故障、並行アクセス、認証失効などの異常系（Failure Contract）、データ確定・重複防止（Data Integrity Contract）、障害検知・復旧（Operational Contract）、および AI エージェントの誤動作・権限逸脱を防ぐ統制モデル（Governance Contract）を包括的に規定する。
 
@@ -81,7 +78,7 @@ Universal POSTING MAP において、現場で活動する配布員が利用す�
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ 【API・ロジック境界】                                                       │
-│  Backend / API Gateway (Standalone GAS: v2_api.js)                          │
+│  Backend / API Gateway (当該Spreadsheetに付属する1地区専用GAS: v2_api.js)   │
 │     ├─ Auth Gateway: LINE Profile API トークン検証 (CacheService 30分)      │
 │     ├─ Identity Resolver: staffId / staffName の強制上書き (クライアント無効化)│
 │     ├─ Validation Engine: 型・境界値・Base64・サイズ厳格検証                │
@@ -91,13 +88,13 @@ Universal POSTING MAP において、現場で活動する配布員が利用す�
                     │ 永続化 (Lock下更新)                 │ データ提供 (ReadOnly)
                     ▼                                     ▼
 ┌──────────────────────────────────────┐  ┌───────────────────────────────────┐
-│ 【永続化境界 (Pure DB)】             │  │ 【統括観測境界】                  │
+│ 【永続化境界 (地区専用DB)】          │  │ 【統括観測境界】                  │
 │  Google Spreadsheet / Drive          │  │  Dashboard (Manager UI)           │
 │   ├─ 配布実績YYYY-MM (事実の原本)     │  │   ├─ 進捗観測 (完了率・総枚数)   │
 │   ├─ 名簿の原本 (配布員Identity)     │  │   ├─ 時系列実績観測 (誰がいつどこで)│
 │   ├─ 保有チラシ原本 (在庫記録)       │  │   ├─ GPS/写真監査プレビュー       │
 │   ├─ Google Drive (証跡写真保管)     │  │   └─ スタッフ別実績一覧 (観測用)  │
-│   └─ マクロ・トリガー・コード内包ゼロ│  │   ※ Hアプリへ指示を出さない     │
+│   └─ 当該Spreadsheet付属GASと1対1結合│  │   ※ Hアプリへ指示を出さない     │
 └──────────────────────────────────────┘  └───────────────────────────────────┘
                     ▲
                     │ 監査・検査・制御 (MCP 経由 / 最小権限)
@@ -117,7 +114,7 @@ Universal POSTING MAP において、現場で活動する配布員が利用す�
 
 ### (1) 通信プロトコル仕様
 - **プロトコル**: HTTPS (TLS 1.2 / 1.3 必須)
-- **エンドポイント**: Standalone Google Apps Script Web App 公開URL
+- **エンドポイント**: 当該Spreadsheetに付属する1地区専用 Google Apps Script Web App 公開URL
   - 形式: `https://script.google.com/macros/s/<DEPLOYMENT_ID>/exec`
 - **GAS 固有通信仕様 (重要)**:
   - GAS Web App は、リクエスト受信時に Google の認証・プロキシ層を経由し、`302 Moved Temporarily` を返却して `https://script.googleusercontent.com/...` へリダイレクトする。
@@ -211,21 +208,19 @@ Backend: ペイロード強制上書き (クライアント送信値を破棄)
 * **HTTP Method**: `POST` (推奨) / `GET` (後方互換)
 * **入力パラメータ**:
   * `action` (string, 必須): `"getMapsApiKey"`
-  * `districtId` (string, 推奨・マルチ地区必須): 対象地区コード (例: `"KUWANA"`, `"KAMEYAMA"`)
+  * `districtId` (string, 推奨): 対象地区コード (例: `"KUWANA"`, `"KAMEYAMA"`)
   * `dashboardSessionToken` (string, 任意): 管理者セッション保持時は自動付与
 * **正規化ルール (Normalization)**:
   * Backend側で必ず `cleanDistrictId = String(districtId || '').trim().toUpperCase()` を実施。大文字小文字の差異を吸収。
 * **解決フロー (Resolution Chain)**:
-  1. `DISTRICT_REGISTRY` 検証: `cleanDistrictId` が指定されている場合、Script Properties の `DISTRICT_REGISTRY` に登録されているか確認。未登録時は `DISTRICT_NOT_FOUND` を返却。
-  2. `Session Binding`: `dashboardSessionToken` が渡された場合、`verifyDashboardSession(token, cleanDistrictId)` を実行。セッション所属地区と要求地区が不一致の場合は `UNAUTHORIZED` を返却（他地区Key搾取防止）。
-  3. `Integrity Guard`: `SpreadsheetResolver` 照合時、スプレッドシート `SYSTEM_INFO` の地区コードと不一致時は `DISTRICT_MISMATCH` を返却。
-  4. `Contract Gate`: 対象地区が契約終了状態 (`CONTRACT_EXPIRED`) の場合は即時遮断。
-  5. 地区別Key探索: `GOOGLE_MAPS_API_KEY_<DISTRICT_ID>` が存在すれば該当Keyを返却 (`isFallback: false`)。
-  6. Phase 1 Legacy Fallback: 地区別Keyが未設定かつ旧共通Key `GOOGLE_MAPS_API_KEY` が存在する場合のみ旧Keyを返却 (`isFallback: true`)。
-  7. Key未設定: 地区別Keyも旧Keyも存在しない場合は `MAPS_KEY_NOT_CONFIGURED` を返却。
+  1. `Session Binding`: `dashboardSessionToken` が渡された場合、`verifyDashboardSession(token, cleanDistrictId)` を実行。セッション所属地区と要求地区が不一致の場合は `UNAUTHORIZED` を返却（他地区Key搾取防止）。
+  2. `Integrity Guard`: `SpreadsheetResolver`（`SpreadsheetApp.getActiveSpreadsheet()` 優先 + `TARGET_SPREADSHEET_ID` フォールバック）照合時、当該スプレッドシート `SYSTEM_INFO` の地区コード（`DISTRICT_ID` / `地区コード`）と不一致時は `DISTRICT_MISMATCH` を返却。
+  3. `Contract Gate`: 対象地区が契約終了状態 (`CONTRACT_EXPIRED`) の場合は即時遮断。
+  4. 地区別Key探索: `GOOGLE_MAPS_API_KEY_<DISTRICT_ID>` が存在すれば該当Keyを返却 (`isFallback: false`)。
+  5. Phase 1 Legacy Fallback: 地区別Keyが未設定かつ共通Key `GOOGLE_MAPS_API_KEY` が存在する場合のみ当該Keyを返却 (`isFallback: true`)。
+  6. Key未設定: 地区別Keyも共通Keyも存在しない場合は `MAPS_KEY_NOT_CONFIGURED` を返却。
 * **エラーコード一覧**:
-  * `MISSING_DISTRICT_ID`: マルチ地区環境で districtId が未指定かつフォールバック不可の場合
-  * `DISTRICT_NOT_FOUND`: 指定地区が DISTRICT_REGISTRY に未登録
+  * `DISTRICT_MISMATCH`: 指定地区コードが当該スプレッドシート `SYSTEM_INFO` の地区コードと不一致
   * `UNAUTHORIZED`: Dashboard Session の所属地区と要求地区が不一致
   * `CONTRACT_EXPIRED`: 契約期間満了によるアクセス遮断
   * `MAPS_KEY_NOT_CONFIGURED`: 該当地区の Maps API Key が未設定
@@ -233,26 +228,27 @@ Backend: ペイロード強制上書き (クライアント送信値を破棄)
   ```json
   // 正常 (地区別Key)
   { "success": true, "districtId": "KUWANA", "mapsApiKey": "AIzaSy...", "isFallback": false }
-  // 正常 (Phase 1 旧Keyフォールバック)
+  // 正常 (Phase 1 共通Keyフォールバック)
   { "success": true, "districtId": "KUWANA", "mapsApiKey": "AIzaSy...", "isFallback": true }
-  // エラー (未登録地区)
-  { "success": false, "code": "DISTRICT_NOT_FOUND", "message": "District 'UNKNOWN' is not registered in DISTRICT_REGISTRY." }
+  // エラー (地区コード不一致)
+  { "success": false, "code": "DISTRICT_MISMATCH", "message": "CRITICAL: Integrity Violation..." }
   // エラー (セッション不一致)
   { "success": false, "code": "UNAUTHORIZED", "message": "Session district mismatch. Cross-district key access denied." }
   ```
 
 ---
 
-## 6.1 District Routing & Authorization Boundary (地区ルーティングと認可境界)
+## 6.1 District Integrity Verification & Authorization Boundary (地区整合性検証と認可境界)
 
-単一の親Standalone GAS（単一Web App URL）から複数地区のSpreadsheet（DB）へアクセスを振り分けるマルチテナント運用において、**ルーティング（どのDBを開くか）と認証・認可（誰がアクセスしてよいか）を完全に分離**する。
+`1地区 = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS` の独立運用において、**地区境界整合性検証（このDBが要求された地区のものか）と認証・認可（誰がアクセスしてよいか）を明確に分離**する。
 
 ```text
 Request 受信
     ↓
-districtId 取得 (Routing Hint: 対象DB候補の指定)
+districtId 取得 (地区整合性検証パラメータ)
     ↓
-DISTRICT_REGISTRY による対象DB（Spreadsheet ID）候補の解決
+SpreadsheetApp.getActiveSpreadsheet() (または TARGET_SPREADSHEET_ID) による自地区DBの解決
+＋ SYSTEM_INFO (DISTRICT_ID) との整合性検証 (verifyIntegrityGuard: 不一致時は DISTRICT_MISMATCH 遮断)
     ↓
 LINE Access Token 検証 ➔ 認証済み lineUserId 取得 (Identity Proof: 本人性証明)
     ↓
@@ -261,12 +257,12 @@ LINE Access Token 検証 ➔ 認証済み lineUserId 取得 (Identity Proof: 本
 認可 PASS ➔ Spreadsheet 業務操作 / 認可 DENY ➔ 処理即時遮断
 ```
 
-### (1) districtId は「Routing Hint」であり認証情報ではない
-- クライアントが送信する `districtId`（例: `"KUWANA"`）は、あくまで「どのDBを候補として調べるか」の指定に過ぎない。
+### (1) districtId は「地区境界整合性検証パラメータ」であり認証情報ではない
+- クライアントが送信する `districtId`（例: `"KUWANA"`）は、当該スプレッドシートの `SYSTEM_INFO` に記録された地区コードと一致するかを検証するための識別子であり、認証・認可の根拠ではない。
 - `districtId` を送信したこと自体を信頼して対象スプレッドシートへの書き込み・読み取り権限を与える構造は絶対に採用しない。
 
 ### (2) 認可境界の実装要件
-- 認証済み `lineUserId` と対象地区DBの名簿照合を認可境界として実装し、地区越境アクセスを拒否する。
+- 認証済み `lineUserId` と対象地区DBの名簿照合を認可境界として実装し、未登録アクセスや地区越境アクセスを拒否する。
 - 業務系アクション（配布登録、在庫更新、ランキング取得等）の実行時、対象スプレッドシートの名簿に認証済み `lineUserId` が存在しない場合は、直ちに処理を停止し拒絶レスポンスを返却する。
 
 ### (3) 認可検証マトリクス (テスト検証条件)
@@ -275,10 +271,10 @@ LINE Access Token 検証 ➔ 認証済み lineUserId 取得 (Identity Proof: 本
 | テストシナリオ | LINE Token | 本人所属地区 | 指定 districtId | 認可判定 | レスポンスコード | 期待挙動 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **正当アクセス** | 正常 (User A) | District A | District A | **PASS** | `200 OK` | 正常に業務処理を完了・永続化 |
-| **地区越境アクセス** | 正常 (User A) | District A | District B | **DENY** | `NOT_REGISTERED` | 越境操作を拒絶し、DB書き込み遮断 |
+| **他地区ユーザーアクセス** | 正常 (User B) | District B | District A | **DENY** | `NOT_REGISTERED` | 未登録者として拒絶し、DB書き込み遮断 |
 | **名簿未登録ユーザー**| 正常 (Unknown) | なし | District A | **DENY** | `NOT_REGISTERED` | 初回登録画面へ誘導 |
 | **不正/失効トークン** | 無効/失効 | - | District A | **DENY** | `UNAUTHORIZED` | 認証エラーとして即時拒絶 |
-| **未知の地区ID** | 正常 (User A) | District A | Unknown-99 | **DENY** | `DISTRICT_NOT_FOUND` | ルーティング失敗として即時拒絶 |
+| **地区コード不整合** | 正常 (User A) | District A | Unknown-99 | **DENY** | `DISTRICT_MISMATCH` | `SYSTEM_INFO` 不一致として即時拒絶 |
 
 ### (4) 推奨リクエスト構造
 ```json
@@ -291,7 +287,7 @@ LINE Access Token 検証 ➔ 認証済み lineUserId 取得 (Identity Proof: 本
   "count": 120
 }
 ```
-※ `districtId` は Routing Hint、`liffToken` は Identity Credential として扱い、Backend 側で分離検証する。
+※ `districtId` は地区整合性検証パラメータ、`liffToken` は Identity Credential として扱い、Backend 側で分離検証する。
 
 
 ---
@@ -914,15 +910,9 @@ Gate 3 で策定した設計契約と、現行コードベース（`active/`）�
    - `POST /exec { "action": "getFlyerStock" }`
      - 応答: HTTP 200 正常チラシ在庫サマリー返却
 3. **セキュリティ & 整合性ガード (Integrity & Safety Guard)**:
-   - **未指定地区 (`districtId missing`)**:
-     - 条件: マルチ地区環境において `districtId` が未指定
-     - 応答: HTTP 200 `{ success: false, code: "MISSING_DISTRICT_ID", message: "districtId is required for multi-district routing." }`
-   - **未登録地区 (`DISTRICT_REGISTRY unregistered`)**:
-     - 条件: 指定された `districtId` が `DISTRICT_REGISTRY` に未登録
+   - **整合性ガード・地区コード不一致 (`SYSTEM_INFO district-code mismatch`)**:
+     - 条件: リクエストの `districtId` が当該スプレッドシート `SYSTEM_INFO` の地区コード（`DISTRICT_ID` / `地区コード`）と不一致、またはセッション所属地区と不一致
      - リクエスト例: `POST /exec { "action": "getDashboardSnapshot", "districtId": "UNKNOWN" }`
-     - 応答: HTTP 200 `{ success: false, code: "DISTRICT_NOT_FOUND", message: "District 'UNKNOWN' is not registered in DISTRICT_REGISTRY." }`
-   - **整合性ガード・地区コード不一致 (`registered district + SYSTEM_INFO district-code mismatch`)**:
-     - 条件: `DISTRICT_REGISTRY` 登録地区だが、対象スプレッドシート `SYSTEM_INFO` の地区コード（B2）が不一致、または既知地区間の越境・セッション所属不一致
      - 応答: HTTP 200 `{ success: false, code: "DISTRICT_MISMATCH", message: "..." }`
    - **契約満了地区 (`expired district`)**:
      - 条件: 対象地区の契約期間終了 (`contract.isExpired`)
@@ -964,54 +954,11 @@ Gate 3 で策定した設計契約と、現行コードベース（`active/`）�
   - アーキテクチャ受入基準・不変条件: [01_DESIGN_CONTRACT.md](../architecture/01_DESIGN_CONTRACT.md) §19
   - 本番切替・ロールバック運用SOP: [BACKUP_RESTORE_RUNBOOK.md](../operations/BACKUP_RESTORE_RUNBOOK.md) §5.2
 
-### 27.3 地区Spreadsheet世代切替管理 API 契約 (switchDistrictSpreadsheet)
+### 27.3 新地区データベース生成管理 API 契約 (createDistrictDatabase)
 - **エンドポイント**: `POST /exec` (GET は `METHOD_NOT_ALLOWED` で即時遮断)
-- **アクション**: `action: "switchDistrictSpreadsheet"`
+- **アクション**: `action: "createDistrictDatabase"`
 - **認可**: `verifyProvisioningToken` によるトークン認証必須（欠損・不正時は `UNAUTHORIZED` で遮断、mutation 0）
-- **目的**: 既存登録済み地区におけるデータベース世代切替専用の安全管理Action。新DBへのCutover時に、`DISTRICT_REGISTRY[districtId].spreadsheetId` のみをアトミックに切り替える。
-- **入力契約 (Request Payload)**:
-  ```json
-  {
-    "action": "switchDistrictSpreadsheet",
-    "provisioningToken": "<SECRET_TOKEN>",
-    "districtId": "KUWANA",
-    "expectedCurrentSpreadsheetId": "1_OLD_SPREADSHEET_ID",
-    "targetSpreadsheetId": "1_NEW_SPREADSHEET_ID"
-  }
-  ```
-- **安全制約 & 絶対禁止事項 (Safety Constraints & Prohibitions)**:
-  1. **世代切替専用性**: 本Actionは既存地区のDB世代切替（`spreadsheetId` の `OLD_ID -> NEW_ID` 更新）専用であり、`bootstrapEnvironment` の代替として無関係な Script Properties（`STORAGE_PARENT_ID`, `PROVISIONING_TOKEN_HASH`, `TARGET_SPREADSHEET_ID`, `SPREADSHEET_ID` 等）を書き換えることは永久に禁止される。
-  2. **地区プロパティ境界維持**: 当該地区の `enabled`, `storageFolderId`, `name` 等の他メタデータ、および他地区の全設定は完全不変（deepEqual 一致）とする。
-  3. **Stale Write 防止 (楽観的排他ロック)**: `expectedCurrentSpreadsheetId` と現在の Registry 内 `spreadsheetId` が完全一致しない場合、`STALE_WRITE` として即時 Fail-Closed 遮断（mutation 0）。
-  4. **新DB実在 & 地区コード一致検証**: `SpreadsheetApp.openById(targetSpreadsheetId)` で実在を確認し、かつ新DBの `SYSTEM_INFO["地区コード"] === districtId` であることを書き込み前に検証（不在時は `RESOURCE_NOT_FOUND`、不一致時は `DISTRICT_MISMATCH` で Fail-Closed、mutation 0）。
-  5. **1回限りの永続化とRead-Back検証**: `DISTRICT_REGISTRY` への setProperty は1回のみ実行し、即座に read-back して新IDの一致を確認（不一致時は `REGISTRY_UPDATE_FAILED`）。
-  6. **キャッシュ即時無効化**: 反映直後に `SpreadsheetResolver.getInstance().clearCache()` を実行し、動的ルーティングを新DBへ即時同期させる。
-- **管理エラーコード一覧 (Failure Codes)**:
-  - `UNAUTHORIZED`: トークン欠損または検証失敗
-  - `INVALID_ARGUMENT`: 必須パラメータ（`districtId`, `expectedCurrentSpreadsheetId`, `targetSpreadsheetId`）の欠損
-  - `CORRUPTED_REGISTRY`: `DISTRICT_REGISTRY` 未設定、空文字、または JSON 破損
-  - `DISTRICT_NOT_FOUND`: 対象地区が `DISTRICT_REGISTRY` に未登録
-  - `STALE_WRITE`: 現在の `spreadsheetId !== expectedCurrentSpreadsheetId`（先行更新競合）
-  - `RESOURCE_NOT_FOUND`: `targetSpreadsheetId` のスプレッドシートが存在しない・アクセス不可
-  - `DISTRICT_MISMATCH`: 新DBの `SYSTEM_INFO` 地区コードが `districtId` と不一致
-  - `REGISTRY_UPDATE_FAILED`: setProperty 失敗または read-back 不一致
-  - `METHOD_NOT_ALLOWED`: GET メソッドによる呼出し
-- **レスポンス形式 (Response)**:
-  ```json
-  {
-    "success": true,
-    "districtId": "KUWANA",
-    "previousSpreadsheetId": "1_OLD_SPREADSHEET_ID",
-    "newSpreadsheetId": "1_NEW_SPREADSHEET_ID",
-    "message": "District \"KUWANA\" spreadsheet switched successfully to \"1_NEW_SPREADSHEET_ID\"."
-  }
-  ```
-
-### 27.4 新地区プロビジョニング・環境ブートストラップ管理 API 契約 (bootstrapEnvironment / createDistrictDatabase)
-- **エンドポイント**: `POST /exec` (GET は `METHOD_NOT_ALLOWED` で即時遮断)
-- **アクション**: `action: "bootstrapEnvironment"` または `action: "createDistrictDatabase"`
-- **認可**: `verifyProvisioningToken` によるトークン認証必須（欠損・不正時は `UNAUTHORIZED` で遮断、mutation 0）
-- **目的**: 新規地区の環境ブートストラップおよびデータベース生成において、Google Drive 上の物理資産を正規階層へ自動配置する安全管理Action。呼び出し元（Caller）による配置先やファイル名の任意指定権限を剥奪し、サーバー側決定論的導出を一元執行する。
+- **目的**: 新規地区のデータベース生成において、Google Drive 上の物理資産を正規階層へ自動配置する安全管理Action。呼び出し元（Caller）による配置先やファイル名の任意指定権限を剥奪し、サーバー側決定論的導出を一元執行する。
 - **物理配置契約 (Canonical Drive Physical Layout Contract)**:
   ```text
   FIELD_OPERATIONS_PLATFORM/
@@ -1039,15 +986,6 @@ Gate 3 で策定した設計契約と、現行コードベース（`active/`）�
   canonicalSpreadsheetId
   ```
 - **入力契約 (Request Payload)**:
-  - `bootstrapEnvironment`:
-    ```json
-    {
-      "action": "bootstrapEnvironment",
-      "provisioningToken": "<SECRET_TOKEN>",
-      "districtId": "NEW_DISTRICT"
-    }
-    ```
-    ※後方互換用オプショナル引数: `targetSpreadsheetId`, `storageParentId`
   - `createDistrictDatabase`:
     ```json
     {
@@ -1060,10 +998,10 @@ Gate 3 で策定した設計契約と、現行コードベース（`active/`）�
     ※後方互換用オプショナル引数: `targetFolderId`, `targetDistrictName`
 - **安全制約 & 絶対遵守事項 (Safety Constraints & Prohibitions)**:
   1. **Caller Authority の剥奪**: Caller が配置先フォルダ ID や任意の DB 名を決定することは永久に禁止される。DB 名は `{cleanDistrictId}` に強制固定される。
-  2. **Legacy 引数の Assertion-Only 運用**: 旧引数（`targetSpreadsheetId`, `storageParentId`, `targetFolderId`, `targetDistrictName`）が渡された場合、それらは配置・指定の Authority としては使用されず、サーバー側導出値との一致検証専用（Assertion Only）として扱われる。不一致時は直ちに Fail-Closed 遮断（`SPREADSHEET_ID_MISMATCH`, `STORAGE_FOLDER_MISMATCH`, `FOLDER_MISMATCH`, `INVALID_DISTRICT_NAME`）。
+  2. **Legacy 引数の Assertion-Only 運用**: 旧引数（`targetFolderId`, `targetDistrictName`）が渡された場合、それらは配置・指定の Authority としては使用されず、サーバー側導出値との一致検証専用（Assertion Only）として扱われる。不一致時は直ちに Fail-Closed 遮断（`FOLDER_MISMATCH`, `INVALID_DISTRICT_NAME`）。
   3. **ドライブショートカットの厳格拒絶**: ドライブショートカット（MIMEタイプ `application/vnd.google-apps.shortcut`）は実体 DB として認可せず、検知時は直ちに `SHORTCUT_REJECTED` で遮断（mutation 0）。
   4. **自動破壊（Auto-Trash）の完全禁止**: 既存同名 DB が既に存在する場合、過去の自動ゴミ箱送り（`setTrashed(true)`）は永久に禁止される。1件存在時は `DISTRICT_DB_ALREADY_EXISTS`、2件以上存在時は `AMBIGUOUS_DISTRICT_DB` で直ちに Fail-Closed 停止する。
-  5. **Environment Authority の分離**: `BRANCH_ROOT_FOLDER_ID` は親GAS Script Properties を SSOT とし、ソースコード（`active/**`）への物理 Drive ID ハードコードを永久に禁止する。未設定時は `DRIVE_RESOLUTION_FAILED` で Fail-Closed。
+  5. **Environment Authority の分離**: `BRANCH_ROOT_FOLDER_ID` は Script Properties を SSOT とし、ソースコード（`active/**`）への物理 Drive ID ハードコードを永久に禁止する。未設定時は `DRIVE_RESOLUTION_FAILED` で Fail-Closed。
 - **管理エラーコード一覧 (Failure Codes)**:
   - `UNAUTHORIZED`: プロビジョニングトークン欠損・不正
   - `INVALID_ARGUMENT`: 必須パラメータ（`districtId` 等）の欠損
@@ -1077,168 +1015,15 @@ Gate 3 で策定した設計契約と、現行コードベース（`active/`）�
   - `SHORTCUT_REJECTED`: スプレッドシートがショートカットである
   - `FOLDER_MISMATCH`: Caller 指定 `targetFolderId` がサーバー導出フォルダと不一致
   - `INVALID_DISTRICT_NAME`: Caller 指定 `targetDistrictName` が正式 DB 名と不一致
-  - `SPREADSHEET_ID_MISMATCH`: Caller 指定 `targetSpreadsheetId` が実体 DB と不一致
-  - `STORAGE_FOLDER_MISMATCH`: Caller 指定 `storageParentId` が実体ストレージと不一致
   - `DISTRICT_MISMATCH`: スプレッドシート名が正式 DB 名または地区コードと不一致
-  - `CORRUPTED_REGISTRY`: `DISTRICT_REGISTRY` 破損・パース不能
 - **レスポンス形式 (Response)**:
   ```json
   {
     "success": true,
     "districtId": "NEW_DISTRICT",
-    "targetSpreadsheetId": "1_CANONICAL_SPREADSHEET_ID",
-    "storageParentId": "1_CANONICAL_STORAGE_FOLDER_ID",
-    "districtRegistryUpdated": true,
-    "message": "Environment successfully bootstrapped for district \"NEW_DISTRICT\"."
-  }
-  ```
-
-### 27.5 ACTIVE地区Driveバインディング是正管理 API 契約 (repairDistrictDriveBinding)
-- **エンドポイント**: `POST /exec` (GET は `METHOD_NOT_ALLOWED` で即時遮断)
-- **アクション**: `action: "repairDistrictDriveBinding"`
-- **認可**: `verifyProvisioningToken` によるトークン認証必須（欠損・不正時は `UNAUTHORIZED` で遮断、mutation 0）
-- **目的**: 既存 ACTIVE 地区における Google Drive バインディング不整合（例: 初期構築時のストレージフォルダ誤紐付け）を、人間オペレーターの GAS UI 手動操作や `bootstrapEnvironment` による無差別な環境再構築（`enabled: false` への降格、REGISTRY 再構成、`TARGET_SPREADSHEET_ID` 誤更新等）を一切排し、最小かつ安全に是正（Remediation）する Universal Admin API。
-- **入力契約 (Request Payload)**:
-  ```json
-  {
-    "action": "repairDistrictDriveBinding",
-    "provisioningToken": "<SECRET_TOKEN>",
-    "districtId": "KUWANA",
-    "branchRootFolderId": "1EQQqWbtyF7iMd7Fk-WnUwWiAGB4MdIdN",
-    "expectedCurrentStorageFolderId": "1Zt-AC153J0ByAwP9TkaUjimsgGVwDImF",
-    "targetStorageFolderId": "1HI1nB_XqpEABz9vPugu7jLsf78LM1Mpw",
-    "expectedRegistryRawHash": "<OPTIONAL_SHA256_HASH>",
-    "expectedRegistryRaw": "<OPTIONAL_RAW_JSON_STRING>"
-  }
-  ```
-- **安全制約 & 絶対遵守事項 (Safety Constraints & Prohibitions)**:
-  1. **ACTIVE 地区存在必須（新地区作成不可）**: 対象地区は既存 `DISTRICT_REGISTRY` に必ず存在しなければならない。不在時は `DISTRICT_NOT_FOUND` で直ちに Fail-Closed 遮断（mutation 0）。
-  2. **BRANCH_ROOT_FOLDER_ID 厳格制御 & 冪等性**:
-     - 未設定時: トークン認証および対象フォルダ実在確認後に初期シード設定。
-     - 設定済かつ同値: 冪等に成功（No-op）。
-     - 設定済かつ異値: `BRANCH_ROOT_MISMATCH` で直ちに Fail-Closed 遮断（mutation 0）。上書きは永久禁止。
-  3. **Server-Side 決定論的検証 (Target Storage Assertion)**:
-     - 呼び出し元が指定した `targetStorageFolderId` を盲信しない。
-     - サーバー側で `branchRootFolderId` → `03_BRANCH/{districtId}` → `{districtId} 支部_STORAGE` を自律探索し、導出された `canonicalStorageFolderId` と完全一致することを強制検証（不一致時は `STORAGE_FOLDER_MISMATCH` で Fail-Closed、mutation 0）。
-  4. **Stale Write 抑止 (CAS: Compare-And-Swap ガード)**:
-     - 現在の `DISTRICT_REGISTRY[districtId].storageFolderId === expectedCurrentStorageFolderId` を検証（不一致時は `STALE_WRITE` で Fail-Closed、mutation 0）。
-     - 現在の `STORAGE_PARENT_ID`（設定されている場合）が `expectedCurrentStorageFolderId` と一致することを検証（不一致時は `STALE_WRITE` で Fail-Closed、mutation 0）。
-     - オプションの `expectedRegistryRawHash` / `expectedRegistryRaw` 指定時、全文字一致を検証。
-  5. **既存地区属性 & 他地区テナントの完全不可侵**:
-     - 対象地区の `spreadsheetId`, `enabled`（`true` のまま維持）, `name` 等の他フィールドは一切変更しない。
-     - 他地区の全 entry は 1 バイトたりとも変更しない（0 diff deepEqual 保証）。
-     - `PROVISIONING_TOKEN_HASH`, `TARGET_SPREADSHEET_ID`, `SPREADSHEET_ID` 等の無関係な Script Properties は 100% 不可侵（0 diff）。
-  6. **変更許可キーの厳格限定（Allowlist: 最大3箇所のみ）**:
-     - `BRANCH_ROOT_FOLDER_ID`（未設定時のみ）
-     - `DISTRICT_REGISTRY[districtId].storageFolderId`
-     - `STORAGE_PARENT_ID`
-  7. **Read-Back 機械検証 & 局所ロールバック**:
-     - 書き込み直後に 3 箇所の Script Properties を再取得し、期待値および他地区不変性を完全機械検証。不一致時は例外をスロー。
-     - 途中失敗時は、変更済みキーのみを書き込み前の元値へ復元（Rollback）。
-  8. **キャッシュ即時無効化**:
-     - 反映直後に `CacheService.getScriptCache().remove("CONFIG_STORE")` および `SpreadsheetResolver.getInstance().clearCache()` を実行。
-- **管理エラーコード一覧 (Failure Codes)**:
-  - `UNAUTHORIZED`: プロビジョニングトークン欠損・不正
-  - `INVALID_ARGUMENT`: 必須パラメータ（`districtId`, `branchRootFolderId`, `expectedCurrentStorageFolderId`, `targetStorageFolderId`）の欠損
-  - `CORRUPTED_REGISTRY`: `DISTRICT_REGISTRY` 未設定、空文字、または JSON 破損
-  - `DISTRICT_NOT_FOUND`: 対象地区が `DISTRICT_REGISTRY` に未登録（新規作成禁止）
-  - `STALE_WRITE`: 現在の `storageFolderId` または `STORAGE_PARENT_ID` または Registry ハッシュが期待値と不一致
-  - `BRANCH_ROOT_MISMATCH`: 既存の `BRANCH_ROOT_FOLDER_ID` と指定値が不一致
-  - `RESOURCE_NOT_FOUND`: 指定フォルダ（branchRootFolder, districtFolder, storageFolder）が存在しない・アクセス不可
-  - `AMBIGUOUS_DISTRICT_FOLDER`: branchRoot 配下に同名地区フォルダが重複存在
-  - `AMBIGUOUS_STORAGE_FOLDER`: 地区フォルダ配下に同名ストレージフォルダが重複存在
-  - `STORAGE_FOLDER_MISMATCH`: 指定 `targetStorageFolderId` がサーバー側導出ストレージフォルダと不一致
-  - `MUTATION_FAILED`: 書き込み失敗または read-back 不一致（局所ロールバック実行）
-  - `METHOD_NOT_ALLOWED`: GET メソッドによる呼出し
-- **レスポンス形式 (Response)**:
-  ```json
-  {
-    "success": true,
-    "message": "District \"KUWANA\" drive binding repaired successfully.",
-    "districtId": "KUWANA",
-    "branchRootFolderId": "1EQQqWbtyF7iMd7Fk-WnUwWiAGB4MdIdN",
-    "storageFolderId": "1HI1nB_XqpEABz9vPugu7jLsf78LM1Mpw",
-    "storageParentId": "1HI1nB_XqpEABz9vPugu7jLsf78LM1Mpw",
-    "districtRegistryUpdated": true
-  }
-  ```
-
-### 27.6 ACTIVE地区写真ファイル群安全移動管理 API 契約 (migrateDistrictPhotos)
-- **エンドポイント**: `POST /exec`
-- **アクション名**: `migrateDistrictPhotos`
-- **目的と責務**:
-  - 既存の配布実績写真ファイル群を、誤って配置された親フォルダ（旧設定フォルダ等）から、対象地区の Canonical Storage フォルダ（`{districtId} 支部_STORAGE`）へ、物理ファイルID・ファイル名・コンテンツ・メタデータを完全不変のまま安全に移動する。
-  - 新規ファイルアップロードや地区プロビジョニング、Script Properties / Registry の変更は一切行わない（**Script Properties & Registry 0 diff 契約**）。
-- **認証と認可 (Authentication & Authorization)**:
-  - `PROVISIONING_TOKEN` 必須（`verifyProvisioningToken(token)` 照合）。
-  - GET メソッドでの呼出しは即座に `405 METHOD_NOT_ALLOWED` で拒絶。
-  - トークン欠損または不一致時は `401 UNAUTHORIZED`（mutation 0）。
-- **リクエスト仕様 (Request Parameters)**:
-  - `action`: `"migrateDistrictPhotos"` (必須)
-  - `provisioningToken`: 有効なプロビジョニングトークン (必須)
-  - `districtId`: 対象地区コード (必須, e.g. `"KUWANA"`)
-  - `fileIds`: 移動対象の Google Drive ファイルID配列 (必須, e.g. `["fid1", "fid2", ...]`)
-    - 重複除去（Deduplicate）を自動適用し、有効なユニークID群を確定。
-    - 上限ガード: 1 バッチ最大 200 件（超過時は `BATCH_SIZE_EXCEEDED` で全中止、mutation 0）。
-  - `expectedSourceFolderId`: 現在の写真配置元フォルダID (必須)
-  - `expectedTargetStorageFolderId`: 期待される移動先ストレージフォルダID (任意, Assertion-only)
-- **移動先 Authority & 安全防壁 (Target Storage Authority)**:
-  1. 移動先フォルダIDは呼び出し元の指定を Authority とせず、サーバー側の `DISTRICT_REGISTRY[districtId].storageFolderId` を唯一の正本とする。
-  2. `expectedTargetStorageFolderId` が指定された場合、正本の `canonicalStorageFolderId` と完全一致することを強制検証（不一致時は `STORAGE_FOLDER_MISMATCH` で Fail-Closed、mutation 0）。
-  3. `expectedSourceFolderId` と `canonicalStorageFolderId` が同一の場合は `INVALID_INPUT` で拒絶。
-- **全件事前検証 (All-Files Preflight Before Mutation)**:
-  1. 1 件でも移動を開始する前に、`fileIds` の全件について以下の事前検査を完全執行する：
-     - `DriveApp.getFileById(fileId)` でファイルが実在しオープン可能であること。
-     - `file.isTrashed() === false`（ゴミ箱内ファイルでないこと）。
-     - MIME タイプが画像であること（`image/*`: `image/jpeg`, `image/png`, `image/webp`, `image/gif` 等）。
-     - 現在の親フォルダが `expectedSourceFolderId`、または既に `canonicalStorageFolderId` であること。
-  2. 1 件でもファイル未存在、ゴミ箱内、非画像、または想定外フォルダに存在するファイルが検知された場合、直ちに `RESOURCE_NOT_FOUND` / `FILE_TRASHED` / `UNSUPPORTED_MEDIA_TYPE` / `SOURCE_FOLDER_MISMATCH` で Fail-Closed 終了し、**全ファイルの移動を一切行わない（mutation 0 保証）**。
-- **移動執行と局所ロールバック (Atomic Move with Moved Ledger)**:
-  1. Preflight を全件通過したファイルのうち、未移動分のみを `file.moveTo(canonicalTargetFolder)`（または互換 `targetFolder.addFile; sourceFolder.removeFile`）で順次移動。
-  2. 1 件移動成功ごとに `movedLedger` に File ID を追記。
-  3. 途中障害発生時:
-     - 直ちに後続処理を中断。
-     - `movedLedger` に記録されたファイルのみを `expectedSourceFolderId` へ移動して原状復帰（Rollback）。
-     - ロールバックが完遂した場合は `MUTATION_FAILED` を返却。
-     - ロールバック中に障害が発生した場合は `ROLLBACK_INCOMPLETE` として未復帰ファイル一覧とともに Fail-Closed 報告。
-- **事後Read-Back機械検証 (Post-Move Read-Back Verification)**:
-  1. 全 `fileIds` を再取得し、以下を機械検証：
-     - ファイルID不変、ファイル名不変、`trashed === false`
-     - 親フォルダに `canonicalStorageFolderId` が含まれていること
-     - 親フォルダから `expectedSourceFolderId` が完全に除去されていること
-  2. 1 件でも不整合が検知された場合は `READ_BACK_MISMATCH` で Fail-Closed。
-- **冪等性 (Idempotency)**:
-  - 既に全件が `canonicalStorageFolderId` に存在する場合、移動処理を行わず `alreadyMigratedCount == requestedCount`, `migratedCount == 0`, `success: true` を返却（Idempotent no-op）。
-- **管理エラーコード一覧 (Failure Codes)**:
-  - `UNAUTHORIZED`: プロビジョニングトークン欠損・不正
-  - `INVALID_INPUT`: `districtId`, `fileIds`, `expectedSourceFolderId` の欠損、無効形式、空配列、または同一フォルダ指定
-  - `BATCH_SIZE_EXCEEDED`: 指定 `fileIds` 件数が 200 件を超過
-  - `DISTRICT_NOT_FOUND`: 対象地区が `DISTRICT_REGISTRY` に未登録
-  - `STORAGE_FOLDER_NOT_CONFIGURED`: 対象地区の `storageFolderId` が Registry に未設定
-  - `STORAGE_FOLDER_MISMATCH`: Caller 指定の `expectedTargetStorageFolderId` が正本ストレージと不一致
-  - `RESOURCE_NOT_FOUND`: 指定フォルダまたはファイルが存在しない・オープン不可
-  - `FILE_TRASHED`: 指定ファイルがゴミ箱内に存在
-  - `UNSUPPORTED_MEDIA_TYPE`: 指定ファイルの MIME が画像（`image/*`）以外
-  - `SOURCE_FOLDER_MISMATCH`: 指定ファイルの親フォルダが `expectedSourceFolderId` でも `canonicalStorageFolderId` でもない
-  - `MUTATION_FAILED`: 移動失敗（ロールバック正常完遂）
-  - `ROLLBACK_INCOMPLETE`: 移動失敗かつロールバック中に復帰不可ファイルが発生
-  - `READ_BACK_MISMATCH`: 移動後の親フォルダ検証不一致
-  - `METHOD_NOT_ALLOWED`: GET メソッドによる呼出し
-- **レスポンス形式 (Response)**:
-  ```json
-  {
-    "success": true,
-    "message": "District \"KUWANA\" photos migrated successfully.",
-    "districtId": "KUWANA",
-    "requestedCount": 38,
-    "migratedCount": 38,
-    "alreadyMigratedCount": 0,
-    "failedCount": 0,
-    "targetStorageFolderId": "1HI1nB_XqpEABz9vPugu7jLsf78LM1Mpw",
-    "migratedFileIds": [
-      "1qV9-OuetqapcyRSlMIliPlJenAAKY8Hi",
-      "..."
-    ]
+    "spreadsheetId": "1_CANONICAL_SPREADSHEET_ID",
+    "storageFolderId": "1_CANONICAL_STORAGE_FOLDER_ID",
+    "message": "District database created successfully for \"NEW_DISTRICT\"."
   }
   ```
 

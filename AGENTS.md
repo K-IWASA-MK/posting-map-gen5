@@ -3,23 +3,23 @@
 ## 0. Supreme Principles — ABSOLUTE
 - 本リポジトリにおけるすべての工学契約、就業規則、開発ガバナンスは、最高位存在規範である **Supreme Product Principles**（正本ポインタ: [.agents/os-registry.json](.agents/os-registry.json) `principleContract.canonicalSource` ➔ [docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md](docs/architecture/SUPREME_PRODUCT_PRINCIPLES.md)）に絶対従属する。
 - **Product Behavior Preservation**: 現在完成しているHアプリ・Dashboardの機能、操作、表示、タイミング（UI, 操作順, 表示内容, 画面遷移, Loading, Modal, Error, Optimistic First Paint, API firing order, await / no-await, Promise ordering, Concurrency, Timers, Existing quirks, SSOT, Identity, 命名契約, Spreadsheet・File等の外部Resource名, API semantics, Authentication・Session Binding）を1つも変えてはならない。
-- **Universal Product Model & 物理製品境界**: 1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン。共通Runtime（`active/**`）の個別改変・分岐を永久に禁止する。
+- **Universal Product Model & 物理製品境界**: 1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定。共通Runtime（`active/**`）の個別改変・分岐を永久に禁止する。
 - **No Autonomous Principle Change**: 原則の更新起点は MASTER explicit decision のみとする。AIによる原則の自律改定は永久に禁止する。
 - **Version Resolution**: 各AI社員は原則バージョンを直接保持せず、Current Role ➔ Canonical Pointer ➔ Registry ➔ Supreme Principle SSOT の一方向チェーンによって一意に解決する。
 
 ## 1. Architecture — ABSOLUTE
-- **1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン**。
+- **1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定**。
 - 共通Runtime（`active/`）は **Universal Engine** として全地区共通であり、コピーして変更しない。
 - **Regional differences are absorbed by data, not code duplication**（地区差は `data/` で吸収する）。
 - `data/` に入らない不可避の外部地区設定（GAS Web App URL, LIFF ID, CNAME, 外部リソースID等）のみを最小限設定する。
 - 4-Tier Physical Separation:
   1. Client Tier (H-App / Dashboard: Static hosting on CDN / GitHub Pages)
-  2. Backend Tier (Standalone GAS API `v2_api.js`: Auth, Identity, Validation, Concurrency)
-  3. Database Tier (Google Spreadsheet Pure DB: no scripts, no custom functions, no triggers + Google Drive: binary evidence)
+  2. Backend Tier (当該Spreadsheetに付属する1地区専用GAS API `v2_api.js`: Auth, Identity, Validation, Concurrency)
+  3. Database Tier (Google Spreadsheet DB: no custom sheet formulas/triggers + Google Drive: binary evidence)
   4. Master Data Tier (Git `data/`: address_master.csv, boundaries.geojson, municipality_master.csv, config.js, area_mapping.json)
 - `active/` = universal engine. Never modify active/ for regional specialization.
 - `data/` = master data and client configuration.
-- Spreadsheet = Pure DB (no scripts, no custom functions, no triggers). GAS = Standalone only. Container-bound Apps Script is permanently deprecated.
+- Backend GAS = 当該Spreadsheetに付属する1地区専用GAS（`SpreadsheetApp.getActiveSpreadsheet()` 優先 / `TARGET_SPREADSHEET_ID` フォールバック + `SYSTEM_INFO` `verifyIntegrityGuard`）。複数地区を単一親GASや `DISTRICT_REGISTRY` で共有・ルーティングする方式は廃止。
 
 ## 2. Universal Gap Protocol — ABSOLUTE
 - 新地区作成時および運用時において共通Runtime（`active/`）の変更が必要になった場合、地区固有のworkaround（個別コード分岐、地区名ハードコード、暫定ハック）を絶対禁止とする。
@@ -117,7 +117,7 @@
   - *Authority*: Executionからの内部ディスパッチ（Fresh isolated child context）受容、提示された差分および変更ファイル全文の独立査読、allowlist検証コマンド独立再実行（`git diff`, `npm test`, `check-scope.mjs`）、反証分析（他地区展開耐性・非data/**への地区リテラル埋込排除）、独立判定（PASS / REJECT）の `[AUDITOR VERDICT]` チャット返却。
   - *Prohibition*: ファイル編集・生成（Policy-Level Zero Write、verdictファイル作成禁止）、Git Commit/Push/Deploy、非 allowlist コマンド実行、機械的テスト追認（テストPASSのみによる無精査合格）、忖度・推測による判定、再委任（Subagent Dispatch）禁止、他地区参照（永久原則）。
 - **Leaf Specialist: District Provisioning AI (deployer)**:
-  - *Authority*: Executionからの内部ディスパッチ受容、新地区プロビジョニング手順執行、マスターデータ生成、親GAS Registryバインド、受入ゲート検証、`[DEPLOYER REPORT]` 返却。書込対象は `data/**` および不可避な地区固有設定のみ。
+  - *Authority*: Executionからの内部ディスパッチ受容、新地区プロビジョニング手順執行、マスターデータ生成、1地区専用DB・GAS設定バインド、受入ゲート検証、`[DEPLOYER REPORT]` 返却。書込対象は `data/**` および不可避な地区固有設定のみ。
   - *Prohibition*: code deploy禁止、Git Commit/Push禁止、共通Runtime（`active/**`）改変禁止、共通テスト（`tests/**`）改変禁止、自律Scope拡張禁止、再委任（Subagent Dispatch）禁止、他地区参照（永久原則）。
 
 ### Strict Subagent Depth = 1 原則
