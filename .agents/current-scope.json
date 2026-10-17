@@ -1,15 +1,8 @@
 {
-  "mission": "Independent Auditor Effectiveness Rectification",
+  "mission": "Universal Test District-Literal Elimination",
   "files": [
     ".agents/current-scope.json",
-    "docs/ai-foundation.md",
-    "AGENTS.md",
-    ".agents/agents/auditor/agent.md",
-    ".agents/skills/release-integrity/SKILL.md",
-    "scripts/check-universal-invariants.mjs",
-    "scripts/check-auditor-gate.mjs",
-    "tests/test_auditor_gate.mjs",
-    "tests/test_auditor_effectiveness_regression.mjs",
-    ".agents/os-registry.json"
+    "tests/test_phase11_activity_state_machine.mjs",
+    "tests/test_phase13_dashboard_verification.mjs"
   ]
 }
