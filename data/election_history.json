@@ -1,59 +1,80 @@
 {
   "schemaVersion": "2.0.0",
-  "districtId": "KUWANA",
-  "districtName": "三重県桑名市",
+  "districtId": "MIE-03",
+  "districtName": "三重県第3区",
   "historyPolicy": {
     "maxHistoryLength": 3,
     "rotationPolicy": "KEEP_LATEST_3_ELECTIONS"
   },
   "sourcePolicy": {
-    "national": "桑名市選挙管理委員会事務局",
-    "district": "桑名市選挙管理委員会事務局",
-    "municipality": "桑名市選挙管理委員会事務局"
+    "national": "総務省 / 三重県選挙管理委員会",
+    "district": "三重県選挙管理委員会事務局",
+    "municipality": "各市町選挙管理委員会"
   },
   "elections": [
     {
-      "electionId": "COUNCIL-2022-11",
-      "electionType": "local",
-      "electionName": "桑名市議会議員選挙",
-      "year": "2022",
-      "electionDate": "2022-11-20",
-      "eligibleVoters": 112988,
-      "voters": 50933,
-      "turnout": 45.08,
-      "districtTurnout": 45.08,
+      "electionId": "HR-2024-10",
+      "electionType": "general",
+      "electionName": "第50回衆議院議員総選挙",
+      "year": "2024",
+      "electionDate": "2024-10-27",
+      "eligibleVoters": 409266,
+      "voters": 231800,
+      "turnout": 56.64,
+      "districtTurnout": 56.64,
       "municipalities": {
-        "桑名市": 45.08
+        "いなべ市": 59.11,
+        "四日市市": 54.97,
+        "川越町": 53.09,
+        "朝日町": 62.34,
+        "木曽岬町": 58.15,
+        "東員町": 60.46,
+        "桑名市": 56.82,
+        "菰野町": 59.68
       }
     },
     {
-      "electionId": "COUNCIL-2018-12",
-      "electionType": "local",
-      "electionName": "桑名市議会議員選挙",
-      "year": "2018",
-      "electionDate": "2018-12-02",
-      "eligibleVoters": 114894,
-      "voters": 55492,
-      "turnout": 48.3,
-      "districtTurnout": 48.3,
+      "electionId": "HR-2021-10",
+      "electionType": "general",
+      "electionName": "第49回衆議院議員総選挙",
+      "year": "2021",
+      "electionDate": "2021-10-31",
+      "eligibleVoters": 414312,
+      "voters": 229151,
+      "turnout": 55.31,
+      "districtTurnout": 55.31,
       "municipalities": {
-        "桑名市": 48.3
+        "いなべ市": 59.17,
+        "四日市市": 53.06,
+        "川越町": 53.68,
+        "朝日町": 60.94,
+        "木曽岬町": 57.96,
+        "東員町": 59.35,
+        "桑名市": 55.16,
+        "菰野町": 60.04
       }
     },
     {
-      "electionId": "COUNCIL-2014-11",
-      "electionType": "local",
-      "electionName": "桑名市議会議員選挙",
-      "year": "2014",
-      "electionDate": "2014-11-16",
-      "eligibleVoters": 111902,
-      "voters": 54895,
-      "turnout": 49.06,
-      "districtTurnout": 49.06,
+      "electionId": "HR-2017-10",
+      "electionType": "general",
+      "electionName": "第48回衆議院議員総選挙",
+      "year": "2017",
+      "electionDate": "2017-10-22",
+      "eligibleVoters": 414000,
+      "voters": 231300,
+      "turnout": 55.87,
+      "districtTurnout": 55.87,
       "municipalities": {
-        "桑名市": 49.06
+        "いなべ市": 61.48,
+        "四日市市": 53.86,
+        "川越町": 54.71,
+        "朝日町": 65.17,
+        "木曽岬町": 60.93,
+        "東員町": 61.79,
+        "桑名市": 54.21,
+        "菰野町": 60.02
       }
     }
   ],
-  "lastUpdated": "2026-09-21T02:15:00+09:00"
+  "lastUpdated": "2026-10-17T12:40:00+09:00"
 }

@@ -200,10 +200,42 @@ test('8. Universal 原則遵守: active/ 配下に地区固有ハードコード
     assert.ok(!content.includes('OKAYAMA-'), '地区IDが active/ にハードコードされていないこと');
   }
 
-  // address_master.csv の確認 (337件維持)
+  // address_master.csv と municipality_master.csv の動的整合性検証 (Universal Invariant)
   const masterCsv = fs.readFileSync(path.join(rootDir, 'data/address_master.csv'), 'utf8');
-  const lines = masterCsv.trim().split('\n');
-  assert.equal(lines.length, 338, 'マスターCSVはヘッダー含め338行(337レコード)を維持していること');
+  const addressLines = masterCsv.trim().split('\n').filter(Boolean);
+  const dataRows = addressLines.slice(1);
+  assert.ok(dataRows.length > 0, 'マスターCSVに有効なデータ行が存在すること');
+
+  // municipality_master.csv から期待総件数および有効自治体集合を動的導出
+  const muniCsv = fs.readFileSync(path.join(rootDir, 'data/municipality_master.csv'), 'utf8');
+  const muniLines = muniCsv.trim().split('\n').filter(Boolean).slice(1);
+  const validCities = new Set();
+  const expectedTotalTowns = muniLines.reduce((sum, line) => {
+    const parts = line.split(',');
+    validCities.add(parts[0].trim());
+    return sum + (parseInt(parts[2], 10) || 0);
+  }, 0);
+
+  assert.equal(
+    dataRows.length,
+    expectedTotalTowns,
+    'address_master.csv の行数は municipality_master.csv の total_towns 合計と完全一致すること'
+  );
+
+  // Universal Invariants: rowId 1..N 連続性・重複ゼロ・自治体集合整合検証
+  const rowIds = [];
+  for (let i = 0; i < dataRows.length; i++) {
+    const cols = dataRows[i].split(',');
+    const id = parseInt(cols[0], 10);
+    const cityName = cols[1]?.trim();
+    rowIds.push(id);
+    assert.ok(validCities.has(cityName), `行 ${i + 2} の自治体名 "${cityName}" が municipality_master.csv に定義されていること`);
+  }
+  const uniqueRowIds = new Set(rowIds);
+  assert.equal(uniqueRowIds.size, dataRows.length, 'rowId に重複が存在しないこと');
+  for (let i = 1; i <= dataRows.length; i++) {
+    assert.ok(uniqueRowIds.has(i), `rowId 連番に欠損がないこと (${i})`);
+  }
 });
 
 // ----------------------------------------------------------------------------

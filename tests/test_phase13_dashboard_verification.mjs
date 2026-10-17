@@ -10,7 +10,7 @@
  * 4. MAP pin 差分更新（不変時マーカー再生成スキップ、ズーム・中心・選択状態維持）
  * 5. Phase 11 活動状態マシンとの完全同期（completedAt必須、月内ロック、未完了翌日再開、月跨ぎ実績判定）
  * 6. 個人ランキング集計の整合性（completedAt + groupKey + count>0）
- * 7. Universal 原則 & GAP-13-01 是正確認（初期HTML「--」、テストデータKUWANA 337件の動的ロード）
+ * 7. Universal 原則 & GAP-13-01 是正確認（初期HTML「--」、テストデータの動的整合性ロード）
  * 8. スコープ除外の整合性（stocks/requests/mail/mobile/bulletinの温存と保証除外）
  * を機械判定により厳密に実証する。
  */
@@ -166,9 +166,22 @@ test('7. Universal 原則 & GAP-13-01 是正: 地区IDハードコードがな�
   );
   assert.ok(!managerHtml.includes('>104</span>'), '初期HTMLに 104 が存在しないこと');
 
-  // 現在のテストデータ (KUWANA) が 337 件であることの検証
-  const lines = masterCsv.trim().split('\n');
-  assert.equal(lines.length - 1, 337, '現在のテストデータは桑名市337件であること');
+  // address_master.csv と municipality_master.csv の動的整合性検証 (Universal Invariant)
+  const muniCsvPath = path.join(rootDir, 'data/municipality_master.csv');
+  const muniCsv = fs.readFileSync(muniCsvPath, 'utf8');
+  const muniLines = muniCsv.trim().split('\n').filter(Boolean).slice(1);
+  const expectedTotalTowns = muniLines.reduce((sum, line) => {
+    const parts = line.split(',');
+    return sum + (parseInt(parts[2], 10) || 0);
+  }, 0);
+
+  const addressDataRows = masterCsv.trim().split('\n').filter(Boolean).slice(1);
+  assert.ok(addressDataRows.length > 0, 'マスターCSVに有効なデータ行が存在すること');
+  assert.equal(
+    addressDataRows.length,
+    expectedTotalTowns,
+    'address_master.csv のデータ行数は municipality_master.csv の total_towns 合計と完全一致すること'
+  );
 });
 
 // ----------------------------------------------------------------------------
