@@ -1,12 +1,7 @@
 {
-  "mission": "MIE-03 Master Triad Assembly & Atomic Data Cutover",
+  "mission": "MIE-03 Election History Latest 3-Term Rectification",
   "files": [
     ".agents/current-scope.json",
-    "data/address_master.csv",
-    "data/boundaries.geojson",
-    "data/municipality_master.csv",
-    "data/election_history.json",
-    "tests/test_phase11_activity_state_machine.mjs",
-    "tests/test_phase13_dashboard_verification.mjs"
+    "data/election_history.json"
   ]
 }
