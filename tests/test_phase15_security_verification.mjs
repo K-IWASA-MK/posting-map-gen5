@@ -46,13 +46,13 @@ test('2. Authorization: 操作主体IdentityのBackend強制解決、staffId偽�
 });
 
 // ─── 3. Tenant Isolation 検証 ──────────────────────────────────────
-test('3. Tenant Isolation: DISTRICT_REGISTRY動的解決、SYSTEM_INFO地区コード照合、越境アクセス完全遮断', () => {
+test('3. Tenant Isolation: 1地区専用Spreadsheet解決、SYSTEM_INFO地区コード照合、越境アクセス完全遮断', () => {
   const adapterPath = path.join(rootDir, 'active/infrastructure/spreadsheet/spreadsheet_adapter.js');
   const adapter = fs.readFileSync(adapterPath, 'utf8');
 
-  // DISTRICT_REGISTRY ルーティング
-  assert.ok(adapter.includes('props.getProperty("DISTRICT_REGISTRY")'), 'spreadsheet_adapter.js must check DISTRICT_REGISTRY');
-  assert.ok(adapter.includes('districtId is required for multi-district routing. No fallback allowed.'), 'No fallback allowed when registry active');
+  // 1地区専用 GAS スプレッドシート解決 (getActiveSpreadsheet / TARGET_SPREADSHEET_ID)
+  assert.ok(adapter.includes('SpreadsheetApp.getActiveSpreadsheet()') || adapter.includes('TARGET_SPREADSHEET_ID'), 'spreadsheet_adapter.js must resolve single-district spreadsheet');
+  assert.ok(!adapter.includes('props.getProperty("DISTRICT_REGISTRY")'), 'spreadsheet_adapter.js must not depend on parent-GAS DISTRICT_REGISTRY');
 
   // verifyIntegrityGuard
   assert.ok(adapter.includes('verifyIntegrityGuard(ss, districtId)'), 'spreadsheet_adapter.js must verify integrity guard');
@@ -295,9 +295,7 @@ test('12. Wave S2 Security Counterexamples: GET credential boundary, syncSystemI
   const validProvisioningHash = crypto.createHash('sha256').update(validProvisioningToken).digest('hex');
 
   const mockProps = {
-    DISTRICT_REGISTRY: JSON.stringify({
-      KUWANA: { name: "桑名地区", enabled: true }
-    }),
+    TARGET_SPREADSHEET_ID: "ss-kuwana-id",
     PROVISIONING_TOKEN_HASH: validProvisioningHash,
     DISTRICT_ID: "KUWANA"
   };

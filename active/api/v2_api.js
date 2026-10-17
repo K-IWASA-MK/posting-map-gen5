@@ -66,44 +66,15 @@ function handleGetMapsApiKey(districtId, sessionToken) {
   const props = (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties)
     ? PropertiesService.getScriptProperties()
     : null;
-  const hasRegistry = props && !!props.getProperty('DISTRICT_REGISTRY');
 
   // 1. cleanDistrictId が指定されている場合の検証
   if (cleanDistrictId) {
-    // Gate 1: DISTRICT_REGISTRY による地区存在確認
-    let isRegistered = false;
-    if (hasRegistry) {
-      try {
-        const regRaw = props.getProperty('DISTRICT_REGISTRY') || '{}';
-        const registry = JSON.parse(regRaw);
-        const foundKey = Object.keys(registry).find(k => k.trim().toUpperCase() === cleanDistrictId);
-        if (foundKey) {
-          const entry = registry[foundKey];
-          isRegistered = (typeof entry === 'object' && entry !== null) ? entry.enabled !== false : !!entry;
-        }
-      } catch (eReg) {
-        console.error('[handleGetMapsApiKey] Failed to parse DISTRICT_REGISTRY:', eReg);
-      }
-    } else {
-      // DISTRICT_REGISTRY 未設定時の動的確認
-      const currentDistrict = props ? (props.getProperty('DISTRICT_ID') || '').trim().toUpperCase() : '';
-      const hasDedicatedKey = props ? !!props.getProperty('GOOGLE_MAPS_API_KEY_' + cleanDistrictId) : false;
-      if (cleanDistrictId === 'UNKNOWN' || cleanDistrictId.startsWith('UNKNOWN')) {
-        isRegistered = false;
-      } else if (currentDistrict && currentDistrict === cleanDistrictId) {
-        isRegistered = true;
-      } else if (hasDedicatedKey) {
-        isRegistered = true;
-      } else {
-        isRegistered = (cleanDistrictId !== 'UNKNOWN' && !cleanDistrictId.startsWith('UNKNOWN'));
-      }
-    }
-
-    if (!isRegistered) {
+    // Gate 1: 明示的未知地区IDの遮断
+    if (cleanDistrictId === 'UNKNOWN' || cleanDistrictId.startsWith('UNKNOWN')) {
       return {
         success: false,
         code: "DISTRICT_NOT_FOUND",
-        message: `District '${cleanDistrictId}' is not registered in DISTRICT_REGISTRY.`
+        message: `District '${cleanDistrictId}' is not valid for this district environment.`
       };
     }
 
@@ -120,7 +91,7 @@ function handleGetMapsApiKey(districtId, sessionToken) {
     }
 
     // Gate 3: Integrity Guard (DISTRICT_MISMATCH 照合)
-    if (hasRegistry && typeof SpreadsheetResolver !== 'undefined' && SpreadsheetResolver.getInstance) {
+    if (typeof SpreadsheetResolver !== 'undefined' && SpreadsheetResolver.getInstance) {
       try {
         SpreadsheetResolver.getInstance().getSpreadsheet(cleanDistrictId);
       } catch (eResolver) {
@@ -132,18 +103,11 @@ function handleGetMapsApiKey(districtId, sessionToken) {
             message: eResolver.message
           };
         }
-        if (errStr.includes("not found in DISTRICT_REGISTRY")) {
-          return {
-            success: false,
-            code: "DISTRICT_NOT_FOUND",
-            message: `District '${cleanDistrictId}' is not registered in DISTRICT_REGISTRY.`
-          };
-        }
       }
     }
 
     // Gate 4: Contract Gate (契約状態確認)
-    if (hasRegistry && typeof SystemInfoService !== 'undefined' && SystemInfoService.getInstance) {
+    if (typeof SystemInfoService !== 'undefined' && SystemInfoService.getInstance) {
       try {
         const contract = SystemInfoService.getInstance().getContractStatus(null, new Date(), cleanDistrictId);
         if (contract && (contract.isExpired || contract.code === 'CONTRACT_EXPIRED')) {
@@ -190,968 +154,9 @@ function handleGetMapsApiKey(districtId, sessionToken) {
   };
 }
 
-/**
- * 既存地区のSpreadsheet世代切替専用ハンドラ (switchDistrictSpreadsheet)
- * DISTRICT_REGISTRY[districtId].spreadsheetId のみを OLD_ID -> NEW_ID へ安全に切り替える。
- * 他Property (enabled, storageFolderId, name 等) および他Script Properties は完全不変。
- */
-function handleSwitchDistrictSpreadsheet(postData, params) {
-  // 1. Provisioning Token検証
-  const token = (postData && (postData.provisioningToken || (postData.options && postData.options.provisioningToken)))
-             || (params && (params.provisioningToken || (params.options && params.options.provisioningToken)));
-  const tokenCheck = verifyProvisioningToken(token);
-  if (!tokenCheck.success) {
-    return tokenCheck;
-  }
 
-  // 2. districtId / expectedCurrentSpreadsheetId / targetSpreadsheetId 必須検証
-  const targetDistrictId = String((postData && postData.districtId) || (params && params.districtId) || "").trim();
-  const expectedCurrentId = String((postData && postData.expectedCurrentSpreadsheetId) || (params && params.expectedCurrentSpreadsheetId) || "").trim();
-  const targetNewId = String((postData && postData.targetSpreadsheetId) || (params && params.targetSpreadsheetId) || "").trim();
 
-  if (!targetDistrictId || !expectedCurrentId || !targetNewId) {
-    return {
-      success: false,
-      code: "INVALID_ARGUMENT",
-      message: "districtId, expectedCurrentSpreadsheetId, and targetSpreadsheetId are all required."
-    };
-  }
 
-  // 3. DISTRICT_REGISTRY取得
-  const props = (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties)
-    ? PropertiesService.getScriptProperties()
-    : null;
-  const regRaw = props ? props.getProperty("DISTRICT_REGISTRY") : null;
-
-  // 4. 未設定・空文字・JSON破損 → Fail-Closed、mutation 0
-  if (!regRaw || typeof regRaw !== 'string' || !regRaw.trim()) {
-    return {
-      success: false,
-      code: "CORRUPTED_REGISTRY",
-      message: "DISTRICT_REGISTRY is not configured or empty."
-    };
-  }
-
-  let registry;
-  try {
-    registry = JSON.parse(regRaw);
-    if (!registry || typeof registry !== 'object' || Array.isArray(registry)) {
-      return {
-        success: false,
-        code: "CORRUPTED_REGISTRY",
-        message: "DISTRICT_REGISTRY is not a valid JSON object."
-      };
-    }
-  } catch (e) {
-    return {
-      success: false,
-      code: "CORRUPTED_REGISTRY",
-      message: "Failed to parse DISTRICT_REGISTRY JSON: " + e.message
-    };
-  }
-
-  // 5. 対象地区が存在しない → Fail-Closed
-  const districtKey = Object.keys(registry).find(k => k.trim().toUpperCase() === targetDistrictId.toUpperCase());
-  if (!districtKey || !registry[districtKey]) {
-    return {
-      success: false,
-      code: "DISTRICT_NOT_FOUND",
-      message: `District "${targetDistrictId}" not found in DISTRICT_REGISTRY.`
-    };
-  }
-
-  const districtEntry = registry[districtKey];
-  const currentSpreadsheetId = String(
-    (typeof districtEntry === 'object' && districtEntry !== null)
-      ? districtEntry.spreadsheetId
-      : districtEntry
-  ).trim();
-
-  // 6. 現在のspreadsheetId !== expectedCurrentSpreadsheetId → STALE_WRITEとしてFail-Closed、mutation 0
-  if (currentSpreadsheetId !== expectedCurrentId) {
-    return {
-      success: false,
-      code: "STALE_WRITE",
-      message: `Current spreadsheetId "${currentSpreadsheetId}" does not match expected "${expectedCurrentId}". Stale write prevented.`
-    };
-  }
-
-  // 7. SpreadsheetApp.openById(targetSpreadsheetId) で新DB実在確認
-  let newSS;
-  try {
-    if (typeof SpreadsheetApp === 'undefined' || !SpreadsheetApp.openById) {
-      throw new Error("SpreadsheetApp.openById unavailable");
-    }
-    newSS = SpreadsheetApp.openById(targetNewId);
-    if (!newSS) {
-      return {
-        success: false,
-        code: "RESOURCE_NOT_FOUND",
-        message: `Target spreadsheet "${targetNewId}" could not be opened.`
-      };
-    }
-  } catch (eSS) {
-    return {
-      success: false,
-      code: "RESOURCE_NOT_FOUND",
-      message: `Target spreadsheet "${targetNewId}" does not exist or cannot be accessed: ${eSS.message}`
-    };
-  }
-
-  // 8. 新DBの SYSTEM_INFO["地区コード"] === districtId を直接検証
-  try {
-    const sysSheet = newSS.getSheetByName("SYSTEM_INFO");
-    if (!sysSheet) {
-      return {
-        success: false,
-        code: "DISTRICT_MISMATCH",
-        message: `Target spreadsheet "${targetNewId}" lacks SYSTEM_INFO sheet.`
-      };
-    }
-    const lr = sysSheet.getLastRow ? sysSheet.getLastRow() : 0;
-    if (lr < 2) {
-      return {
-        success: false,
-        code: "DISTRICT_MISMATCH",
-        message: `SYSTEM_INFO in target spreadsheet "${targetNewId}" has no data rows.`
-      };
-    }
-    let foundCode = "";
-    const data = sysSheet.getRange(1, 1, lr, 2).getValues();
-    for (let r = 0; r < data.length; r++) {
-      if (String(data[r][0] || '').trim() === "地区コード") {
-        foundCode = String(data[r][1] || '').trim().toUpperCase();
-        break;
-      }
-    }
-    if (!foundCode || foundCode !== targetDistrictId.toUpperCase()) {
-      return {
-        success: false,
-        code: "DISTRICT_MISMATCH",
-        message: `Target spreadsheet SYSTEM_INFO district code "${foundCode}" does not match "${targetDistrictId}".`
-      };
-    }
-  } catch (eSys) {
-    return {
-      success: false,
-      code: "DISTRICT_MISMATCH",
-      message: `Failed to verify target spreadsheet SYSTEM_INFO: ${eSys.message}`
-    };
-  }
-
-  // 9. Registryを deep copy
-  const newRegistry = JSON.parse(JSON.stringify(registry));
-
-  // 10. 対象地区の spreadsheetId だけ変更
-  if (typeof newRegistry[districtKey] === 'object' && newRegistry[districtKey] !== null) {
-    newRegistry[districtKey].spreadsheetId = targetNewId;
-  } else {
-    newRegistry[districtKey] = targetNewId;
-  }
-
-  // 11. props.setProperty("DISTRICT_REGISTRY", JSON.stringify(newRegistry)) を1回だけ実行
-  try {
-    props.setProperty("DISTRICT_REGISTRY", JSON.stringify(newRegistry));
-  } catch (eSet) {
-    return {
-      success: false,
-      code: "REGISTRY_UPDATE_FAILED",
-      message: "Failed to persist updated DISTRICT_REGISTRY: " + eSet.message
-    };
-  }
-
-  // 12. READ BACK して新ID一致を検証
-  try {
-    const readBackRaw = props.getProperty("DISTRICT_REGISTRY");
-    const readBackRegistry = JSON.parse(readBackRaw);
-    const readBackEntry = readBackRegistry[districtKey];
-    const readBackId = String(
-      (typeof readBackEntry === 'object' && readBackEntry !== null)
-        ? readBackEntry.spreadsheetId
-        : readBackEntry
-    ).trim();
-    if (readBackId !== targetNewId) {
-      return {
-        success: false,
-        code: "REGISTRY_UPDATE_FAILED",
-        message: `Read-back verification failed: expected "${targetNewId}", got "${readBackId}".`
-      };
-    }
-  } catch (eRb) {
-    return {
-      success: false,
-      code: "REGISTRY_UPDATE_FAILED",
-      message: "Read-back verification error: " + eRb.message
-    };
-  }
-
-  // 13. Resolver cache を clear
-  try {
-    if (typeof SpreadsheetResolver !== 'undefined' && SpreadsheetResolver.getInstance) {
-      SpreadsheetResolver.getInstance().clearCache();
-    }
-  } catch (eCache) {
-    console.warn("[switchDistrictSpreadsheet] Resolver clearCache warning:", eCache);
-  }
-
-  // 14. 成功結果を返す
-  return {
-    success: true,
-    districtId: targetDistrictId,
-    previousSpreadsheetId: currentSpreadsheetId,
-    newSpreadsheetId: targetNewId,
-    message: `District "${targetDistrictId}" spreadsheet switched successfully to "${targetNewId}".`
-  };
-}
-
-/**
- * ACTIVE地区のDrive Binding安全是正ハンドラ (repairDistrictDriveBinding)
- * - 認可: Provisioning Token 必須 (verifyProvisioningToken)
- * - 対象地区: 既存 DISTRICT_REGISTRY に存在必須（新地区作成不可）
- * - BRANCH_ROOT_FOLDER_ID:
- *     未設定時: target Folder実在確認、caller token認証後に初期設定
- *     設定済・同値: idempotent success (no-op)
- *     設定済・異値: BRANCH_ROOT_MISMATCH で Fail-Closed (mutation 0)
- * - REGISTRY STORAGE CAS:
- *     current storageFolderId === expectedCurrentStorageFolderId (STALE_WRITE if mismatch)
- *     expectedRegistryRaw / expectedRegistryRawHash CAS (STALE_WRITE if mismatch)
- *     spreadsheetId, name, enabled (true stays true) その他field完全維持
- *     他地区 entry 完全不変 (0 diff)
- * - TARGET STORAGE VALIDATION:
- *     Server側導出: branchRootFolderId -> districtFolder -> canonical storage folder
- *     targetStorageFolderId === canonicalStorageFolderId (STORAGE_FOLDER_MISMATCH if mismatch)
- * - STORAGE_PARENT_ID:
- *     current STORAGE_PARENT_ID === expectedCurrentStorageFolderId (STALE_WRITE if mismatch)
- *     canonical targetStorageFolderId へ同期
- * - MUTATION ALLOWLIST:
- *     最大3箇所のみ (BRANCH_ROOT_FOLDER_ID, DISTRICT_REGISTRY[district].storageFolderId, STORAGE_PARENT_ID)
- * - READ-BACK:
- *     3箇所を再取得して期待値・不変性を完全機械検証
- * - FAILURE SEMANTICS:
- *     mutation前に全Validation/CAS完了。途中失敗時は変更済みkeyのみ局所rollback。
- */
-function handleRepairDistrictDriveBinding(postData, params) {
-  // 1. Provisioning Token検証
-  const token = (postData && (postData.provisioningToken || (postData.options && postData.options.provisioningToken)))
-             || (params && (params.provisioningToken || (params.options && params.options.provisioningToken)));
-  const tokenCheck = verifyProvisioningToken(token);
-  if (!tokenCheck.success) {
-    return tokenCheck;
-  }
-
-  // 2. 必須パラメータ検証
-  const targetDistrictId = String((postData && postData.districtId) || (params && params.districtId) || "").trim();
-  const cleanDistrictId = targetDistrictId.toUpperCase();
-  const branchRootFolderId = String((postData && postData.branchRootFolderId) || (params && params.branchRootFolderId) || "").trim();
-  const expectedCurrentStorageId = String((postData && postData.expectedCurrentStorageFolderId) || (params && params.expectedCurrentStorageFolderId) || "").trim();
-  const targetStorageId = String((postData && postData.targetStorageFolderId) || (params && params.targetStorageFolderId) || "").trim();
-
-  if (!cleanDistrictId || !branchRootFolderId || !expectedCurrentStorageId || !targetStorageId) {
-    return {
-      success: false,
-      code: "INVALID_ARGUMENT",
-      message: "districtId, branchRootFolderId, expectedCurrentStorageFolderId, and targetStorageFolderId are all required."
-    };
-  }
-
-  // 3. DISTRICT_REGISTRY取得・構文検証
-  const props = (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties)
-    ? PropertiesService.getScriptProperties()
-    : null;
-  const regRaw = props ? props.getProperty("DISTRICT_REGISTRY") : null;
-
-  if (!regRaw || typeof regRaw !== 'string' || !regRaw.trim()) {
-    return {
-      success: false,
-      code: "CORRUPTED_REGISTRY",
-      message: "DISTRICT_REGISTRY is not configured or empty."
-    };
-  }
-
-  let registry;
-  try {
-    registry = JSON.parse(regRaw);
-    if (!registry || typeof registry !== 'object' || Array.isArray(registry)) {
-      return {
-        success: false,
-        code: "CORRUPTED_REGISTRY",
-        message: "DISTRICT_REGISTRY is not a valid JSON object."
-      };
-    }
-  } catch (e) {
-    return {
-      success: false,
-      code: "CORRUPTED_REGISTRY",
-      message: "Failed to parse DISTRICT_REGISTRY JSON: " + e.message
-    };
-  }
-
-  // 4. 対象地区が既存Registryに存在すること（新地区作成不可）
-  const districtKey = Object.keys(registry).find(k => k.trim().toUpperCase() === cleanDistrictId);
-  if (!districtKey || !registry[districtKey]) {
-    return {
-      success: false,
-      code: "DISTRICT_NOT_FOUND",
-      message: `District "${targetDistrictId}" not found in DISTRICT_REGISTRY. repairDistrictDriveBinding cannot be used for new district creation.`
-    };
-  }
-
-  const currentEntry = registry[districtKey];
-  const currentStorageFolderId = String(
-    (typeof currentEntry === 'object' && currentEntry !== null)
-      ? currentEntry.storageFolderId
-      : ""
-  ).trim();
-
-  // 5. REGISTRY CAS検証
-  // 5a. expectedRegistryRawHash / expectedRegistryRaw 検証（指定時）
-  const expHash = String((postData && postData.expectedRegistryRawHash) || (params && params.expectedRegistryRawHash) || "").trim().toLowerCase();
-  if (expHash) {
-    const actualHash = computeSha256(regRaw).toLowerCase();
-    if (actualHash !== expHash) {
-      return {
-        success: false,
-        code: "STALE_WRITE",
-        message: `DISTRICT_REGISTRY hash mismatch (expected: "${expHash}", actual: "${actualHash}"). Stale write prevented.`
-      };
-    }
-  }
-  const expRaw = (postData && postData.expectedRegistryRaw) || (params && params.expectedRegistryRaw);
-  if (typeof expRaw === 'string' && expRaw.trim()) {
-    if (regRaw.trim() !== expRaw.trim()) {
-      return {
-        success: false,
-        code: "STALE_WRITE",
-        message: "DISTRICT_REGISTRY raw mismatch. Stale write prevented."
-      };
-    }
-  }
-
-  // 5b. current storageFolderId === expectedCurrentStorageFolderId
-  if (currentStorageFolderId !== expectedCurrentStorageId) {
-    return {
-      success: false,
-      code: "STALE_WRITE",
-      message: `Current storageFolderId "${currentStorageFolderId}" does not match expected "${expectedCurrentStorageId}". Stale write prevented.`
-    };
-  }
-
-  // 6. BRANCH_ROOT_FOLDER_ID 検証 & Idempotency
-  const currentBranchRootId = (props.getProperty("BRANCH_ROOT_FOLDER_ID") || "").trim();
-  if (currentBranchRootId) {
-    if (currentBranchRootId !== branchRootFolderId) {
-      return {
-        success: false,
-        code: "BRANCH_ROOT_MISMATCH",
-        message: `Existing BRANCH_ROOT_FOLDER_ID "${currentBranchRootId}" does not match provided "${branchRootFolderId}". Root cannot be overwritten.`
-      };
-    }
-  }
-
-  // 7. target Folder 実在確認 & Server-Side Deterministic Resolution
-  let branchFolder;
-  try {
-    if (typeof DriveApp === 'undefined' || !DriveApp.getFolderById) {
-      throw new Error("DriveApp unavailable");
-    }
-    branchFolder = DriveApp.getFolderById(branchRootFolderId);
-    if (!branchFolder) {
-      return {
-        success: false,
-        code: "RESOURCE_NOT_FOUND",
-        message: `Branch root folder "${branchRootFolderId}" not found.`
-      };
-    }
-  } catch (eBranch) {
-    return {
-      success: false,
-      code: "RESOURCE_NOT_FOUND",
-      message: `Branch root folder "${branchRootFolderId}" cannot be opened: ${eBranch.message}`
-    };
-  }
-
-  // 03_BRANCH/{districtId} 探索
-  const distFolders = branchFolder.getFoldersByName(cleanDistrictId);
-  let distFolder = null;
-  let distCount = 0;
-  while (distFolders.hasNext()) {
-    distFolder = distFolders.next();
-    distCount++;
-  }
-  if (distCount === 0 || !distFolder) {
-    return {
-      success: false,
-      code: "RESOURCE_NOT_FOUND",
-      message: `District folder "${cleanDistrictId}" not found under branch root "${branchRootFolderId}".`
-    };
-  }
-  if (distCount > 1) {
-    return {
-      success: false,
-      code: "AMBIGUOUS_DISTRICT_FOLDER",
-      message: `Multiple folders named "${cleanDistrictId}" found under branch root.`
-    };
-  }
-
-  // {districtId} 支部_STORAGE 探索
-  const storageName = `${cleanDistrictId} 支部_STORAGE`;
-  const storageFolders = distFolder.getFoldersByName(storageName);
-  let storageFolder = null;
-  let sCount = 0;
-  while (storageFolders.hasNext()) {
-    storageFolder = storageFolders.next();
-    sCount++;
-  }
-  if (sCount === 0 || !storageFolder) {
-    return {
-      success: false,
-      code: "RESOURCE_NOT_FOUND",
-      message: `Storage folder "${storageName}" not found under district folder.`
-    };
-  }
-  if (sCount > 1) {
-    return {
-      success: false,
-      code: "AMBIGUOUS_STORAGE_FOLDER",
-      message: `Multiple folders named "${storageName}" found under district folder.`
-    };
-  }
-
-  const canonicalStorageFolderId = storageFolder.getId();
-
-  // targetStorageFolderId === canonicalStorageFolderId Assertion
-  if (targetStorageId !== canonicalStorageFolderId) {
-    return {
-      success: false,
-      code: "STORAGE_FOLDER_MISMATCH",
-      message: `Specified targetStorageFolderId "${targetStorageId}" does not match canonical resolved storage folder "${canonicalStorageFolderId}".`
-    };
-  }
-
-  // 8. STORAGE_PARENT_ID CAS検証
-  const currentStorageParentId = (props.getProperty("STORAGE_PARENT_ID") || "").trim();
-  if (currentStorageParentId && currentStorageParentId !== expectedCurrentStorageId) {
-    return {
-      success: false,
-      code: "STALE_WRITE",
-      message: `Current STORAGE_PARENT_ID "${currentStorageParentId}" does not match expected "${expectedCurrentStorageId}". Stale write prevented.`
-    };
-  }
-
-  // 9. Atomic Mutations (Allowlist: 最大3箇所のみ)
-  const originalBranchRoot = currentBranchRootId;
-  const originalRegRaw = regRaw;
-  const originalStorageParent = currentStorageParentId;
-
-  let branchRootMutated = false;
-  let registryMutated = false;
-  let storageParentMutated = false;
-
-  try {
-    // 1) BRANCH_ROOT_FOLDER_ID (未設定時のみ初期シード)
-    if (!currentBranchRootId) {
-      props.setProperty("BRANCH_ROOT_FOLDER_ID", branchRootFolderId);
-      branchRootMutated = true;
-    }
-
-    // 2) DISTRICT_REGISTRY (対象district.storageFolderId のみ変更、他全field・他地区0 diff)
-    const newRegistry = JSON.parse(JSON.stringify(registry));
-    if (typeof newRegistry[districtKey] === 'object' && newRegistry[districtKey] !== null) {
-      newRegistry[districtKey].storageFolderId = targetStorageId;
-    } else {
-      newRegistry[districtKey] = {
-        spreadsheetId: currentEntry,
-        storageFolderId: targetStorageId,
-        name: targetDistrictId,
-        enabled: true
-      };
-    }
-    props.setProperty("DISTRICT_REGISTRY", JSON.stringify(newRegistry));
-    registryMutated = true;
-
-    // 3) STORAGE_PARENT_ID
-    props.setProperty("STORAGE_PARENT_ID", targetStorageId);
-    storageParentMutated = true;
-
-    // 10. READ-BACK 機械検証
-    const rbBranchRoot = (props.getProperty("BRANCH_ROOT_FOLDER_ID") || "").trim();
-    const rbRegRaw = props.getProperty("DISTRICT_REGISTRY");
-    const rbStorageParent = (props.getProperty("STORAGE_PARENT_ID") || "").trim();
-
-    if (rbBranchRoot !== branchRootFolderId) {
-      throw new Error(`Read-back mismatch for BRANCH_ROOT_FOLDER_ID: expected "${branchRootFolderId}", got "${rbBranchRoot}"`);
-    }
-    if (rbStorageParent !== targetStorageId) {
-      throw new Error(`Read-back mismatch for STORAGE_PARENT_ID: expected "${targetStorageId}", got "${rbStorageParent}"`);
-    }
-
-    const rbRegistry = JSON.parse(rbRegRaw);
-    const rbEntry = rbRegistry[districtKey];
-    if (!rbEntry || rbEntry.storageFolderId !== targetStorageId) {
-      throw new Error(`Read-back mismatch for DISTRICT_REGISTRY[${districtKey}].storageFolderId`);
-    }
-    if (typeof currentEntry === 'object' && currentEntry !== null) {
-      if (rbEntry.spreadsheetId !== currentEntry.spreadsheetId) {
-        throw new Error(`Read-back violation: spreadsheetId was mutated!`);
-      }
-      if (rbEntry.enabled !== currentEntry.enabled) {
-        throw new Error(`Read-back violation: enabled status was mutated!`);
-      }
-      if (rbEntry.name !== currentEntry.name) {
-        throw new Error(`Read-back violation: name was mutated!`);
-      }
-    }
-
-    // 他地区 0 diff 確認
-    for (const [k, v] of Object.entries(registry)) {
-      if (k === districtKey) continue;
-      if (JSON.stringify(rbRegistry[k]) !== JSON.stringify(v)) {
-        throw new Error(`Read-back violation: other district "${k}" was mutated!`);
-      }
-    }
-    for (const k of Object.keys(rbRegistry)) {
-      if (k === districtKey) continue;
-      if (!registry[k]) {
-        throw new Error(`Read-back violation: unexpected district "${k}" appeared in registry!`);
-      }
-    }
-
-    // 11. キャッシュクリア
-    if (typeof CacheService !== 'undefined' && CacheService.getScriptCache()) {
-      CacheService.getScriptCache().remove("CONFIG_STORE");
-    }
-    if (typeof SpreadsheetResolver !== 'undefined' && SpreadsheetResolver.getInstance) {
-      SpreadsheetResolver.getInstance().clearCache();
-    }
-
-    // 12. 成功返却
-    return {
-      success: true,
-      message: `District "${targetDistrictId}" drive binding repaired successfully.`,
-      districtId: cleanDistrictId,
-      branchRootFolderId: rbBranchRoot,
-      storageFolderId: targetStorageId,
-      storageParentId: rbStorageParent,
-      districtRegistryUpdated: true
-    };
-  } catch (errMutation) {
-    // 途中失敗時の局所ロールバック
-    try {
-      if (storageParentMutated) {
-        if (originalStorageParent) props.setProperty("STORAGE_PARENT_ID", originalStorageParent);
-        else props.deleteProperty("STORAGE_PARENT_ID");
-      }
-      if (registryMutated) {
-        props.setProperty("DISTRICT_REGISTRY", originalRegRaw);
-      }
-      if (branchRootMutated) {
-        if (originalBranchRoot) props.setProperty("BRANCH_ROOT_FOLDER_ID", originalBranchRoot);
-        else props.deleteProperty("BRANCH_ROOT_FOLDER_ID");
-      }
-    } catch (eRollback) {
-      console.error("[repairDistrictDriveBinding] Critical rollback error:", eRollback);
-    }
-    return {
-      success: false,
-      code: "MUTATION_FAILED",
-      message: errMutation.message
-    };
-  }
-}
-
-/**
- * ACTIVE地区の写真ファイル群安全移動ハンドラ (migrateDistrictPhotos)
- * 既存写真ファイル群を現在の親フォルダから対象districtのCanonical Storageへ安全に物理移動する
- *
- * 認可: PROVISIONING_TOKEN 必須 (verifyProvisioningToken)
- * 挙動:
- * 1. 排他ロック取得 (LockService.getScriptLock)
- * 2. verifyProvisioningToken(token) による認証
- * 3. 入力検証 (districtId, fileIds[], expectedSourceFolderId)
- *    - fileIds は重複除去 (Deduplicate)
- *    - 上限 (BATCH_SIZE_EXCEEDED: 200件)
- * 4. 対象districtのRegistry照合 & targetStorageFolderId確定 (Server Authority)
- *    - DISTRICT_REGISTRY[districtId].storageFolderId を正本とし、DriveAppで存在確認
- *    - caller指定の expectedTargetStorageFolderId は Assertion-only (不一致時は STORAGE_FOLDER_MISMATCH)
- *    - Script Properties / Registry は 0 diff (変更禁止)
- * 5. 全件事前検査 (All-Files Preflight Before Mutation):
- *    - 1件でも移動する前に fileIds 全件を検査
- *    - DriveApp.getFileById で取得可能、!isTrashed()、MIMEが image/* (jpeg, png, webp, gif等)
- *    - parent が expectedSourceFolderId または既に canonicalTargetStorageFolderId
- *    - どちらでもない場合は SOURCE_FOLDER_MISMATCH で即座に全中断 (mutation 0)
- * 6. 移動執行 (Atomic Move with Moved Ledger):
- *    - toMigrate 対象を file.moveTo(targetFolder) で順次移動
- *    - 成功ごとに movedLedger に記録
- *    - 途中エラー時は movedLedger のみを sourceFolder へロールバック (失敗時は ROLLBACK_INCOMPLETE)
- * 7. 事後Read-back検証 (Post-Move Read-Back):
- *    - 全件について parent が canonicalTargetStorageFolderId、source未含有、!isTrashed() を再確認
- * 8. 結果返却 (Secret漏洩なし)
- */
-function handleMigrateDistrictPhotos(postData, params) {
-  // 1. 排他制御
-  let lock;
-  try {
-    if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
-      lock = LockService.getScriptLock();
-      lock.waitLock(30000);
-    }
-  } catch (eLock) {
-    return {
-      success: false,
-      code: "LOCK_TIMEOUT",
-      message: "Could not acquire script lock within 30 seconds."
-    };
-  }
-
-  try {
-    // 2. Token認証 (PROVISIONING_TOKEN)
-    const token = (postData && (postData.provisioningToken || postData.token))
-               || (params && (params.provisioningToken || params.token));
-    const tokenCheck = verifyProvisioningToken(token);
-    if (!tokenCheck.success) {
-      return tokenCheck;
-    }
-
-    // 3. 入力検証
-    const targetDistrictId = String((postData && postData.districtId) || (params && params.districtId) || "").trim();
-    const cleanDistrictId = targetDistrictId.toUpperCase();
-    if (!cleanDistrictId) {
-      return {
-        success: false,
-        code: "INVALID_INPUT",
-        message: "districtId is required."
-      };
-    }
-
-    const rawFileIds = (postData && (postData.fileIds || postData.photoIds))
-                    || (params && (params.fileIds || params.photoIds));
-    if (!Array.isArray(rawFileIds) || rawFileIds.length === 0) {
-      return {
-        success: false,
-        code: "INVALID_INPUT",
-        message: "fileIds must be a non-empty array of file IDs."
-      };
-    }
-
-    // 重複除去 (Deduplicate)
-    const uniqueFileIds = Array.from(new Set(rawFileIds.map(id => String(id || '').trim()).filter(Boolean)));
-    if (uniqueFileIds.length === 0) {
-      return {
-        success: false,
-        code: "INVALID_INPUT",
-        message: "fileIds contains no valid non-empty file IDs."
-      };
-    }
-
-    // 上限チェック (安全上限: 200件)
-    const MAX_BATCH_SIZE = 200;
-    if (uniqueFileIds.length > MAX_BATCH_SIZE) {
-      return {
-        success: false,
-        code: "BATCH_SIZE_EXCEEDED",
-        message: `fileIds count (${uniqueFileIds.length}) exceeds maximum batch size of ${MAX_BATCH_SIZE}.`
-      };
-    }
-
-    const expectedSourceFolderId = String(
-      (postData && postData.expectedSourceFolderId) || (params && params.expectedSourceFolderId) || ""
-    ).trim();
-    if (!expectedSourceFolderId) {
-      return {
-        success: false,
-        code: "INVALID_INPUT",
-        message: "expectedSourceFolderId is required."
-      };
-    }
-
-    const expectedTargetStorageFolderId = String(
-      (postData && postData.expectedTargetStorageFolderId) || (params && params.expectedTargetStorageFolderId) || ""
-    ).trim();
-
-    // 4. District Safety & Target Storage Authority
-    const props = (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties)
-      ? PropertiesService.getScriptProperties()
-      : null;
-    if (!props) {
-      return {
-        success: false,
-        code: "CONFIGURATION_ERROR",
-        message: "PropertiesService is unavailable."
-      };
-    }
-
-    const regRaw = (props.getProperty("DISTRICT_REGISTRY") || "").trim();
-    if (!regRaw) {
-      return {
-        success: false,
-        code: "UNINITIALIZED_REGISTRY",
-        message: "DISTRICT_REGISTRY is not configured or empty."
-      };
-    }
-
-    let registry;
-    try {
-      registry = JSON.parse(regRaw);
-    } catch (e) {
-      return {
-        success: false,
-        code: "CORRUPTED_REGISTRY",
-        message: "Failed to parse DISTRICT_REGISTRY JSON: " + e.message
-      };
-    }
-
-    const districtKey = Object.keys(registry).find(k => k.trim().toUpperCase() === cleanDistrictId);
-    if (!districtKey || !registry[districtKey]) {
-      return {
-        success: false,
-        code: "DISTRICT_NOT_FOUND",
-        message: `District "${targetDistrictId}" not found in DISTRICT_REGISTRY.`
-      };
-    }
-
-    const currentEntry = registry[districtKey];
-    const canonicalStorageFolderId = String(
-      (typeof currentEntry === 'object' && currentEntry !== null)
-        ? currentEntry.storageFolderId
-        : ""
-    ).trim();
-
-    if (!canonicalStorageFolderId) {
-      return {
-        success: false,
-        code: "STORAGE_FOLDER_NOT_CONFIGURED",
-        message: `Canonical storageFolderId is not configured for district "${targetDistrictId}".`
-      };
-    }
-
-    // Caller 指定の expectedTargetStorageFolderId は Assertion-only
-    if (expectedTargetStorageFolderId && expectedTargetStorageFolderId !== canonicalStorageFolderId) {
-      return {
-        success: false,
-        code: "STORAGE_FOLDER_MISMATCH",
-        message: `Expected target storage folder ID "${expectedTargetStorageFolderId}" does not match canonical storage folder ID "${canonicalStorageFolderId}".`
-      };
-    }
-
-    if (expectedSourceFolderId === canonicalStorageFolderId) {
-      return {
-        success: false,
-        code: "INVALID_INPUT",
-        message: "expectedSourceFolderId cannot be identical to canonical target storage folder ID."
-      };
-    }
-
-    if (typeof DriveApp === 'undefined' || !DriveApp.getFileById || !DriveApp.getFolderById) {
-      return {
-        success: false,
-        code: "SERVICE_UNAVAILABLE",
-        message: "DriveApp service is not available."
-      };
-    }
-
-    let sourceFolder;
-    try {
-      sourceFolder = DriveApp.getFolderById(expectedSourceFolderId);
-      if (!sourceFolder) throw new Error("Folder null");
-    } catch (eSrc) {
-      return {
-        success: false,
-        code: "RESOURCE_NOT_FOUND",
-        message: `Source folder "${expectedSourceFolderId}" cannot be opened: ${eSrc.message}`
-      };
-    }
-
-    let targetFolder;
-    try {
-      targetFolder = DriveApp.getFolderById(canonicalStorageFolderId);
-      if (!targetFolder) throw new Error("Folder null");
-    } catch (eTgt) {
-      return {
-        success: false,
-        code: "RESOURCE_NOT_FOUND",
-        message: `Target storage folder "${canonicalStorageFolderId}" cannot be opened: ${eTgt.message}`
-      };
-    }
-
-    // 5. All-Files Preflight Before Mutation (全件事前検査)
-    const alreadyMigrated = [];
-    const toMigrate = [];
-
-    for (const fid of uniqueFileIds) {
-      let file;
-      try {
-        file = DriveApp.getFileById(fid);
-        if (!file) throw new Error("File null");
-      } catch (eFile) {
-        return {
-          success: false,
-          code: "RESOURCE_NOT_FOUND",
-          message: `Preflight failed: file "${fid}" cannot be opened: ${eFile.message}`
-        };
-      }
-
-      if (file.isTrashed && file.isTrashed()) {
-        return {
-          success: false,
-          code: "FILE_TRASHED",
-          message: `Preflight failed: file "${fid}" is in trash.`
-        };
-      }
-
-      const mime = (file.getMimeType ? file.getMimeType() : "").toLowerCase();
-      // 最低限 image/jpeg, image/png, image/webp, image/gif を含む画像MIMEを許可
-      if (!mime.startsWith("image/")) {
-        return {
-          success: false,
-          code: "UNSUPPORTED_MEDIA_TYPE",
-          message: `Preflight failed: file "${fid}" has unsupported MIME type "${mime}". Only images are permitted.`
-        };
-      }
-
-      // 親フォルダ検査
-      const parentsIter = file.getParents ? file.getParents() : null;
-      const parentIds = [];
-      if (parentsIter) {
-        while (parentsIter.hasNext()) {
-          parentIds.push(parentsIter.next().getId());
-        }
-      }
-
-      const inTarget = parentIds.includes(canonicalStorageFolderId);
-      const inSource = parentIds.includes(expectedSourceFolderId);
-
-      if (inTarget) {
-        alreadyMigrated.push(fid);
-      } else if (inSource) {
-        toMigrate.push({ id: fid, file: file });
-      } else {
-        return {
-          success: false,
-          code: "SOURCE_FOLDER_MISMATCH",
-          message: `Preflight failed: file "${fid}" is not located in expected source folder "${expectedSourceFolderId}". Actual parents: ${JSON.stringify(parentIds)}`
-        };
-      }
-    }
-
-    // 6. 移動執行 (Atomic Move with Moved Ledger)
-    const movedLedger = [];
-    let mutationError = null;
-
-    for (const item of toMigrate) {
-      try {
-        if (typeof item.file.moveTo === 'function') {
-          item.file.moveTo(targetFolder);
-        } else {
-          // DriveApp 古い互換フォールバック: addFile / removeFile
-          targetFolder.addFile(item.file);
-          sourceFolder.removeFile(item.file);
-        }
-        movedLedger.push(item.id);
-      } catch (errMove) {
-        mutationError = errMove;
-        console.error(`[migrateDistrictPhotos] Error moving file "${item.id}":`, errMove);
-        break;
-      }
-    }
-
-    // 途中エラー発生時の局所ロールバック
-    if (mutationError) {
-      const rollbackFailures = [];
-      for (const rbId of movedLedger) {
-        try {
-          const rbFile = DriveApp.getFileById(rbId);
-          if (typeof rbFile.moveTo === 'function') {
-            rbFile.moveTo(sourceFolder);
-          } else {
-            sourceFolder.addFile(rbFile);
-            targetFolder.removeFile(rbFile);
-          }
-        } catch (eRb) {
-          console.error(`[migrateDistrictPhotos] Critical rollback failure for file "${rbId}":`, eRb);
-          rollbackFailures.push(rbId);
-        }
-      }
-
-      if (rollbackFailures.length > 0) {
-        return {
-          success: false,
-          code: "ROLLBACK_INCOMPLETE",
-          message: `Move failed and rollback was incomplete. Mutation error: ${mutationError.message}. Unrecovered files: ${JSON.stringify(rollbackFailures)}`
-        };
-      }
-
-      return {
-        success: false,
-        code: "MUTATION_FAILED",
-        message: `Move aborted and successfully rolled back. Error: ${mutationError.message}`
-      };
-    }
-
-    // 7. Post-Move Read-Back Verification (事後検証)
-    for (const fid of uniqueFileIds) {
-      let rbFile;
-      try {
-        rbFile = DriveApp.getFileById(fid);
-        if (!rbFile) throw new Error("File null on read-back");
-      } catch (eRbRead) {
-        return {
-          success: false,
-          code: "READ_BACK_MISMATCH",
-          message: `Read-back verification failed: file "${fid}" could not be retrieved.`
-        };
-      }
-
-      if (rbFile.isTrashed && rbFile.isTrashed()) {
-        return {
-          success: false,
-          code: "READ_BACK_MISMATCH",
-          message: `Read-back verification failed: file "${fid}" is trashed.`
-        };
-      }
-
-      const rbParentsIter = rbFile.getParents ? rbFile.getParents() : null;
-      const rbParentIds = [];
-      if (rbParentsIter) {
-        while (rbParentsIter.hasNext()) {
-          rbParentIds.push(rbParentsIter.next().getId());
-        }
-      }
-
-      if (!rbParentIds.includes(canonicalStorageFolderId)) {
-        return {
-          success: false,
-          code: "READ_BACK_MISMATCH",
-          message: `Read-back verification failed: file "${fid}" parent does not include canonical storage folder.`
-        };
-      }
-
-      if (rbParentIds.includes(expectedSourceFolderId)) {
-        return {
-          success: false,
-          code: "READ_BACK_MISMATCH",
-          message: `Read-back verification failed: file "${fid}" still contains source folder in parents.`
-        };
-      }
-    }
-
-    // 8. 成功レスポンス返却
-    return {
-      success: true,
-      message: `District "${targetDistrictId}" photos migrated successfully.`,
-      districtId: cleanDistrictId,
-      requestedCount: uniqueFileIds.length,
-      migratedCount: movedLedger.length,
-      alreadyMigratedCount: alreadyMigrated.length,
-      failedCount: 0,
-      targetStorageFolderId: canonicalStorageFolderId,
-      migratedFileIds: movedLedger
-    };
-  } finally {
-    if (lock) {
-      try { lock.releaseLock(); } catch (e) {}
-    }
-  }
-}
 
 /**
  * GETリクエスト：JSONデータの取得
@@ -1181,7 +186,7 @@ function doGet(e) {
 
   const action = params.action || "";
 
-  if (action === 'healSchemaHeaders' || action === 'runIdentityMigration' || action === 'switchDistrictSpreadsheet' || action === 'repairDistrictDriveBinding' || action === 'migrateDistrictPhotos' || action === 'syncSystemInfo' || action === 'resetRoster') {
+  if (action === 'healSchemaHeaders' || action === 'runIdentityMigration' || action === 'syncSystemInfo' || action === 'resetRoster') {
     return ContentService.createTextOutput(JSON.stringify({
       success: false,
       code: "METHOD_NOT_ALLOWED",
@@ -1225,35 +230,11 @@ function doGet(e) {
       code: "FORBIDDEN",
       message: "resetDeviceManagement is disabled on Web App endpoint."
     })).setMimeType(ContentService.MimeType.JSON);
-  } else if (action === 'bootstrapEnvironment') {
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false,
-      code: "METHOD_NOT_ALLOWED",
-      message: "bootstrapEnvironment requires POST request."
-    })).setMimeType(ContentService.MimeType.JSON);
   } else if (action === 'provisionDistrict') {
     return ContentService.createTextOutput(JSON.stringify({
       success: false,
       code: "METHOD_NOT_ALLOWED",
       message: "provisionDistrict requires POST request."
-    })).setMimeType(ContentService.MimeType.JSON);
-  } else if (action === 'switchDistrictSpreadsheet') {
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false,
-      code: "METHOD_NOT_ALLOWED",
-      message: "switchDistrictSpreadsheet requires POST request."
-    })).setMimeType(ContentService.MimeType.JSON);
-  } else if (action === 'repairDistrictDriveBinding') {
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false,
-      code: "METHOD_NOT_ALLOWED",
-      message: "repairDistrictDriveBinding requires POST request."
-    })).setMimeType(ContentService.MimeType.JSON);
-  } else if (action === 'migrateDistrictPhotos') {
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false,
-      code: "METHOD_NOT_ALLOWED",
-      message: "migrateDistrictPhotos requires POST request."
     })).setMimeType(ContentService.MimeType.JSON);
   } else if (action === 'getDeviceStatus') {
     return ContentService.createTextOutput(JSON.stringify({ success: true, exists: false, rows: [] }))
@@ -1268,19 +249,16 @@ function doGet(e) {
 
   const districtId = String((params && params.districtId) || "").trim();
 
-  // 1. マルチ地区環境における districtId 必須チェック (Routing Gate)
-  try {
-    const props = PropertiesService.getScriptProperties();
-    if (props && props.getProperty("DISTRICT_REGISTRY") && !districtId) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "MISSING_DISTRICT_ID",
-        message: "districtId is required for multi-district routing."
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-  } catch (eProps) {}
+  // 1. districtId 必須チェック (Routing / Identity Gate)
+  if (action && action !== 'getTier1' && !districtId) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      code: "MISSING_DISTRICT_ID",
+      message: "districtId is required."
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 
-  // 2. DISTRICT_REGISTRY 照合 & 対象DB確定 & Integrity Guard
+  // 2. 対象DB確定 & Integrity Guard
   if (districtId) {
     try {
       SpreadsheetResolver.getInstance().getSpreadsheet(districtId);
@@ -1290,13 +268,6 @@ function doGet(e) {
         return ContentService.createTextOutput(JSON.stringify({
           success: false,
           code: "DISTRICT_MISMATCH",
-          message: eResolver.message
-        })).setMimeType(ContentService.MimeType.JSON);
-      }
-      if (errStr.includes("not found in DISTRICT_REGISTRY")) {
-        return ContentService.createTextOutput(JSON.stringify({
-          success: false,
-          code: "DISTRICT_NOT_FOUND",
           message: eResolver.message
         })).setMimeType(ContentService.MimeType.JSON);
       }
@@ -1510,7 +481,6 @@ function doPost(e) {
   const districtId = String((postData && postData.districtId) || (params && params.districtId) || "").trim();
 
   const isManagementAction = [
-    'bootstrapEnvironment',
     'provisionDistrict',
     'createEmptyTemplate',
     'createDistrictDatabase',
@@ -1522,23 +492,15 @@ function doPost(e) {
     'resetDeviceManagement',
     'getDeviceStatus',
     'issueMobilePairingToken',
-    'pairMobileDevice',
-    'switchDistrictSpreadsheet',
-    'repairDistrictDriveBinding',
-    'migrateDistrictPhotos'
+    'pairMobileDevice'
   ].includes(action);
 
-  if (!isManagementAction) {
-    try {
-      const props = PropertiesService.getScriptProperties();
-      if (props.getProperty("DISTRICT_REGISTRY") && !districtId) {
-        return ContentService.createTextOutput(JSON.stringify({
-          success: false,
-          code: "MISSING_DISTRICT_ID",
-          message: "districtId is required for multi-district routing."
-        })).setMimeType(ContentService.MimeType.JSON);
-      }
-    } catch (eProps) {}
+  if (!isManagementAction && action && action !== 'getMapsApiKey' && action !== 'getTier1' && !districtId) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      code: "MISSING_DISTRICT_ID",
+      message: "districtId is required."
+    })).setMimeType(ContentService.MimeType.JSON);
   }
 
   const isPublicAction = [
@@ -1590,241 +552,6 @@ function doPost(e) {
   } else if (action === 'pairMobileDevice') {
     return ContentService.createTextOutput(JSON.stringify({ success: true, message: "OK" }))
       .setMimeType(ContentService.MimeType.JSON);
-  } else if (action === 'bootstrapEnvironment') {
-    const token = (postData && (postData.provisioningToken || (postData.options && postData.options.provisioningToken)))
-               || (params && (params.provisioningToken || (params.options && params.options.provisioningToken)));
-
-    const props = PropertiesService.getScriptProperties();
-    const storedHash = (props.getProperty('PROVISIONING_TOKEN_HASH') || '').trim().toLowerCase();
-    const existingTargetSsId = (props.getProperty('TARGET_SPREADSHEET_ID') || props.getProperty('SPREADSHEET_ID') || '').trim();
-
-    // 既に初期化済み（PROVISIONING_TOKEN_HASH または TARGET_SPREADSHEET_ID が存在）の場合は厳格なトークン認証が必須
-    if (storedHash || existingTargetSsId) {
-      const tokenCheck = verifyProvisioningToken(token);
-      if (!tokenCheck.success) {
-        return ContentService.createTextOutput(JSON.stringify(tokenCheck))
-          .setMimeType(ContentService.MimeType.JSON);
-      }
-    } else {
-      // 初回ブートストラップ時の安全防壁:
-      // provisioningToken が必須（空文字・16文字未満の脆弱トークンを拒絶）
-      if (!token || typeof token !== 'string' || token.trim().length < 16) {
-        return ContentService.createTextOutput(JSON.stringify({
-          success: false,
-          code: "UNAUTHORIZED",
-          message: "Provisioning token with at least 16 characters is required for initial bootstrap."
-        })).setMimeType(ContentService.MimeType.JSON);
-      }
-    }
-
-    const districtId = String((postData && postData.districtId) || (params && params.districtId) || "").trim();
-    if (!districtId) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "INVALID_ARGUMENT",
-        message: "districtId is required."
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    const cleanDistrictId = String(districtId).trim().toUpperCase();
-    const canonicalDbName = cleanDistrictId;
-
-    // Server-side Deterministic Resolution: 03_BRANCH 配下から districtFolder, storageFolder を解決
-    let driveStructure;
-    try {
-      if (typeof DistrictProvisioner !== 'undefined' && DistrictProvisioner.getInstance) {
-        driveStructure = DistrictProvisioner.getInstance().resolveOrCreateDistrictDriveStructure(cleanDistrictId);
-      } else {
-        throw new Error("DistrictProvisioner unavailable");
-      }
-    } catch (errDrive) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "DRIVE_RESOLUTION_FAILED",
-        message: errDrive.message
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    const canonicalDistrictFolderId = driveStructure.districtFolderId;
-    const canonicalStorageFolderId = driveStructure.storageFolderId;
-
-    // districtFolder 直下から canonical DB を探索して一意解決
-    let distFolder;
-    try {
-      distFolder = DriveApp.getFolderById(canonicalDistrictFolderId);
-    } catch (eF) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "RESOURCE_NOT_FOUND",
-        message: `District folder "${canonicalDistrictFolderId}" cannot be opened: ${eF.toString()}`
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    const ssFiles = distFolder.getFilesByName(canonicalDbName);
-    let ssFile = null;
-    let ssCount = 0;
-    while (ssFiles.hasNext()) {
-      ssFile = ssFiles.next();
-      ssCount++;
-    }
-
-    // 互換性フォールバック: 過去形式（旧命名: POSTING_MAP_DB_<districtId>）の探索
-    if (ssCount === 0) {
-      const legacyFiles = distFolder.getFilesByName(`POSTING_MAP_DB_${cleanDistrictId}`);
-      while (legacyFiles.hasNext()) {
-        ssFile = legacyFiles.next();
-        ssCount++;
-      }
-    }
-
-    if (ssCount === 0) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "RESOURCE_NOT_FOUND",
-        message: `Canonical spreadsheet "${canonicalDbName}" not found in district folder "${canonicalDistrictFolderId}".`
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    if (ssCount > 1) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "AMBIGUOUS_DISTRICT_DB",
-        message: `Multiple spreadsheets found in district folder "${canonicalDistrictFolderId}".`
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // ショートカットの厳格拒絶
-    if (ssFile.getMimeType && ssFile.getMimeType() === "application/vnd.google-apps.shortcut") {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "SHORTCUT_REJECTED",
-        message: `Drive shortcut "${ssFile.getName()}" cannot be used as canonical spreadsheet.`
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    const canonicalSpreadsheetId = ssFile.getId();
-
-    // Legacy parameter assertions (Optional Assertion Only)
-    const targetSpreadsheetId = String(
-      (postData && (postData.targetSpreadsheetId || postData.spreadsheetId)) ||
-      (params && (params.targetSpreadsheetId || params.spreadsheetId)) || ""
-    ).trim();
-    if (targetSpreadsheetId && targetSpreadsheetId !== canonicalSpreadsheetId) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "SPREADSHEET_ID_MISMATCH",
-        message: `Specified targetSpreadsheetId "${targetSpreadsheetId}" does not match canonical resolved spreadsheet "${canonicalSpreadsheetId}". Caller cannot override DB location.`
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    const storageParentId = String(
-      (postData && (postData.storageParentId || postData.storageFolderId)) ||
-      (params && (params.storageParentId || params.storageFolderId)) || ""
-    ).trim();
-    if (storageParentId && storageParentId !== canonicalStorageFolderId) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "STORAGE_FOLDER_MISMATCH",
-        message: `Specified storageParentId "${storageParentId}" does not match canonical resolved storage folder "${canonicalStorageFolderId}". Caller cannot override storage location.`
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // 実在リソース検証: 対象スプレッドシートのアクセス確認
-    let ss;
-    try {
-      ss = SpreadsheetApp.openById(canonicalSpreadsheetId);
-    } catch (e) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "RESOURCE_NOT_FOUND",
-        message: "Target spreadsheet cannot be opened: " + e.toString()
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // 地区名SSOT検証: スプレッドシート名が canonicalDbName (cleanDistrictId) または過去形式と一致すること
-    const ssName = (ss.getName() || "").trim();
-    if (ssName !== canonicalDbName && ssName !== `POSTING_MAP_DB_${cleanDistrictId}`) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "DISTRICT_MISMATCH",
-        message: `Spreadsheet name "${ssName}" does not match canonical DB name "${canonicalDbName}".`
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // 実在リソース検証: ストレージフォルダのアクセス確認
-    try {
-      DriveApp.getFolderById(canonicalStorageFolderId);
-    } catch (e) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        code: "RESOURCE_NOT_FOUND",
-        message: "Storage parent folder cannot be opened: " + e.toString()
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // Generation 2: DISTRICT_REGISTRY への追加・更新（既存他地区の完全保護）
-    const regRaw = props.getProperty("DISTRICT_REGISTRY");
-    let registry = {};
-
-    if (regRaw === null) {
-      registry = {}; // 初回・Legacy 未設定環境
-    } else {
-      if (typeof regRaw === "string" && regRaw.trim() === "") {
-        return ContentService.createTextOutput(JSON.stringify({
-          success: false,
-          code: "CORRUPTED_REGISTRY",
-          message: "DISTRICT_REGISTRY is configured but empty (corrupted)."
-        })).setMimeType(ContentService.MimeType.JSON);
-      }
-      try {
-        registry = JSON.parse(regRaw);
-      } catch (eReg) {
-        return ContentService.createTextOutput(JSON.stringify({
-          success: false,
-          code: "CORRUPTED_REGISTRY",
-          message: "DISTRICT_REGISTRY JSON is corrupted."
-        })).setMimeType(ContentService.MimeType.JSON);
-      }
-    }
-
-    registry[cleanDistrictId] = {
-      spreadsheetId: canonicalSpreadsheetId,
-      storageFolderId: canonicalStorageFolderId,
-      name: districtId,
-      enabled: false // Acceptance 前は disabled
-    };
-
-    const newProps = {
-      DISTRICT_REGISTRY: JSON.stringify(registry),
-      STORAGE_PARENT_ID: canonicalStorageFolderId,
-      PROVISIONING_TOKEN_HASH: computeSha256(token.trim()).toLowerCase()
-    };
-
-    // 初期環境向けGeneration 1互換（既存のTARGET_SPREADSHEET_IDが未設定の場合のみ初期設定）
-    if (!props.getProperty("TARGET_SPREADSHEET_ID")) {
-      newProps.TARGET_SPREADSHEET_ID = canonicalSpreadsheetId;
-      newProps.SPREADSHEET_ID = canonicalSpreadsheetId;
-      newProps.DISTRICT_ID = districtId;
-    }
-
-    props.setProperties(newProps);
-
-    // キャッシュクリア
-    if (typeof CacheService !== "undefined" && CacheService.getScriptCache()) {
-      CacheService.getScriptCache().remove("CONFIG_STORE");
-    }
-    if (typeof SpreadsheetResolver !== "undefined" && SpreadsheetResolver.getInstance) {
-      SpreadsheetResolver.getInstance().clearCache();
-    }
-
-    return ContentService.createTextOutput(JSON.stringify({
-      success: true,
-      message: "Environment bootstrapped successfully.",
-      districtId: districtId,
-      targetSpreadsheetId: canonicalSpreadsheetId,
-      storageParentId: canonicalStorageFolderId,
-      districtRegistryUpdated: true
-    })).setMimeType(ContentService.MimeType.JSON);
   } else if (action === 'provisionDistrict') {
     const token = (postData && (postData.provisioningToken || (postData.options && postData.options.provisioningToken)))
                || (params && (params.provisioningToken || (params.options && params.options.provisioningToken)));
@@ -1996,18 +723,6 @@ function doPost(e) {
     }
     return ContentService.createTextOutput(JSON.stringify(result))
       .setMimeType(ContentService.MimeType.JSON);
-  } else if (action === 'switchDistrictSpreadsheet') {
-    const result = handleSwitchDistrictSpreadsheet(postData, params);
-    return ContentService.createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.JSON);
-  } else if (action === 'repairDistrictDriveBinding') {
-    const result = handleRepairDistrictDriveBinding(postData, params);
-    return ContentService.createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.JSON);
-  } else if (action === 'migrateDistrictPhotos') {
-    const result = handleMigrateDistrictPhotos(postData, params);
-    return ContentService.createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.JSON);
   } else if (action === 'resetRoster') {
     const token = (postData && (postData.provisioningToken || (postData.options && postData.options.provisioningToken)))
                || (params && (params.provisioningToken || (params.options && params.options.provisioningToken)));
@@ -2035,7 +750,7 @@ function doPost(e) {
       .setMimeType(ContentService.MimeType.JSON);
   }
 
-  // 1. DISTRICT_REGISTRY 照合 & 対象DB確定 & Integrity Guard
+  // 1. 対象DB確定 & Integrity Guard
   if (districtId) {
     try {
       SpreadsheetResolver.getInstance().getSpreadsheet(districtId);
@@ -2045,13 +760,6 @@ function doPost(e) {
         return ContentService.createTextOutput(JSON.stringify({
           success: false,
           code: "DISTRICT_MISMATCH",
-          message: eResolver.message
-        })).setMimeType(ContentService.MimeType.JSON);
-      }
-      if (errStr.includes("not found in DISTRICT_REGISTRY")) {
-        return ContentService.createTextOutput(JSON.stringify({
-          success: false,
-          code: "DISTRICT_NOT_FOUND",
           message: eResolver.message
         })).setMimeType(ContentService.MimeType.JSON);
       }
@@ -2530,12 +1238,6 @@ function processPostAction(action, postData, e, districtId = "") {
       return typeof SystemInfoService !== 'undefined' && SystemInfoService.getInstance
         ? SystemInfoService.getInstance().syncSystemInfo(postData && postData.options, sDistId)
         : { success: false, message: 'SystemInfoService not available' };
-    case 'switchDistrictSpreadsheet':
-      return handleSwitchDistrictSpreadsheet(postData, e && e.parameter);
-    case 'repairDistrictDriveBinding':
-      return handleRepairDistrictDriveBinding(postData, e && e.parameter);
-    case 'migrateDistrictPhotos':
-      return handleMigrateDistrictPhotos(postData, e && e.parameter);
     case 'verifyManagerPassword':
       const postPwd = (postData && postData.password) || (e && e.parameter ? e.parameter.password : "");
       return typeof SystemInfoService !== 'undefined' && SystemInfoService.getInstance

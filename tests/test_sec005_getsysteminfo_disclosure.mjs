@@ -15,7 +15,7 @@ console.log('================================================================\n'
 
 const rootDir = process.cwd();
 const cacheStore = new Map();
-const properties = { DISTRICT_REGISTRY: '', GOOGLE_MAPS_API_KEY: 'test-maps-key' };
+const properties = { TARGET_SPREADSHEET_ID: 'ss-kuwana-id', GOOGLE_MAPS_API_KEY: 'test-maps-key' };
 
 class MockCache {
   get(key) { return cacheStore.has(key) ? cacheStore.get(key) : null; }
@@ -95,7 +95,7 @@ global.SpreadsheetApp = {
 global.SpreadsheetResolver = {
   getInstance: () => ({
     getSpreadsheet: districtId => {
-      if (!spreadsheets[districtId]) throw new Error('not found in DISTRICT_REGISTRY');
+      if (!spreadsheets[districtId]) throw new Error('DISTRICT_MISMATCH');
       return spreadsheets[districtId];
     }
   })

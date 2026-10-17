@@ -224,11 +224,8 @@ distB.rows = [
 ];
 mockSpreadsheets['ss-kurashiki-id'] = ssB;
 
-// 3. DISTRICT_REGISTRY の登録
-mockScriptProperties['DISTRICT_REGISTRY'] = JSON.stringify({
-  'KUWANA': 'ss-kuwana-id',
-  'KURASHIKI': 'ss-kurashiki-id'
-});
+// 3. 1地区専用GAS スプレッドシートバインド (初期値: Region A = KUWANA)
+mockScriptProperties['TARGET_SPREADSHEET_ID'] = 'ss-kuwana-id';
 
 // Universal Runtime コードのロード
 const adapterCode = fs.readFileSync(path.join(REPO_ROOT, 'active/infrastructure/spreadsheet/spreadsheet_adapter.js'), 'utf8');
@@ -268,16 +265,20 @@ assert.ok(minLatB > 34.0 && maxLatB < 35.0, 'Region B coordinates must fall dyna
 console.log('  ✅ Gate 2 PASS: 異なる地域データ（337件・桑名市 vs 120件・倉敷市）が同一コードで動的解決されることを確認');
 
 // ─── GATE 3: Tenant Isolation (テナント分離・認可境界検証) ───
-console.log('\n[Gate 3] Tenant Isolation: DISTRICT_REGISTRY + SYSTEM_INFO 認可境界の検証...');
+console.log('\n[Gate 3] Tenant Isolation: 1地区専用DB解決 + SYSTEM_INFO 認可境界の検証...');
 
 // 1. 正当な Region A 接続
+mockScriptProperties['TARGET_SPREADSHEET_ID'] = 'ss-kuwana-id';
+vm.runInContext(`SpreadsheetResolver.getInstance().clearCache()`, sandbox);
 const resolvedSsA = vm.runInContext(`SpreadsheetResolver.getInstance().getSpreadsheet('KUWANA')`, sandbox);
 assert.equal(resolvedSsA.getId(), 'ss-kuwana-id', 'KUWANA request must route to ss-kuwana-id');
 assert.doesNotThrow(() => {
   vm.runInContext(`SpreadsheetResolver.getInstance().verifyIntegrityGuard(SpreadsheetApp.openById('ss-kuwana-id'), 'KUWANA')`, sandbox);
 }, 'Integrity check must PASS for valid KUWANA request');
 
-// 2. 正当な Region B 接続 (同一コードで別DBに解決)
+// 2. 正当な Region B 接続 (同一コードで別DBインスタンスに解決)
+mockScriptProperties['TARGET_SPREADSHEET_ID'] = 'ss-kurashiki-id';
+vm.runInContext(`SpreadsheetResolver.getInstance().clearCache()`, sandbox);
 const resolvedSsB = vm.runInContext(`SpreadsheetResolver.getInstance().getSpreadsheet('KURASHIKI')`, sandbox);
 assert.equal(resolvedSsB.getId(), 'ss-kurashiki-id', 'KURASHIKI request must route to ss-kurashiki-id');
 assert.doesNotThrow(() => {
@@ -339,8 +340,12 @@ assert.equal(progressB, Math.round((2 / 120) * 100), 'Region B progress must be 
 
 // 5. API & 認証 & データ境界の独立解決
 const testDate = new Date('2026-09-15T00:00:00Z');
+mockScriptProperties['TARGET_SPREADSHEET_ID'] = 'ss-kuwana-id';
+vm.runInContext(`SpreadsheetResolver.getInstance().clearCache()`, sandbox);
 assert.equal(sandbox.MonthlySheetResolver.getInstance().getSheetName('distribution', testDate, 'KUWANA'), '配布実績2026-09');
 const sheetA = sandbox.MonthlySheetResolver.getInstance().getCurrentSheet('distribution', testDate, 'KUWANA');
+mockScriptProperties['TARGET_SPREADSHEET_ID'] = 'ss-kurashiki-id';
+vm.runInContext(`SpreadsheetResolver.getInstance().clearCache()`, sandbox);
 const sheetB = sandbox.MonthlySheetResolver.getInstance().getCurrentSheet('distribution', testDate, 'KURASHIKI');
 assert.equal(sheetA.name, '配布実績2026-09');
 assert.equal(sheetB.name, '配布実績2026-09');

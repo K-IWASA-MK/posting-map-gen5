@@ -178,9 +178,7 @@ const kuwanaSS = new MockSpreadsheet("ss-kuwana-id", "POSTING_MAP_KUWANA", {
 });
 mockSpreadsheets["ss-kuwana-id"] = kuwanaSS;
 
-scriptPropertiesStore["DISTRICT_REGISTRY"] = JSON.stringify({
-  "KUWANA": "ss-kuwana-id"
-});
+scriptPropertiesStore["TARGET_SPREADSHEET_ID"] = "ss-kuwana-id";
 
 // コード読み込みと実行
 const rootDir = process.cwd();
@@ -324,10 +322,10 @@ const resNoDist = doPost({ postData: { contents: JSON.stringify({ action: "getDa
 const jsonNoDist = JSON.parse(resNoDist.text);
 assert.equal(jsonNoDist.code, "MISSING_DISTRICT_ID");
 
-// 4-2: 未知地区
+// 4-2: 未知地区 (1地区専用GASモードでは接続先SSの地区コードとの不一致により DISTRICT_MISMATCH)
 const resUnknown = doPost({ postData: { contents: JSON.stringify({ action: "getDashboardSnapshot", districtId: "UNKNOWN_REGION" }) } });
 const jsonUnknown = JSON.parse(resUnknown.text);
-assert.equal(jsonUnknown.code, "DISTRICT_NOT_FOUND");
+assert.equal(jsonUnknown.code, "DISTRICT_MISMATCH");
 
 console.log("  ✅ TEST 4 PASS: Snapshot API 自身の Tenant Boundary & ルーティングゲートが厳格に機能");
 

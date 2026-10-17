@@ -222,9 +222,7 @@ function createSandbox(initialSS) {
   const ssMap = { [initialSS.getId()]: initialSS };
   const mockProps = {
     PROVISIONING_TOKEN_HASH: crypto.createHash('sha256').update("valid-test-token").digest('hex'),
-    DISTRICT_REGISTRY: JSON.stringify({
-      "TEST_DIST": { spreadsheetId: initialSS.getId(), enabled: true }
-    })
+    TARGET_SPREADSHEET_ID: initialSS.getId()
   };
 
   const sandbox = {

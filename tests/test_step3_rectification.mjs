@@ -207,14 +207,8 @@ const mismatchSS = new MockSpreadsheet("ss-mismatch-id", "POSTING_MAP_MISMATCH",
 });
 mockSpreadsheets["ss-mismatch-id"] = mismatchSS;
 
-// DISTRICT_REGISTRY 設定
-scriptPropertiesStore["DISTRICT_REGISTRY"] = JSON.stringify({
-  "KUWANA": "ss-kuwana-id",
-  "EXPIRED_DISTRICT": "ss-expired-id",
-  "EMPTY_DATE_DISTRICT": "ss-empty-date-id",
-  "BROKEN_DISTRICT": "ss-broken-id",
-  "MISMATCH_DISTRICT": "ss-mismatch-id"
-});
+// 1地区専用GASモード TARGET_SPREADSHEET_ID 初期設定
+scriptPropertiesStore["TARGET_SPREADSHEET_ID"] = "ss-kuwana-id";
 
 // コード読み込みと実行
 const rootDir = process.cwd();
@@ -238,10 +232,16 @@ vm.runInThisContext(distRepoCode);
 global.authenticateRequest = (p) => ({ success: true, user: { lineUserId: "U_KUWANA_001" } });
 vm.runInThisContext(v2ApiCode);
 
+function bindTargetSpreadsheet(ssId) {
+  scriptPropertiesStore["TARGET_SPREADSHEET_ID"] = ssId;
+  SpreadsheetResolver.getInstance().clearCache();
+}
+
 // -------------------------------------------------------------
 // [TEST 1] districtId未指定 ➔ MISSING_DISTRICT_ID (契約エラーにしない)
 // -------------------------------------------------------------
 console.log("▶ [TEST 1] districtId未指定時の MISSING_DISTRICT_ID 判定");
+bindTargetSpreadsheet("ss-kuwana-id");
 const resNoDistrict = doPost({
   postData: { contents: JSON.stringify({ action: "getStaffIdentity" }) }
 });
@@ -251,21 +251,23 @@ assert.equal(jsonNoDistrict.code, "MISSING_DISTRICT_ID");
 console.log("  ✅ TEST 1 PASS: districtId未指定時は契約エラーではなく MISSING_DISTRICT_ID を返却");
 
 // -------------------------------------------------------------
-// [TEST 2] 未登録districtId ➔ DISTRICT_NOT_FOUND (Registryエラー)
+// [TEST 2] 未知districtId ➔ DISTRICT_MISMATCH (1地区専用GASでの境界遮断)
 // -------------------------------------------------------------
-console.log("▶ [TEST 2] 未知地区ID時の DISTRICT_NOT_FOUND 判定");
+console.log("▶ [TEST 2] 未知地区ID時の DISTRICT_MISMATCH 判定");
+bindTargetSpreadsheet("ss-kuwana-id");
 const resUnknownDistrict = doPost({
   postData: { contents: JSON.stringify({ action: "getStaffIdentity", districtId: "UNKNOWN_REGION" }) }
 });
 const jsonUnknownDistrict = JSON.parse(resUnknownDistrict.text);
 assert.equal(jsonUnknownDistrict.success, false);
-assert.equal(jsonUnknownDistrict.code, "DISTRICT_NOT_FOUND");
-console.log("  ✅ TEST 2 PASS: 未登録districtIdは契約エラーではなく DISTRICT_NOT_FOUND を返却");
+assert.equal(jsonUnknownDistrict.code, "DISTRICT_MISMATCH");
+console.log("  ✅ TEST 2 PASS: 未知districtIdは契約エラーではなく DISTRICT_MISMATCH を返却");
 
 // -------------------------------------------------------------
 // [TEST 3] Integrity Guard ➔ DISTRICT_MISMATCH
 // -------------------------------------------------------------
 console.log("▶ [TEST 3] 地区コード不一致時の DISTRICT_MISMATCH 判定");
+bindTargetSpreadsheet("ss-mismatch-id");
 const resMismatch = doPost({
   postData: { contents: JSON.stringify({ action: "getStaffIdentity", districtId: "MISMATCH_DISTRICT" }) }
 });
@@ -278,6 +280,7 @@ console.log("  ✅ TEST 3 PASS: SYSTEM_INFO地区コード不一致時は DISTRI
 // [TEST 4] 契約期限満了 ➔ CONTRACT_EXPIRED
 // -------------------------------------------------------------
 console.log("▶ [TEST 4] 契約満了時の CONTRACT_EXPIRED 判定");
+bindTargetSpreadsheet("ss-expired-id");
 const resExpired = doPost({
   postData: { contents: JSON.stringify({ action: "getStaffIdentity", districtId: "EXPIRED_DISTRICT" }) }
 });
@@ -291,6 +294,7 @@ console.log("  ✅ TEST 4 PASS: 契約終了日超過時は明確に CONTRACT_EX
 // [TEST 5] SYSTEM_INFO取得不能 ➔ CONTRACT_CHECK_FAILED (Fail-Closed)
 // -------------------------------------------------------------
 console.log("▶ [TEST 5] SYSTEM_INFO破損/消失時の CONTRACT_CHECK_FAILED 判定");
+bindTargetSpreadsheet("ss-broken-id");
 const resBroken = doPost({
   postData: { contents: JSON.stringify({ action: "getStaffIdentity", districtId: "BROKEN_DISTRICT" }) }
 });
@@ -314,6 +318,7 @@ console.log("  ✅ TEST 6 PASS: 契約終了日空欄は仕様通り ACTIVE (期
 // [TEST 7] 正常ACTIVE ➔ 従来どおり正常応答
 // -------------------------------------------------------------
 console.log("▶ [TEST 7] 正常ACTIVE地区の正常応答");
+bindTargetSpreadsheet("ss-kuwana-id");
 const resKuwana = doPost({
   postData: { contents: JSON.stringify({ action: "getStaffIdentity", districtId: "KUWANA", liffToken: "token_user1" }) }
 });
@@ -330,26 +335,30 @@ console.log("  ✅ TEST 7 PASS: 有効なKUWANA地区は従来どおり正常応
 // -------------------------------------------------------------
 console.log("▶ [TEST 8] GETリクエストにおけるゲート整流化検証");
 // 8-1: districtId未指定
+bindTargetSpreadsheet("ss-kuwana-id");
 const resGetNoDistrict = doGet({ parameter: { action: "getSystemSummary" } });
 const jsonGetNoDistrict = JSON.parse(resGetNoDistrict.text);
 assert.equal(jsonGetNoDistrict.code, "MISSING_DISTRICT_ID");
 
-// 8-2: 未知地区
+// 8-2: 未知地区 (1地区専用GASでの境界不一致)
+bindTargetSpreadsheet("ss-kuwana-id");
 const resGetUnknown = doGet({ parameter: { action: "getSystemSummary", districtId: "UNKNOWN_REGION" } });
 const jsonGetUnknown = JSON.parse(resGetUnknown.text);
-assert.equal(jsonGetUnknown.code, "DISTRICT_NOT_FOUND");
+assert.equal(jsonGetUnknown.code, "DISTRICT_MISMATCH");
 
 // 8-3: 契約満了
+bindTargetSpreadsheet("ss-expired-id");
 const resGetExpired = doGet({ parameter: { action: "getSystemSummary", districtId: "EXPIRED_DISTRICT" } });
 const jsonGetExpired = JSON.parse(resGetExpired.text);
 assert.equal(jsonGetExpired.code, "CONTRACT_EXPIRED");
 
 // 8-4: 取得不能
+bindTargetSpreadsheet("ss-broken-id");
 const resGetBroken = doGet({ parameter: { action: "getSystemSummary", districtId: "BROKEN_DISTRICT" } });
 const jsonGetBroken = JSON.parse(resGetBroken.text);
 assert.equal(jsonGetBroken.code, "CONTRACT_CHECK_FAILED");
 
-console.log("  ✅ TEST 8 PASS: GETリクエストでも MISSING_DISTRICT_ID ➔ DISTRICT_NOT_FOUND ➔ CONTRACT_EXPIRED ➔ CONTRACT_CHECK_FAILED の完全整流化を確認");
+console.log("  ✅ TEST 8 PASS: GETリクエストでも MISSING_DISTRICT_ID ➔ DISTRICT_MISMATCH ➔ CONTRACT_EXPIRED ➔ CONTRACT_CHECK_FAILED の完全整流化を確認");
 
 console.log("====================================================");
 console.log("🎉 ALL 8 RECTIFICATION TESTS PASSED PERFECTLY!");

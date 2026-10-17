@@ -515,12 +515,18 @@ mismatchSysInfo.rows = [
 ];
 mockSpreadsheets["ss-mismatch-id"] = mismatchSS;
 
-// 4. DISTRICT_REGISTRY の設定
-PropertiesService.getScriptProperties().setProperty("DISTRICT_REGISTRY", JSON.stringify({
-  "KUWANA": "ss-kuwana-id",
-  "OKAYAMA": "ss-okayama-id",
-  "MISMATCH_DISTRICT": "ss-mismatch-id"
-}));
+// 4. 1地区専用GAS スプレッドシートバインド設定
+function bindActiveDistrict(ssId, storageFolderId = "folder_kuwana_id") {
+  PropertiesService.getScriptProperties().setProperty("TARGET_SPREADSHEET_ID", ssId);
+  if (storageFolderId !== null && storageFolderId !== undefined) {
+    PropertiesService.getScriptProperties().setProperty("STORAGE_PARENT_ID", storageFolderId);
+  }
+  if (typeof SpreadsheetResolver !== 'undefined' && SpreadsheetResolver.getInstance) {
+    SpreadsheetResolver.getInstance().clearCache();
+  }
+}
+PropertiesService.getScriptProperties().setProperty("TARGET_SPREADSHEET_ID", "ss-kuwana-id");
+PropertiesService.getScriptProperties().setProperty("STORAGE_PARENT_ID", "folder_kuwana_id");
 
 // 5. ソースコードの読み込みと評価
 const rootDir = process.cwd();
@@ -638,6 +644,7 @@ function runTest(name, fn) {
 // TEST 1: 正当アクセス (User A in KUWANA -> KUWANA DB)
 // -----------------------------------------------------------------------------
 runTest("Scenario 1: 正当アクセス (KUWANA所属スタッフがKUWANAを指定)", () => {
+  bindActiveDistrict("ss-kuwana-id");
   const req = {
     postData: {
       contents: JSON.stringify({
@@ -659,26 +666,32 @@ runTest("Scenario 1: 正当アクセス (KUWANA所属スタッフがKUWANAを指
 // TEST 2: 越境アクセス拒否 (User A in KUWANA -> OKAYAMA DB 指定)
 // -----------------------------------------------------------------------------
 runTest("Scenario 2: 越境アクセス拒否 (KUWANA所属スタッフがOKAYAMA DBへアクセス)", () => {
-  const req = {
-    postData: {
-      contents: JSON.stringify({
-        action: "getStaffIdentity",
-        liffToken: "token_kuwana_user1",
-        districtId: "OKAYAMA"
-      })
-    }
-  };
-  const res = doPost(req);
-  const data = JSON.parse(res.text);
-  assert.equal(data.success, true);
-  assert.equal(data.registered, false);
-  assert.equal(data.code, "NOT_REGISTERED");
+  bindActiveDistrict("ss-okayama-id");
+  try {
+    const req = {
+      postData: {
+        contents: JSON.stringify({
+          action: "getStaffIdentity",
+          liffToken: "token_kuwana_user1",
+          districtId: "OKAYAMA"
+        })
+      }
+    };
+    const res = doPost(req);
+    const data = JSON.parse(res.text);
+    assert.equal(data.success, true);
+    assert.equal(data.registered, false);
+    assert.equal(data.code, "NOT_REGISTERED");
+  } finally {
+    bindActiveDistrict("ss-kuwana-id");
+  }
 });
 
 // -----------------------------------------------------------------------------
 // TEST 3: 未登録ユーザー拒否 (Unknown User -> KUWANA DB)
 // -----------------------------------------------------------------------------
 runTest("Scenario 3: 未登録ユーザー拒否 (どの地区名簿にも存在しないLINEユーザー)", () => {
+  bindActiveDistrict("ss-kuwana-id");
   const req = {
     postData: {
       contents: JSON.stringify({
@@ -699,6 +712,7 @@ runTest("Scenario 3: 未登録ユーザー拒否 (どの地区名簿にも存在
 // TEST 4: 無効トークン拒否 (Invalid Token)
 // -----------------------------------------------------------------------------
 runTest("Scenario 4: 無効トークン拒否 (期限切れまたは偽装トークン)", () => {
+  bindActiveDistrict("ss-kuwana-id");
   const req = {
     postData: {
       contents: JSON.stringify({
@@ -715,18 +729,20 @@ runTest("Scenario 4: 無効トークン拒否 (期限切れまたは偽装トー
 });
 
 // -----------------------------------------------------------------------------
-// TEST 5: 未知地区ID拒否 (Unknown districtId)
+// TEST 5: 未知地区ID拒否 (Unknown districtId -> DISTRICT_MISMATCH)
 // -----------------------------------------------------------------------------
-runTest("Scenario 5: 未知地区ID拒否 (DISTRICT_REGISTRYに存在しない地区ID)", () => {
+runTest("Scenario 5: 未知地区ID拒否 (接続先SSの地区コードと不一致な地区IDは DISTRICT_MISMATCH で遮断)", () => {
+  bindActiveDistrict("ss-kuwana-id");
   assert.throws(() => {
     SpreadsheetResolver.getInstance().getSpreadsheet("UNKNOWN_DISTRICT");
-  }, /not found in DISTRICT_REGISTRY/);
+  }, /DISTRICT_MISMATCH/);
 });
 
 // -----------------------------------------------------------------------------
-// TEST 6: マルチ地区環境での districtId 欠落拒否 (無条件fallback遮断)
+// TEST 6: 業務APIでの districtId 欠落拒否 (無条件fallback遮断)
 // -----------------------------------------------------------------------------
-runTest("Scenario 6: districtId欠落遮断 (マルチ地区環境でdistrictId未指定の業務API)", () => {
+runTest("Scenario 6: districtId欠落遮断 (districtId未指定の業務APIは MISSING_DISTRICT_ID で遮断)", () => {
+  bindActiveDistrict("ss-kuwana-id");
   const req = {
     postData: {
       contents: JSON.stringify({
@@ -743,32 +759,40 @@ runTest("Scenario 6: districtId欠落遮断 (マルチ地区環境でdistrictId�
 });
 
 // -----------------------------------------------------------------------------
-// TEST 7: 二段階SSOT・Integrity Guard 検証 (B2 地区コード完全一致 & DISTRICT_MISMATCH)
+// TEST 7: Integrity Guard 検証 (B2 地区コード完全一致 & DISTRICT_MISMATCH)
 // -----------------------------------------------------------------------------
 runTest("Scenario 7: Integrity Guard (SYSTEM_INFO の地区コードが不一致の場合に即時遮断)", () => {
-  assert.throws(() => {
-    // MISMATCH_DISTRICT は registry にあるが、SYSTEM_INFO の B2 は "CORRUPTED_CODE"
-    SpreadsheetResolver.getInstance().getSpreadsheet("MISMATCH_DISTRICT");
-  }, /DISTRICT_MISMATCH/);
+  bindActiveDistrict("ss-mismatch-id");
+  try {
+    assert.throws(() => {
+      // MISMATCH_DISTRICT の SYSTEM_INFO B2 は "CORRUPTED_CODE"
+      SpreadsheetResolver.getInstance().getSpreadsheet("MISMATCH_DISTRICT");
+    }, /DISTRICT_MISMATCH/);
+  } finally {
+    bindActiveDistrict("ss-kuwana-id");
+  }
 });
 
 // -----------------------------------------------------------------------------
 // TEST 8: Singleton 状態保持の完全排除検証 (リクエスト間での独立性)
 // -----------------------------------------------------------------------------
-runTest("Scenario 8: Singleton状態保持の排除 (KUWANAとOKAYAMAを交互に呼び出しても汚染されない)", () => {
+runTest("Scenario 8: Singleton状態保持の排除 (KUWANAとOKAYAMAを独立解決しても汚染されない)", () => {
   const resolver = SpreadsheetResolver.getInstance();
 
   // 1回目: KUWANA
+  bindActiveDistrict("ss-kuwana-id");
   const ssKuwana = resolver.getSpreadsheet("KUWANA");
   assert.equal(ssKuwana.getId(), "ss-kuwana-id");
   assert.equal(ssKuwana.getName(), "POSTING_MAP_KUWANA");
 
   // 2回目: OKAYAMA
+  bindActiveDistrict("ss-okayama-id");
   const ssOkayama = resolver.getSpreadsheet("OKAYAMA");
   assert.equal(ssOkayama.getId(), "ss-okayama-id");
   assert.equal(ssOkayama.getName(), "POSTING_MAP_OKAYAMA");
 
-  // 3回目: 再び KUWANA (状態が OKAYAMA に上書きされていないこと)
+  // 3回目: 再び KUWANA
+  bindActiveDistrict("ss-kuwana-id");
   const ssKuwana2 = resolver.getSpreadsheet("KUWANA");
   assert.equal(ssKuwana2.getId(), "ss-kuwana-id");
   assert.equal(ssKuwana2.getName(), "POSTING_MAP_KUWANA");
@@ -778,6 +802,7 @@ runTest("Scenario 8: Singleton状態保持の排除 (KUWANAとOKAYAMAを交互�
 // TEST 9: ランキング集計の地区別分離
 // -----------------------------------------------------------------------------
 runTest("Scenario 9: 配布ランキングの地区別分離", () => {
+  bindActiveDistrict("ss-kuwana-id");
   const reqKuwana = {
     postData: {
       contents: JSON.stringify({
@@ -794,209 +819,101 @@ runTest("Scenario 9: 配布ランキングの地区別分離", () => {
   assert.equal(dataKuwana.ranking[0].staffId, "K001");
   assert.equal(dataKuwana.ranking[0].count, 100);
 
-  const reqOkayama = {
+  bindActiveDistrict("ss-okayama-id");
+  try {
+    const reqOkayama = {
+      postData: {
+        contents: JSON.stringify({
+          action: "getRanking",
+          liffToken: "token_okayama_user1",
+          districtId: "OKAYAMA"
+        })
+      }
+    };
+    const resOkayama = doPost(reqOkayama);
+    const dataOkayama = JSON.parse(resOkayama.text);
+    assert.equal(dataOkayama.success, true);
+    assert.equal(dataOkayama.ranking.length, 1);
+    assert.equal(dataOkayama.ranking[0].staffId, "O001");
+    assert.equal(dataOkayama.ranking[0].count, 250);
+  } finally {
+    bindActiveDistrict("ss-kuwana-id");
+  }
+});
+
+// -----------------------------------------------------------------------------
+// TEST 10: 1地区専用GAS getActiveSpreadsheet() 優先解決および TARGET_SPREADSHEET_ID フォールバック
+// -----------------------------------------------------------------------------
+runTest("Scenario 10: 1地区専用GAS getActiveSpreadsheet() 優先解決および TARGET_SPREADSHEET_ID フォールバック", () => {
+  const resolver = SpreadsheetResolver.getInstance();
+  resolver.clearCache();
+
+  // TARGET_SPREADSHEET_ID による解決
+  bindActiveDistrict("ss-kuwana-id");
+  const resolvedId = resolver.getSpreadsheetId("KUWANA");
+  assert.equal(resolvedId, "ss-kuwana-id");
+
+  // getActiveSpreadsheet() が有効な場合は最優先で解決されること
+  const origGetActive = global.SpreadsheetApp.getActiveSpreadsheet;
+  global.SpreadsheetApp.getActiveSpreadsheet = () => kuwanaSS;
+  resolver.clearCache();
+  try {
+    const ssActive = resolver.getSpreadsheet("KUWANA");
+    assert.equal(ssActive.getId(), "ss-kuwana-id");
+  } finally {
+    global.SpreadsheetApp.getActiveSpreadsheet = origGetActive;
+    resolver.clearCache();
+  }
+});
+
+// -----------------------------------------------------------------------------
+// TEST 11: スプレッドシート未バインド時の Fail-Closed 遮断
+// -----------------------------------------------------------------------------
+runTest("Scenario 11: スプレッドシート未バインド時の Fail-Closed 遮断", () => {
+  delete mockScriptProperties["TARGET_SPREADSHEET_ID"];
+  SpreadsheetResolver.getInstance().clearCache();
+  try {
+    assert.throws(() => {
+      SpreadsheetResolver.getInstance().getSpreadsheet("KUWANA");
+    }, /Target spreadsheet cannot be resolved/);
+  } finally {
+    bindActiveDistrict("ss-kuwana-id");
+  }
+});
+
+// -----------------------------------------------------------------------------
+// TEST 12: 親GAS専用アクション bootstrapEnvironment 廃止後の Fail-Closed 拒絶
+// -----------------------------------------------------------------------------
+runTest("Scenario 12: 廃止された親GAS専用アクション bootstrapEnvironment は特権バイパス対象から外れ Fail-Closed で拒絶 (mutation 0)", () => {
+  // 後続テスト用 NEW_DISTRICT_B モックスプレッドシートを準備
+  const ssNewB = new MockSpreadsheet("ss-b-id", "NEW_DISTRICT_B");
+  mockSpreadsheets["ss-b-id"] = ssNewB;
+
+  bindActiveDistrict("ss-kuwana-id");
+  const snapProps = JSON.stringify(mockScriptProperties);
+
+  const req = {
     postData: {
       contents: JSON.stringify({
-        action: "getRanking",
-        liffToken: "token_okayama_user1",
-        districtId: "OKAYAMA"
+        action: "bootstrapEnvironment",
+        districtId: "KUWANA",
+        provisioningToken: validToken,
+        liffToken: "token_kuwana_user1"
       })
     }
   };
-  const resOkayama = doPost(reqOkayama);
-  const dataOkayama = JSON.parse(resOkayama.text);
-  assert.equal(dataOkayama.success, true);
-  assert.equal(dataOkayama.ranking.length, 1);
-  assert.equal(dataOkayama.ranking[0].staffId, "O001");
-  assert.equal(dataOkayama.ranking[0].count, 250);
-});
-
-// -----------------------------------------------------------------------------
-// TEST 10: Generation 2 オブジェクト形式 Registry の解決
-// -----------------------------------------------------------------------------
-runTest("Scenario 10: Generation 2 オブジェクト形式 Registry の動的解決", () => {
-  const currentReg = JSON.parse(PropertiesService.getScriptProperties().getProperty("DISTRICT_REGISTRY"));
-  currentReg["GEN2_DISTRICT"] = {
-    spreadsheetId: "ss-kuwana-id",
-    name: "GEN2_DISTRICT",
-    enabled: true
-  };
-  PropertiesService.getScriptProperties().setProperty("DISTRICT_REGISTRY", JSON.stringify(currentReg));
-  SpreadsheetResolver.getInstance().clearCache();
-
-  const resolvedId = SpreadsheetResolver.getInstance().getSpreadsheetId("GEN2_DISTRICT");
-  assert.equal(resolvedId, "ss-kuwana-id");
-});
-
-// -----------------------------------------------------------------------------
-// TEST 11: enabled: false 地区のアクセス遮断
-// -----------------------------------------------------------------------------
-runTest("Scenario 11: enabled: false 地区のアクセス遮断", () => {
-  const currentReg = JSON.parse(PropertiesService.getScriptProperties().getProperty("DISTRICT_REGISTRY"));
-  currentReg["DISABLED_DISTRICT"] = {
-    spreadsheetId: "ss-kuwana-id",
-    name: "DISABLED_DISTRICT",
-    enabled: false
-  };
-  PropertiesService.getScriptProperties().setProperty("DISTRICT_REGISTRY", JSON.stringify(currentReg));
-  SpreadsheetResolver.getInstance().clearCache();
-
-  assert.throws(() => {
-    SpreadsheetResolver.getInstance().getSpreadsheetId("DISABLED_DISTRICT");
-  }, /not found in DISTRICT_REGISTRY/);
-});
-
-// -----------------------------------------------------------------------------
-// TEST 12: bootstrapEnvironment による新地区追加時の既存地区保護
-// -----------------------------------------------------------------------------
-runTest("Scenario 12: bootstrapEnvironment による既存地区の保護と新地区追加", () => {
-  const initialReg = {
-    "EXISTING_A": { spreadsheetId: "ss-a-id", enabled: true }
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(initialReg);
-  mockScriptProperties["TARGET_SPREADSHEET_ID"] = "legacy-ss-id";
-  mockScriptProperties["BRANCH_ROOT_FOLDER_ID"] = "branch-root-folder-id";
-  const validToken = "super-secret-provisioning-token-123456";
-  mockScriptProperties["PROVISIONING_TOKEN_HASH"] = crypto.createHash('sha256').update(validToken).digest('hex');
-  SpreadsheetResolver.getInstance().clearCache();
-
-  try {
-    // 03_BRANCH 階層モックの準備
-    const rootBranch = createMockDriveFolderObj("branch-root-folder-id", "03_BRANCH");
-    mockDriveFolders["branch-root-folder-id"] = rootBranch;
-    const distFolderB = rootBranch.createFolder("NEW_DISTRICT_B");
-    const storageFolderB = distFolderB.createFolder("NEW_DISTRICT_B 支部_STORAGE");
-    const ssFileB = {
-      getId: () => "ss-b-id",
-      getName: () => "NEW_DISTRICT_B",
-      getMimeType: () => "application/vnd.google-apps.spreadsheet",
-      isTrashed: () => false
-    };
-    distFolderB.files.push(ssFileB);
-
-    // 新規地区スプレッドシートのモック（名前は Canonical DB Name: NEW_DISTRICT_B）
-    const ssNewB = new MockSpreadsheet("ss-b-id", "NEW_DISTRICT_B");
-    mockSpreadsheets["ss-b-id"] = ssNewB;
-
-    // 1. 正常系: districtId のみ（Caller 指定なしでサーバー側解決）
-    const reqMinimal = {
-      postData: {
-        contents: JSON.stringify({
-          action: "bootstrapEnvironment",
-          districtId: "NEW_DISTRICT_B",
-          provisioningToken: validToken
-        })
-      }
-    };
-    const resMin = doPost(reqMinimal);
-    const dataMin = JSON.parse(resMin.text);
-    assert.equal(dataMin.success, true, "bootstrapEnvironment must succeed with districtId only: " + resMin.text);
-    assert.equal(dataMin.targetSpreadsheetId, "ss-b-id");
-    assert.equal(dataMin.storageParentId, storageFolderB.id);
-    assert.equal(dataMin.districtRegistryUpdated, true);
-
-    // 2. 正常系: 一致する Legacy 引数（Assertion 通過）
-    const reqAssertionOk = {
-      postData: {
-        contents: JSON.stringify({
-          action: "bootstrapEnvironment",
-          districtId: "NEW_DISTRICT_B",
-          targetSpreadsheetId: "ss-b-id",
-          storageParentId: storageFolderB.id,
-          provisioningToken: validToken
-        })
-      }
-    };
-    const resAssertOk = doPost(reqAssertionOk);
-    const dataAssertOk = JSON.parse(resAssertOk.text);
-    assert.equal(dataAssertOk.success, true, "bootstrapEnvironment must pass when legacy args match canonical values");
-
-    // 3. 異常系: 不一致な targetSpreadsheetId ➔ SPREADSHEET_ID_MISMATCH
-    const reqBadSs = {
-      postData: {
-        contents: JSON.stringify({
-          action: "bootstrapEnvironment",
-          districtId: "NEW_DISTRICT_B",
-          targetSpreadsheetId: "wrong-ss-id",
-          provisioningToken: validToken
-        })
-      }
-    };
-    const resBadSs = doPost(reqBadSs);
-    const dataBadSs = JSON.parse(resBadSs.text);
-    assert.equal(dataBadSs.success, false);
-    assert.equal(dataBadSs.code, "SPREADSHEET_ID_MISMATCH");
-
-    // 4. 異常系: 不一致な storageParentId ➔ STORAGE_FOLDER_MISMATCH
-    const reqBadStorage = {
-      postData: {
-        contents: JSON.stringify({
-          action: "bootstrapEnvironment",
-          districtId: "NEW_DISTRICT_B",
-          storageParentId: "wrong-storage-id",
-          provisioningToken: validToken
-        })
-      }
-    };
-    const resBadStorage = doPost(reqBadStorage);
-    const dataBadStorage = JSON.parse(resBadStorage.text);
-    assert.equal(dataBadStorage.success, false);
-    assert.equal(dataBadStorage.code, "STORAGE_FOLDER_MISMATCH");
-
-    const updatedReg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-    assert.ok(updatedReg["EXISTING_A"], "EXISTING_A must be preserved");
-    assert.equal(updatedReg["EXISTING_A"].spreadsheetId, "ss-a-id");
-    assert.ok(updatedReg["NEW_DISTRICT_B"], "NEW_DISTRICT_B must be added");
-    assert.equal(updatedReg["NEW_DISTRICT_B"].spreadsheetId, "ss-b-id");
-    assert.equal(updatedReg["NEW_DISTRICT_B"].enabled, false, "New district must be registered as enabled: false (pre-acceptance)");
-
-    // TARGET_SPREADSHEET_ID が上書きされていないこと（既存値保護）
-    assert.equal(mockScriptProperties["TARGET_SPREADSHEET_ID"], "legacy-ss-id");
-
-    // 破損Registry下でのbootstrapEnvironment実行 ➔ Fail-Closed (mutation 0)
-    mockScriptProperties["DISTRICT_REGISTRY"] = "{invalid_json";
-    const corruptReq = {
-      postData: {
-        contents: JSON.stringify({
-          action: "bootstrapEnvironment",
-          districtId: "NEW_DISTRICT_B",
-          targetSpreadsheetId: "ss-b-id",
-          storageParentId: storageFolderB.id,
-          provisioningToken: validToken
-        })
-      }
-    };
-    const corruptRes = doPost(corruptReq);
-    const corruptData = JSON.parse(corruptRes.text);
-    assert.equal(corruptData.success, false, "bootstrapEnvironment must fail on corrupted registry");
-    assert.equal(corruptData.code, "CORRUPTED_REGISTRY");
-    assert.equal(mockScriptProperties["DISTRICT_REGISTRY"], "{invalid_json", "DISTRICT_REGISTRY must not be mutated on failure");
-    assert.equal(mockScriptProperties["TARGET_SPREADSHEET_ID"], "legacy-ss-id", "TARGET_SPREADSHEET_ID must not be mutated on failure");
-
-    // 空文字Registry下でのbootstrapEnvironment実行 ➔ Fail-Closed (mutation 0)
-    mockScriptProperties["DISTRICT_REGISTRY"] = "   ";
-    const emptyRes = doPost(corruptReq);
-    const emptyData = JSON.parse(emptyRes.text);
-    assert.equal(emptyData.success, false, "bootstrapEnvironment must fail on empty/whitespace registry");
-    assert.equal(emptyData.code, "CORRUPTED_REGISTRY");
-    assert.equal(mockScriptProperties["DISTRICT_REGISTRY"], "   ", "DISTRICT_REGISTRY must not be mutated on empty registry failure");
-    assert.equal(mockScriptProperties["TARGET_SPREADSHEET_ID"], "legacy-ss-id", "TARGET_SPREADSHEET_ID must not be mutated on empty registry failure");
-  } finally {
-    // 後続シナリオ（Scenario 13〜36）のために DISTRICT_REGISTRY に KUWANA, OKAYAMA, NEW_DISTRICT_B を復元設定
-    const fullReg = {
-      "KUWANA": "ss-kuwana-id",
-      "OKAYAMA": "ss-okayama-id",
-      "NEW_DISTRICT_B": { spreadsheetId: "ss-b-id", enabled: true }
-    };
-    mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(fullReg);
-    SpreadsheetResolver.getInstance().clearCache();
-  }
+  const res = doPost(req);
+  const data = JSON.parse(res.text);
+  assert.equal(data.success, false);
+  assert.match(data.message, /Invalid POST action/);
+  assert.equal(JSON.stringify(mockScriptProperties), snapProps, "ScriptProperties must have ZERO mutations");
 });
 
 // -----------------------------------------------------------------------------
 // TEST 13: SpreadsheetResolver: 重複 openById 排除検証 (同一実行内キャッシュ & clearCache)
 // -----------------------------------------------------------------------------
 runTest("Scenario 13: SpreadsheetResolver による重複 openById 呼出の排除とキャッシュ完全性", () => {
+  bindActiveDistrict("ss-kuwana-id");
   const resolver = SpreadsheetResolver.getInstance();
   resolver.clearCache();
 
@@ -1042,57 +959,60 @@ runTest("Scenario 14: Contract Cache (MISS ➔ HIT ➔ Invalidation サイクル
     ["契約終了日", "2026-10-31"]
   ];
 
-  // 1. 初期状態: キャッシュ空 (MISS)
-  mockCache.store.clear();
-  const status1 = sysInfoService.getContractStatus(null, testNow, "NEW_DISTRICT_B");
-  assert.equal(status1.status, 'ACTIVE');
-  assert.equal(status1.fromCache, undefined, "First call must be Cache MISS");
-  assert.equal(status1.endDate, '2026-10-31');
-  assert.ok(mockCache.get("CONTRACT_STATUS_NEW_DISTRICT_B"), "Cache must be populated after MISS");
+  bindActiveDistrict("ss-b-id");
+  try {
+    // 1. 初期状態: キャッシュ空 (MISS)
+    mockCache.store.clear();
+    const status1 = sysInfoService.getContractStatus(null, testNow, "NEW_DISTRICT_B");
+    assert.equal(status1.status, 'ACTIVE');
+    assert.equal(status1.fromCache, undefined, "First call must be Cache MISS");
+    assert.equal(status1.endDate, '2026-10-31');
+    assert.ok(mockCache.get("CONTRACT_STATUS_NEW_DISTRICT_B"), "Cache must be populated after MISS");
 
-  // 2. 2回目: Cache HIT
-  const status2 = sysInfoService.getContractStatus(null, testNow, "NEW_DISTRICT_B");
-  assert.equal(status2.status, 'ACTIVE');
-  assert.equal(status2.fromCache, true, "Second call must be Cache HIT");
-  assert.equal(status2.endDate, '2026-10-31');
+    // 2. 2回目: Cache HIT
+    const status2 = sysInfoService.getContractStatus(null, testNow, "NEW_DISTRICT_B");
+    assert.equal(status2.status, 'ACTIVE');
+    assert.equal(status2.fromCache, true, "Second call must be Cache HIT");
+    assert.equal(status2.endDate, '2026-10-31');
 
-  // 3. Direct-Read パスとの結果完全等価性検証 (fromCache 以外のプロパティが完全一致)
-  const directStatus = sysInfoService.getContractStatus(newBSysInfo, testNow, "NEW_DISTRICT_B");
-  assert.equal(status2.status, directStatus.status, "Cache path and direct-read status must match");
-  assert.equal(status2.isExpired, directStatus.isExpired, "Cache path and direct-read isExpired must match");
-  assert.equal(status2.endDate, directStatus.endDate, "Cache path and direct-read endDate must match");
-  assert.equal(status2.code, directStatus.code, "Cache path and direct-read code must match");
-  assert.equal(status2.today, directStatus.today, "Cache path and direct-read today must match");
+    // 3. Direct-Read パスとの結果完全等価性検証 (fromCache 以外のプロパティが完全一致)
+    const directStatus = sysInfoService.getContractStatus(newBSysInfo, testNow, "NEW_DISTRICT_B");
+    assert.equal(status2.status, directStatus.status, "Cache path and direct-read status must match");
+    assert.equal(status2.isExpired, directStatus.isExpired, "Cache path and direct-read isExpired must match");
+    assert.equal(status2.endDate, directStatus.endDate, "Cache path and direct-read endDate must match");
+    assert.equal(status2.code, directStatus.code, "Cache path and direct-read code must match");
+    assert.equal(status2.today, directStatus.today, "Cache path and direct-read today must match");
 
-  // 4. 契約終了日変更 ➔ Invalidation (ssNewB.getName() === "NEW_DISTRICT_B" のため完全無効化)
-  sysInfoService.setContractEndDate("2026-11-15", "NEW_DISTRICT_B");
-  assert.equal(mockCache.get("CONTRACT_STATUS_NEW_DISTRICT_B"), null, "Cache must be invalidated after setContractEndDate");
+    // 4. 契約終了日変更 ➔ Invalidation (ssNewB.getName() === "NEW_DISTRICT_B" のため完全無効化)
+    sysInfoService.setContractEndDate("2026-11-15", "NEW_DISTRICT_B");
+    assert.equal(mockCache.get("CONTRACT_STATUS_NEW_DISTRICT_B"), null, "Cache must be invalidated after setContractEndDate");
 
-  // 5. 変更後の次回呼出: 最新値取得 & Cache 再構築
-  const status3 = sysInfoService.getContractStatus(null, testNow, "NEW_DISTRICT_B");
-  assert.equal(status3.status, 'ACTIVE');
-  assert.equal(status3.fromCache, undefined, "First call after invalidation must be MISS");
-  assert.equal(status3.endDate, '2026-11-15', "Must reflect updated end date");
+    // 5. 変更後の次回呼出: 最新値取得 & Cache 再構築
+    const status3 = sysInfoService.getContractStatus(null, testNow, "NEW_DISTRICT_B");
+    assert.equal(status3.status, 'ACTIVE');
+    assert.equal(status3.fromCache, undefined, "First call after invalidation must be MISS");
+    assert.equal(status3.endDate, '2026-11-15', "Must reflect updated end date");
 
-  // 6. Fail-Closed: 取得不能・破損時の安全側遮断
-  mockCache.store.clear();
-  const corruptedSS = new MockSpreadsheet("ss-broken-contract-id", "BROKEN_CONTRACT");
-  mockSpreadsheets["ss-broken-contract-id"] = corruptedSS;
-  const currentReg = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-  currentReg["BROKEN_CONTRACT"] = "ss-broken-contract-id";
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(currentReg);
-  SpreadsheetResolver.getInstance().clearCache();
+    // 6. Fail-Closed: 取得不能・破損時の安全側遮断
+    mockCache.store.clear();
+    const corruptedSS = new MockSpreadsheet("ss-broken-contract-id", "BROKEN_CONTRACT");
+    mockSpreadsheets["ss-broken-contract-id"] = corruptedSS;
+    bindActiveDistrict("ss-broken-contract-id");
 
-  const failClosedStatus = sysInfoService.getContractStatus(null, testNow, "BROKEN_CONTRACT");
-  assert.equal(failClosedStatus.status, 'EXPIRED', "Must fail-closed to EXPIRED on error");
-  assert.equal(failClosedStatus.isExpired, true, "isExpired must be true on fail-closed");
-  assert.equal(failClosedStatus.code, 'CONTRACT_CHECK_FAILED', "Error code must indicate failure");
+    const failClosedStatus = sysInfoService.getContractStatus(null, testNow, "BROKEN_CONTRACT");
+    assert.equal(failClosedStatus.status, 'EXPIRED', "Must fail-closed to EXPIRED on error");
+    assert.equal(failClosedStatus.isExpired, true, "isExpired must be true on fail-closed");
+    assert.equal(failClosedStatus.code, 'CONTRACT_CHECK_FAILED', "Error code must indicate failure");
+  } finally {
+    bindActiveDistrict("ss-kuwana-id");
+  }
 });
 
 // -----------------------------------------------------------------------------
 // TEST 15: getRoster / fetchRankingData 等価性検証 (cachedRoster 有無の完全等価)
 // -----------------------------------------------------------------------------
 runTest("Scenario 15: getRoster / fetchRankingData による cachedRoster 最適化と計算完全等価性", () => {
+  bindActiveDistrict("ss-kuwana-id");
   const distRepo = DistributionRepository.getInstance();
   const staffService = StaffService.getInstance();
 
@@ -1138,15 +1058,13 @@ idTestStaff.rows = [
 ];
 mockSpreadsheets["ss-id-test-id"] = identityTestSS;
 
-const regBeforeTest = JSON.parse(PropertiesService.getScriptProperties().getProperty("DISTRICT_REGISTRY"));
-regBeforeTest["IDENTITY_TEST"] = "ss-id-test-id";
-PropertiesService.getScriptProperties().setProperty("DISTRICT_REGISTRY", JSON.stringify(regBeforeTest));
-SpreadsheetResolver.getInstance().clearCache();
+bindActiveDistrict("ss-id-test-id");
 
 // -----------------------------------------------------------------------------
 // TEST 16: 当月最初の LINE User ID ➔ S001 新規採番
 // -----------------------------------------------------------------------------
 runTest("Scenario 16: 当月最初の LINE User ID ➔ S001 新規採番 (Production経路)", () => {
+  bindActiveDistrict("ss-id-test-id");
   const initialRowCount = idTestStaff.rows.length;
   assert.equal(initialRowCount, 1, "Initial roster must contain only header row");
 
@@ -1180,6 +1098,7 @@ runTest("Scenario 16: 当月最初の LINE User ID ➔ S001 新規採番 (Produc
 // TEST 17: 次の別 LINE User ID ➔ S002 採番
 // -----------------------------------------------------------------------------
 runTest("Scenario 17: 次の別 LINE User ID ➔ S002 採番 (Production経路)", () => {
+  bindActiveDistrict("ss-id-test-id");
   const req = {
     postData: {
       contents: JSON.stringify({
@@ -1209,6 +1128,7 @@ runTest("Scenario 17: 次の別 LINE User ID ➔ S002 採番 (Production経路)"
 // TEST 18: S001本人がキャッシュ削除後に再ログイン ➔ 既存S001復元 & 新規行不作成
 // -----------------------------------------------------------------------------
 runTest("Scenario 18: S001本人がキャッシュ削除後に再ログイン ➔ LINE User ID照合で既存S001復元 & 新規行不作成", () => {
+  bindActiveDistrict("ss-id-test-id");
   const rowCountBefore = idTestStaff.rows.length;
 
   // H-App の端末キャッシュ空での初回起動シーケンス (getStaffIdentity)
@@ -1235,6 +1155,7 @@ runTest("Scenario 18: S001本人がキャッシュ削除後に再ログイン �
 // TEST 19: 同一 LINE User ID の再 registerStaff ➔ 二重登録防止 & 既存S001復元
 // -----------------------------------------------------------------------------
 runTest("Scenario 19: 同一 LINE User ID の再 registerStaff ➔ 二重登録防止 & 既存S001復元", () => {
+  bindActiveDistrict("ss-id-test-id");
   const rowCountBefore = idTestStaff.rows.length;
 
   const req = {
@@ -1266,37 +1187,43 @@ runTest("Scenario 20: districtId 指定地区以外の名簿を変更しない (
   const okayamaSnapshot = JSON.parse(JSON.stringify(okayamaStaff.rows));
   const idTestSnapshot = JSON.parse(JSON.stringify(idTestStaff.rows));
 
-  // OKAYAMA 地区宛てに新スタッフを登録
-  const req = {
-    postData: {
-      contents: JSON.stringify({
-        action: "registerStaff",
-        liffToken: "token_custom_okayama_user",
-        districtId: "OKAYAMA",
-        lastName: "岡山 新規",
-        firstName: "(LINE)"
-      })
-    }
-  };
-  const res = doPost(req);
-  const data = JSON.parse(res.text);
+  bindActiveDistrict("ss-okayama-id");
+  try {
+    // OKAYAMA 地区宛てに新スタッフを登録
+    const req = {
+      postData: {
+        contents: JSON.stringify({
+          action: "registerStaff",
+          liffToken: "token_custom_okayama_user",
+          districtId: "OKAYAMA",
+          lastName: "岡山 新規",
+          firstName: "(LINE)"
+        })
+      }
+    };
+    const res = doPost(req);
+    const data = JSON.parse(res.text);
 
-  assert.equal(data.success, true);
-  assert.equal(data.message, "new");
+    assert.equal(data.success, true);
+    assert.equal(data.message, "new");
 
-  // OKAYAMA だけが +1
-  assert.equal(okayamaStaff.rows.length, okayamaSnapshot.length + 1, "OKAYAMA roster must increment by 1");
-  assert.equal(okayamaStaff.rows[okayamaStaff.rows.length - 1][2], "U_CUSTOM_okayama_user");
+    // OKAYAMA だけが +1
+    assert.equal(okayamaStaff.rows.length, okayamaSnapshot.length + 1, "OKAYAMA roster must increment by 1");
+    assert.equal(okayamaStaff.rows[okayamaStaff.rows.length - 1][2], "U_CUSTOM_okayama_user");
 
-  // 他地区はセル値・行数を含め厳格に完全不変 (deepEqual)
-  assert.deepEqual(kuwanaStaff.rows, kuwanaSnapshot, "KUWANA roster must remain strictly unmodified (deepEqual)");
-  assert.deepEqual(idTestStaff.rows, idTestSnapshot, "IDENTITY_TEST roster must remain strictly unmodified (deepEqual)");
+    // 他地区はセル値・行数を含め厳格に完全不変 (deepEqual)
+    assert.deepEqual(kuwanaStaff.rows, kuwanaSnapshot, "KUWANA roster must remain strictly unmodified (deepEqual)");
+    assert.deepEqual(idTestStaff.rows, idTestSnapshot, "IDENTITY_TEST roster must remain strictly unmodified (deepEqual)");
+  } finally {
+    bindActiveDistrict("ss-id-test-id");
+  }
 });
 
 // -----------------------------------------------------------------------------
 // TEST 21: districtId 欠落時は Fail-Closed ＆ 全地区名簿完全不変 (mutation 0)
 // -----------------------------------------------------------------------------
 runTest("Scenario 21: districtId 欠落時は Fail-Closed ＆ 全地区名簿完全不変 (mutation 0)", () => {
+  bindActiveDistrict("ss-id-test-id");
   // 実行前の全対象地区名簿の全行Snapshotを取得
   const kuwanaSnapshot = JSON.parse(JSON.stringify(kuwanaStaff.rows));
   const okayamaSnapshot = JSON.parse(JSON.stringify(okayamaStaff.rows));
@@ -1329,6 +1256,7 @@ runTest("Scenario 21: districtId 欠落時は Fail-Closed ＆ 全地区名簿完
 // TEST 22: 翌月は前月 staffId を引き継がず S001 から新規採番 (Productionコード実経路 & 9月不変検証)
 // -----------------------------------------------------------------------------
 runTest("Scenario 22: 翌月は前月 staffId を引き継がず S001 から新規採番 (Productionコード実経路 & 9月不変検証)", () => {
+  bindActiveDistrict("ss-id-test-id");
   // 1. 翌月 2026-10 の空名簿シートを IDENTITY_TEST に用意
   const octStaff = identityTestSS.addSheet("名簿2026-10");
   octStaff.rows = [
@@ -1359,7 +1287,6 @@ runTest("Scenario 22: 翌月は前月 staffId を引き継がず S001 から新�
 
   try {
     // 3. 9月に S001 だった同じ LINE User ID (token_custom_user_1 / U_CUSTOM_user_1) を 10月に登録
-    // doPost ➔ processPostAction ➔ StaffService ➔ StaffRepository ➔ MonthlySheetResolver の Production 経路を通過
     const req = {
       postData: {
         contents: JSON.stringify({
@@ -1379,16 +1306,13 @@ runTest("Scenario 22: 翌月は前月 staffId を引き継がず S001 から新�
     assert.equal(data.id, "S001", "10月名簿では前月staffIdを引き継がずS001から新規採番されること");
     assert.equal(data.message, "new", "Must be marked as new registration for October");
 
-    // 10月名簿に 1行追加されていること (ヘッダー1行 + データ1行 = 2行)
     assert.equal(octStaff.rows.length, 2, "October roster must have exactly 1 new row appended");
     assert.equal(octStaff.rows[1][0], "S001");
     assert.equal(octStaff.rows[1][1], "テスト太郎（10月新任）");
     assert.equal(octStaff.rows[1][2], "U_CUSTOM_user_1");
 
-    // 9月名簿は完全不変であること
     assert.deepEqual(septStaff.rows, septSnapshot, "September roster must remain strictly unmodified (deepEqual)");
   } finally {
-    // 5. テスト終了後は時刻モック等を必ず復元
     global.Date = originalDate;
   }
 });
@@ -1397,8 +1321,7 @@ runTest("Scenario 22: 翌月は前月 staffId を引き継がず S001 から新�
 // TEST 23: Principal Override 防御 (認証A + Client偽装user B ➔ 最終操作主体はAに固定)
 // -----------------------------------------------------------------------------
 runTest("Scenario 23: Principal Override 防御 (認証A + Client偽装user B ➔ 最終操作主体はAに固定)", () => {
-  // 1. getStaffIdentity: 認証A (token_custom_user_1 / U_CUSTOM_user_1 / S001 テスト太郎)
-  //    Client入力 parameter.json.user = B (U_CUSTOM_user_2 / S002 テスト花子) を偽装送信
+  bindActiveDistrict("ss-id-test-id");
   const req1 = {
     parameter: {
       json: JSON.stringify({
@@ -1421,8 +1344,6 @@ runTest("Scenario 23: Principal Override 防御 (認証A + Client偽装user B �
   assert.equal(data1.staffId, "S001", "Client偽装 user B が送られても、認証A (S001) の Identity が返されること");
   assert.equal(data1.staffName, "テスト太郎", "Client偽装 user B が送られても、認証A (テスト太郎) の 名前が返されること");
 
-  // 2. updateFlyerStock: 認証A + parameter.json / contents にて user/staffId/staffName=B 偽装
-  //    MockSheet「保有チラシ枚数2026-09」への永続化結果が A であることを検証
   const flyerSheet = identityTestSS.addSheet("保有チラシ枚数2026-09");
   flyerSheet.rows = [
     ["ID", "配布員ID", "配布員名", "保管場所", "枚数", "更新日時", "LINE_USER_ID"]
@@ -1466,49 +1387,13 @@ runTest("Scenario 23: Principal Override 防御 (認証A + Client偽装user B �
 // TEST 24: District Context Propagation & Drive Isolation / Fail-Closed
 // -----------------------------------------------------------------------------
 runTest("Scenario 24: District Context Propagation & Drive Isolation / Fail-Closed (KUWANA写真→KUWANA folderのみ、OKAYAMA mutation 0、欠損Fail-Closed)", () => {
-  // 1. getStorageFolderId(districtId) 契約の全数検証
-  // 1-1. districtIdあり + DISTRICT_REGISTRYあり → 地区別 storageFolderId を厳格解決
-  PropertiesService.getScriptProperties().setProperty("DISTRICT_REGISTRY", JSON.stringify({
-    "KUWANA": { spreadsheetId: "ss-kuwana-id", storageFolderId: "folder_kuwana_id", enabled: true },
-    "OKAYAMA": { spreadsheetId: "ss-okayama-id", storageFolderId: "folder_okayama_id", enabled: true },
-    "DISABLED_DIST": { spreadsheetId: "ss-disabled-id", storageFolderId: "folder_disabled_id", enabled: false },
-    "NO_FOLDER_DIST": { spreadsheetId: "ss-no-folder-id", storageFolderId: "", enabled: true },
-    "IDENTITY_TEST": { spreadsheetId: "ss-id-test-id", storageFolderId: "folder_id_test_id", enabled: true }
-  }));
-  PropertiesService.getScriptProperties().setProperty("STORAGE_PARENT_ID", "legacy_global_folder_id");
-
-  // 正常解決
-  assert.equal(getStorageFolderId("KUWANA"), "folder_kuwana_id", "KUWANA folder must resolve strictly to folder_kuwana_id");
-  assert.equal(getStorageFolderId("OKAYAMA"), "folder_okayama_id", "OKAYAMA folder must resolve strictly to folder_okayama_id");
-
-  // Fail-Closed 検証 (global fallback 禁止)
-  assert.throws(() => getStorageFolderId("UNKNOWN_DIST"), /not found in DISTRICT_REGISTRY/, "Unknown district must throw (no fallback)");
-  assert.throws(() => getStorageFolderId("DISABLED_DIST"), /disabled in DISTRICT_REGISTRY/, "Disabled district must throw (no fallback)");
-  assert.throws(() => getStorageFolderId("NO_FOLDER_DIST"), /storageFolderId is missing/, "Missing folderId must throw (no fallback)");
-
-  // Registry JSON 破損時の Fail-Closed
-  PropertiesService.getScriptProperties().setProperty("DISTRICT_REGISTRY", "{ corrupted json");
-  assert.throws(() => getStorageFolderId("KUWANA"), /DISTRICT_REGISTRY is corrupted/, "Corrupted registry must throw (no fallback)");
-
-  // 1-2. districtIdあり + DISTRICT_REGISTRYなし (null) → 旧単一地区互換として STORAGE_PARENT_ID fallback
-  delete mockScriptProperties["DISTRICT_REGISTRY"];
-  assert.equal(getStorageFolderId("KUWANA"), "legacy_global_folder_id", "Legacy single district must fallback to STORAGE_PARENT_ID when registry missing");
-
-  // 1-3. districtIdなし + DISTRICT_REGISTRYなし (null) → 既存Scheduler互換として STORAGE_PARENT_ID を維持
-  assert.equal(getStorageFolderId(""), "legacy_global_folder_id", "District-less call must resolve to STORAGE_PARENT_ID in legacy mode");
-  assert.equal(getStorageFolderId(null), "legacy_global_folder_id", "Null district call must resolve to STORAGE_PARENT_ID in legacy mode");
+  // 1. getStorageFolderId(districtId) 契約の検証 (1地区専用 STORAGE_PARENT_ID)
+  PropertiesService.getScriptProperties().setProperty("STORAGE_PARENT_ID", "folder_kuwana_id");
+  assert.equal(getStorageFolderId("KUWANA"), "folder_kuwana_id", "KUWANA folder must resolve strictly to STORAGE_PARENT_ID");
+  assert.equal(getStorageFolderId(""), "folder_kuwana_id", "District-less call must resolve to STORAGE_PARENT_ID");
+  assert.equal(getStorageFolderId(null), "folder_kuwana_id", "Null district call must resolve to STORAGE_PARENT_ID");
 
   // 2. 実経路検証: updateRecordWithGPSPhoto 経由の Drive Isolation & DB Isolation
-  // レジストリを正常状態に再設定
-  PropertiesService.getScriptProperties().setProperty("DISTRICT_REGISTRY", JSON.stringify({
-    "KUWANA": { spreadsheetId: "ss-kuwana-id", storageFolderId: "folder_kuwana_id", enabled: true },
-    "OKAYAMA": { spreadsheetId: "ss-okayama-id", storageFolderId: "folder_okayama_id", enabled: true },
-    "NO_FOLDER_DIST": { spreadsheetId: "ss-no-folder-id", storageFolderId: "", enabled: true },
-    "IDENTITY_TEST": { spreadsheetId: "ss-id-test-id", storageFolderId: "folder_id_test_id", enabled: true }
-  }));
-  SpreadsheetResolver.getInstance().clearCache();
-
-  // NO_FOLDER_DIST 用のモックスプレッドシート作成
   const noFolderSS = new MockSpreadsheet("ss-no-folder-id", "POSTING_MAP_NO_FOLDER");
   const noFolderSysInfo = noFolderSS.addSheet("SYSTEM_INFO");
   noFolderSysInfo.rows = [
@@ -1530,7 +1415,6 @@ runTest("Scenario 24: District Context Propagation & Drive Isolation / Fail-Clos
   ];
   mockSpreadsheets["ss-no-folder-id"] = noFolderSS;
 
-  // 各フォルダの初期化
   mockDriveFolders["folder_kuwana_id"] = createMockDriveFolderObj("folder_kuwana_id");
   mockDriveFolders["folder_okayama_id"] = createMockDriveFolderObj("folder_okayama_id");
   mockDriveFolders["legacy_global_folder_id"] = createMockDriveFolderObj("legacy_global_folder_id");
@@ -1538,14 +1422,13 @@ runTest("Scenario 24: District Context Propagation & Drive Isolation / Fail-Clos
     mockDriveFolders["folder_disabled_id"] = createMockDriveFolderObj("folder_disabled_id");
   }
 
-  // 全Snapshot取得
   const okayamaDistSnapshot = JSON.parse(JSON.stringify(okayamaDist.rows));
   const okayamaStaffSnapshot = JSON.parse(JSON.stringify(okayamaStaff.rows));
 
-  // 桑名に未完了行 rowId 2 を追加
   kuwanaDist.rows.push(["2", "桑名市", "中央町2", "", 0, "", "", "", "", "", "", "", "", "", "", ""]);
 
   // 2-1. KUWANA 写真アップロードの実行
+  bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
   const kuwanaGpsReq = {
     postData: {
       contents: JSON.stringify({
@@ -1569,16 +1452,13 @@ runTest("Scenario 24: District Context Propagation & Drive Isolation / Fail-Clos
   assert.equal(kuwanaData.success, true, "KUWANA updateRecordWithGPSPhoto must succeed");
   assert.equal(kuwanaData.photoStatus, "OK", "Photo upload must succeed for KUWANA");
 
-  // Drive 隔離検証:
   assert.equal(mockDriveFolders["folder_kuwana_id"].files.length, 1, "KUWANA folder must receive exactly 1 file");
   assert.equal(mockDriveFolders["folder_okayama_id"].files.length, 0, "OKAYAMA folder mutation must be ZERO (Drive isolation)");
   assert.equal(mockDriveFolders["legacy_global_folder_id"].files.length, 0, "Global legacy folder mutation must be ZERO");
 
-  // DB 隔離検証:
   assert.deepEqual(okayamaDist.rows, okayamaDistSnapshot, "OKAYAMA distribution sheet must have ZERO mutations");
   assert.deepEqual(okayamaStaff.rows, okayamaStaffSnapshot, "OKAYAMA staff sheet must have ZERO mutations");
 
-  // 桑名の実績行が更新されていること
   assert.equal(kuwanaDist.rows[2][3], "2026/09/20 12:00:00", "completedAt updated");
   assert.equal(kuwanaDist.rows[2][4], 120, "count updated to 120");
   assert.equal(kuwanaDist.rows[2][5], "K001", "staffId is K001");
@@ -1586,59 +1466,59 @@ runTest("Scenario 24: District Context Propagation & Drive Isolation / Fail-Clos
   assert.equal(kuwanaDist.rows[2][8], "OK", "photoStatus is OK");
   assert.equal(kuwanaDist.rows[2][15], "U_KUWANA_001", "lineUserId is U_KUWANA_001");
 
-  // 2-2. storageFolderId 欠損地区の写真アップロード (Drive Fail-Closed & 業務継続実証)
+  // 2-2. STORAGE_PARENT_ID 欠損時の写真アップロード (Drive Fail-Closed & 業務継続実証)
   const noFolderFilesBefore = {
     kuwana: mockDriveFolders["folder_kuwana_id"].files.length,
     okayama: mockDriveFolders["folder_okayama_id"].files.length,
     global: mockDriveFolders["legacy_global_folder_id"].files.length
   };
 
-  const noFolderReq = {
-    postData: {
-      contents: JSON.stringify({
-        action: "updateRecordWithGPSPhoto",
-        liffToken: "token_custom_nofolder_user",
-        districtId: "NO_FOLDER_DIST",
-        rowId: 1,
-        lat: 35.10,
-        lng: 136.70,
-        gpsStatus: "OK",
-        count: 80,
-        isDone: true,
-        photoData: "data:image/jpeg;base64," + Buffer.from("fake_no_folder_photo").toString("base64")
-      })
-    }
-  };
+  bindActiveDistrict("ss-no-folder-id", "");
+  try {
+    const noFolderReq = {
+      postData: {
+        contents: JSON.stringify({
+          action: "updateRecordWithGPSPhoto",
+          liffToken: "token_custom_nofolder_user",
+          districtId: "NO_FOLDER_DIST",
+          rowId: 1,
+          lat: 35.10,
+          lng: 136.70,
+          gpsStatus: "OK",
+          count: 80,
+          isDone: true,
+          photoData: "data:image/jpeg;base64," + Buffer.from("fake_no_folder_photo").toString("base64")
+        })
+      }
+    };
 
-  const noFolderRes = doPost(noFolderReq);
-  const noFolderData = JSON.parse(noFolderRes.text);
+    const noFolderRes = doPost(noFolderReq);
+    const noFolderData = JSON.parse(noFolderRes.text);
 
-  // 業務継続仕様: 写真保存失敗時もスプレッドシート実績行は保存される
-  assert.equal(noFolderData.success, true, "Spreadsheet update must succeed despite Drive fail-closed (business continuity)");
-  assert.equal(noFolderData.photoStatus, "NO", "photoStatus must be NO when storageFolderId missing (fail-closed)");
+    assert.equal(noFolderData.success, true, "Spreadsheet update must succeed despite Drive fail-closed (business continuity)");
+    assert.equal(noFolderData.photoStatus, "NO", "photoStatus must be NO when storageFolderId missing (fail-closed)");
 
-  // 全フォルダに対する mutation 0 (wrong-folder write 0)
-  assert.equal(mockDriveFolders["folder_kuwana_id"].files.length, noFolderFilesBefore.kuwana, "KUWANA folder must have ZERO mutation on missing folder");
-  assert.equal(mockDriveFolders["folder_okayama_id"].files.length, noFolderFilesBefore.okayama, "OKAYAMA folder must have ZERO mutation on missing folder");
-  assert.equal(mockDriveFolders["legacy_global_folder_id"].files.length, noFolderFilesBefore.global, "Global folder must have ZERO mutation on missing folder (no fallback)");
+    assert.equal(mockDriveFolders["folder_kuwana_id"].files.length, noFolderFilesBefore.kuwana, "KUWANA folder must have ZERO mutation on missing folder");
+    assert.equal(mockDriveFolders["folder_okayama_id"].files.length, noFolderFilesBefore.okayama, "OKAYAMA folder must have ZERO mutation on missing folder");
+    assert.equal(mockDriveFolders["legacy_global_folder_id"].files.length, noFolderFilesBefore.global, "Global folder must have ZERO mutation on missing folder");
 
-  // NO_FOLDER_DIST の実績行は正常に保存されていること
-  assert.equal(noFolderDist.rows[1][4], 80, "count updated to 80");
-  assert.equal(noFolderDist.rows[1][8], "NO", "photoStatus in sheet must be NO");
+    assert.equal(noFolderDist.rows[1][4], 80, "count updated to 80");
+    assert.equal(noFolderDist.rows[1][8], "NO", "photoStatus in sheet must be NO");
+  } finally {
+    bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
+  }
 });
 
 // -----------------------------------------------------------------------------
-// TEST 25: Provisioning Blast Radius 固定 ＆ 月次 rollover 全有効地区実行・片肺障害隔離
+// TEST 25: Provisioning Blast Radius 固定 ＆ 月次 rollover 1地区実行・破損時 Fail-Closed
 // -----------------------------------------------------------------------------
-runTest("Scenario 25: Provisioning Blast Radius 固定 ＆ 月次 rollover 全有効地区実行・片肺障害隔離", () => {
+runTest("Scenario 25: Provisioning Blast Radius 固定 ＆ 月次 rollover 1地区実行・破損時 Fail-Closed", () => {
   const resolver = SpreadsheetResolver.getInstance();
   resolver.clearCache();
 
-  // 1. テスト用スプレッドシート初期化
   const ssKuwana = mockSpreadsheets["ss-kuwana-id"];
   const ssOkayama = mockSpreadsheets["ss-okayama-id"];
 
-  // 原本5種を準備
   const masterNames = ["配布実績の原本", "名簿の原本", "保有チラシ枚数の原本", "受渡要請履歴の原本", "PinStatusの原本"];
   masterNames.forEach(mName => {
     if (!ssKuwana.getSheetByName(mName)) {
@@ -1653,14 +1533,12 @@ runTest("Scenario 25: Provisioning Blast Radius 固定 ＆ 月次 rollover 全�
     }
   });
 
-  // 当月 5 シートを準備 (5/5 整合状態)
   const currentMonthSheets = ["配布実績2026-09", "名簿2026-09", "保有チラシ枚数2026-09", "受渡要請履歴2026-09", "PinStatus2026-09"];
   currentMonthSheets.forEach(name => {
     if (!ssKuwana.getSheetByName(name)) ssKuwana.addSheet(name);
     if (!ssOkayama.getSheetByName(name)) ssOkayama.addSheet(name);
   });
 
-  // 当月 PinStatus に IN_PROGRESS データをセット
   const kuwanaPin = ssKuwana.getSheetByName("PinStatus2026-09");
   kuwanaPin.rows = [["rowId", "status"], ["row1", "IN_PROGRESS"], ["row2", "IN_PROGRESS"]];
 
@@ -1669,6 +1547,7 @@ runTest("Scenario 25: Provisioning Blast Radius 固定 ＆ 月次 rollover 全�
   const okayamaPinSnapshot = JSON.parse(JSON.stringify(okayamaPin.rows));
 
   // 1-1. KUWANA のみ Provision 実行 ➔ OKAYAMA の PinStatus は完全不変 (mutation 0) を実証
+  bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
   const sampleAddresses = [{ rowId: 1, cityName: "桑名市", townName: "大山田" }];
   const provResult = DistrictProvisioner.getInstance().provisionNewDistrict(
     sampleAddresses,
@@ -1677,12 +1556,10 @@ runTest("Scenario 25: Provisioning Blast Radius 固定 ＆ 月次 rollover 全�
   );
   assert.equal(provResult.success, true, "provisionNewDistrict for KUWANA must succeed");
 
-  // KUWANA の PinStatus はクリアされヘッダーのみ残存
   assert.equal(kuwanaPin.rows.length, 1, "KUWANA PinStatus data rows must be cleared");
-  // OKAYAMA の PinStatus は完全不変 (mutation 0)
   assert.deepEqual(okayamaPin.rows, okayamaPinSnapshot, "OKAYAMA PinStatus must have ZERO mutations when provisioning KUWANA (Blast Radius fixed)");
 
-  // 1-2. disabled 新地区 (NEW_DIST_DISABLED, enabled: false) のプロビジョニング検証
+  // 1-2. 新地区 (NEW_DIST_DISABLED) のプロビジョニング検証
   const ssDisabledNew = new MockSpreadsheet("ss-disabled-new-id", "POSTING_MAP_NEW_DIST_DISABLED");
   mockSpreadsheets["ss-disabled-new-id"] = ssDisabledNew;
   const disabledProvResult = DistrictProvisioner.getInstance().provisionNewDistrict(
@@ -1696,44 +1573,20 @@ runTest("Scenario 25: Provisioning Blast Radius 固定 ＆ 月次 rollover 全�
     },
     "NEW_DIST_DISABLED"
   );
-  assert.equal(disabledProvResult.success, true, "provisionNewDistrict must succeed for disabled new district via explicit targetSpreadsheetId");
-  assert.ok(ssDisabledNew.getSheetByName("SYSTEM_INFO"), "SYSTEM_INFO must be created in disabled district");
-  assert.ok(ssDisabledNew.getSheetByName("配布実績2026-09"), "Operational dataset sheet must be created in disabled district");
+  assert.equal(disabledProvResult.success, true, "provisionNewDistrict must succeed for new district via explicit targetSpreadsheetId");
+  assert.ok(ssDisabledNew.getSheetByName("SYSTEM_INFO"), "SYSTEM_INFO must be created in new district");
+  assert.ok(ssDisabledNew.getSheetByName("配布実績2026-09"), "Operational dataset sheet must be created in new district");
 
-  // 1-3. 月次 rollover 全有効地区実行 (rolloverMonthlySheetsDailyCheck)
-  // DISTRICT_REGISTRY: KUWANA enabled, OKAYAMA enabled, DISABLED_DIST disabled
-  const registryFixture = {
-    "KUWANA": { spreadsheetId: "ss-kuwana-id", storageFolderId: "folder_kuwana_id", enabled: true },
-    "OKAYAMA": { spreadsheetId: "ss-okayama-id", storageFolderId: "folder_okayama_id", enabled: true },
-    "DISABLED_DIST": { spreadsheetId: "ss-disabled-id", storageFolderId: "folder_disabled_id", enabled: false }
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(registryFixture);
-  resolver.clearCache();
-
-  // DISABLED_DIST のスプレッドシート
-  const ssDisabled = new MockSpreadsheet("ss-disabled-id", "POSTING_MAP_DISABLED_DIST");
-  mockSpreadsheets["ss-disabled-id"] = ssDisabled;
-  masterNames.forEach(m => {
-    const s = ssDisabled.addSheet(m);
-    s.appendRow(["h1", "h2"]);
-  });
-
-  // 日次トリガー実行
+  // 1-3. 月次 rollover 1地区実行 (rolloverMonthlySheetsDailyCheck)
+  bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
   rolloverMonthlySheetsDailyCheck();
 
-  // KUWANA と OKAYAMA に当月 5 シートが存在すること
   const checkTypes = ["配布実績2026-09", "名簿2026-09", "保有チラシ枚数2026-09", "受渡要請履歴2026-09", "PinStatus2026-09"];
   checkTypes.forEach(sheetName => {
     assert.ok(ssKuwana.getSheetByName(sheetName), `KUWANA must have ${sheetName}`);
-    assert.ok(ssOkayama.getSheetByName(sheetName), `OKAYAMA must have ${sheetName}`);
   });
 
-  // DISABLED_DIST には作成されないこと (mutation 0)
-  checkTypes.forEach(sheetName => {
-    assert.equal(ssDisabled.getSheetByName(sheetName), null, `DISABLED_DIST must NOT have ${sheetName} (mutation 0)`);
-  });
-
-  // 1-4. 片肺障害隔離検証: CORRUPT_DIST (3/5 破損) と OKAYAMA (0/5)
+  // 1-4. 部分破損時の Fail-Closed 検証: CORRUPT_DIST (3/5 破損)
   const ssCorrupt = new MockSpreadsheet("ss-corrupt-id", "POSTING_MAP_CORRUPT_DIST");
   mockSpreadsheets["ss-corrupt-id"] = ssCorrupt;
   const corruptSys = ssCorrupt.addSheet("SYSTEM_INFO");
@@ -1742,34 +1595,27 @@ runTest("Scenario 25: Provisioning Blast Radius 固定 ＆ 月次 rollover 全�
     const s = ssCorrupt.addSheet(m);
     s.appendRow(["h1", "h2"]);
   });
-  // 3シートのみ作成 (破損状態)
   ssCorrupt.addSheet("配布実績2026-09");
   ssCorrupt.addSheet("名簿2026-09");
   ssCorrupt.addSheet("保有チラシ枚数2026-09");
   const corruptSheetsCountBefore = ssCorrupt.getSheets().length;
 
-  const corruptReg = {
-    "CORRUPT_DIST": { spreadsheetId: "ss-corrupt-id", storageFolderId: "folder_corrupt_id", enabled: true },
-    "OKAYAMA": { spreadsheetId: "ss-okayama-id", storageFolderId: "folder_okayama_id", enabled: true }
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(corruptReg);
-  resolver.clearCache();
-
-  // 実行: CORRUPT_DIST は Fail-Closed、OKAYAMA は継続実行
-  rolloverMonthlySheetsDailyCheck();
-
-  // CORRUPT_DIST は一切変更されていないこと (mutation 0)
-  assert.equal(ssCorrupt.getSheets().length, corruptSheetsCountBefore, "CORRUPT_DIST must have ZERO mutations on partial corruption");
-  assert.equal(ssCorrupt.getSheetByName("受渡要請履歴2026-09"), null, "Missing sheet must not be created (fail-closed)");
+  bindActiveDistrict("ss-corrupt-id");
+  try {
+    rolloverMonthlySheetsDailyCheck();
+    assert.equal(ssCorrupt.getSheets().length, corruptSheetsCountBefore, "CORRUPT_DIST must have ZERO mutations on partial corruption");
+    assert.equal(ssCorrupt.getSheetByName("受渡要請履歴2026-09"), null, "Missing sheet must not be created (fail-closed)");
+  } finally {
+    bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
+  }
 });
 
 // -----------------------------------------------------------------------------
-// TEST 26: PinStatus cleanup の全地区 Trigger 実行と地区分離
+// TEST 26: PinStatus cleanup の 1地区 Trigger 実行と他地区不可侵
 // -----------------------------------------------------------------------------
-runTest("Scenario 26: PinStatus cleanup の全地区 Trigger 実行と地区分離", () => {
+runTest("Scenario 26: PinStatus cleanup の 1地区 Trigger 実行と他地区不可侵", () => {
   const ssKuwana = mockSpreadsheets["ss-kuwana-id"];
   const ssOkayama = mockSpreadsheets["ss-okayama-id"];
-  const ssDisabled = mockSpreadsheets["ss-disabled-id"] || (mockSpreadsheets["ss-disabled-id"] = new MockSpreadsheet("ss-disabled-id", "POSTING_MAP_DISABLED_DIST"));
 
   const pinKuwana = ssKuwana.getSheetByName("PinStatus2026-09");
   pinKuwana.rows = [["rowId", "status"], ["k1", "IN_PROGRESS"], ["k2", "IN_PROGRESS"]];
@@ -1777,49 +1623,33 @@ runTest("Scenario 26: PinStatus cleanup の全地区 Trigger 実行と地区分�
   const pinOkayama = ssOkayama.getSheetByName("PinStatus2026-09");
   pinOkayama.rows = [["rowId", "status"], ["o1", "IN_PROGRESS"], ["o2", "IN_PROGRESS"], ["o3", "IN_PROGRESS"]];
 
-  const pinDisabled = ssDisabled.addSheet("PinStatus2026-09");
-  pinDisabled.rows = [["rowId", "status"], ["d1", "IN_PROGRESS"]];
-
-  // 配布実績シートの行数 snapshot
   const distKuwana = ssKuwana.getSheetByName("配布実績2026-09");
   const distKuwanaRowsBefore = distKuwana ? distKuwana.rows.length : 0;
 
-  const reg = {
-    "KUWANA": { spreadsheetId: "ss-kuwana-id", storageFolderId: "folder_kuwana_id", enabled: true },
-    "OKAYAMA": { spreadsheetId: "ss-okayama-id", storageFolderId: "folder_okayama_id", enabled: true },
-    "DISABLED_DIST": { spreadsheetId: "ss-disabled-id", storageFolderId: "folder_disabled_id", enabled: false }
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(reg);
-  SpreadsheetResolver.getInstance().clearCache();
+  bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
 
-  // Trigger 実行
+  // Trigger 実行 (KUWANA 専用)
   cleanupPinStatusDaily();
 
-  // KUWANA / OKAYAMA の PinStatus データ行が削除され、ヘッダーのみ残存
   assert.equal(pinKuwana.rows.length, 1, "KUWANA PinStatus data rows cleared");
   assert.deepEqual(pinKuwana.rows[0], ["rowId", "status"], "KUWANA PinStatus header preserved");
-
-  assert.equal(pinOkayama.rows.length, 1, "OKAYAMA PinStatus data rows cleared");
-  assert.deepEqual(pinOkayama.rows[0], ["rowId", "status"], "OKAYAMA PinStatus header preserved");
 
   // 配布実績シートには一切触れていないこと (完全不可侵)
   if (distKuwana) {
     assert.equal(distKuwana.rows.length, distKuwanaRowsBefore, "Distribution sheet rows must not be touched");
   }
 
-  // DISABLED_DIST は除外され変更なし (mutation 0)
-  assert.equal(pinDisabled.rows.length, 2, "DISABLED_DIST PinStatus must NOT be cleared (mutation 0)");
+  // 他地区 (OKAYAMA) は別インスタンスのため変更なし (mutation 0)
+  assert.equal(pinOkayama.rows.length, 4, "Other district PinStatus must NOT be cleared by KUWANA trigger");
 });
 
 // -----------------------------------------------------------------------------
-// TEST 27: Drive cleanup の地区分離と mutation 0 保証
+// TEST 27: Drive cleanup の 1地区分離と mutation 0 保証
 // -----------------------------------------------------------------------------
-runTest("Scenario 27: Drive cleanup の地区分離と mutation 0 保証", () => {
+runTest("Scenario 27: Drive cleanup の 1地区分離と mutation 0 保証", () => {
   const folderKuwana = DriveApp.getFolderById("folder_kuwana_id");
   const folderOkayama = DriveApp.getFolderById("folder_okayama_id");
-  const folderDisabled = DriveApp.getFolderById("folder_disabled_id");
 
-  // ファイル配置: 35日前の写真 (古い)
   const oldDate = new Date(Date.now() - 35 * 24 * 60 * 60 * 1000);
   const freshDate = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
 
@@ -1831,104 +1661,41 @@ runTest("Scenario 27: Drive cleanup の地区分離と mutation 0 保証", () =>
   const fOkayamaOld = folderOkayama.createFile({ getName: () => "o_old.jpg" });
   fOkayamaOld.created = oldDate;
 
-  const fDisabledOld = folderDisabled.createFile({ getName: () => "d_old.jpg" });
-  fDisabledOld.created = oldDate;
+  bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
 
-  const reg = {
-    "KUWANA": { spreadsheetId: "ss-kuwana-id", storageFolderId: "folder_kuwana_id", enabled: true },
-    "OKAYAMA": { spreadsheetId: "ss-okayama-id", storageFolderId: "folder_okayama_id", enabled: true },
-    "DISABLED_DIST": { spreadsheetId: "ss-disabled-id", storageFolderId: "folder_disabled_id", enabled: false }
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(reg);
-
-  // cleanupOldPhotosBatch 実行
+  // cleanupOldPhotosBatch 実行 (KUWANA 専用フォルダのみ対象)
   cleanupOldPhotosBatch();
 
-  // KUWANA の古い写真のみ trashed
   assert.equal(fKuwanaOld.isTrashed(), true, "KUWANA old photo must be trashed");
   assert.equal(fKuwanaFresh.isTrashed(), false, "KUWANA fresh photo must not be trashed");
-
-  // OKAYAMA の古い写真のみ trashed
-  assert.equal(fOkayamaOld.isTrashed(), true, "OKAYAMA old photo must be trashed");
-
-  // DISABLED_DIST は処理されずゴミ箱に入らない (mutation 0)
-  assert.equal(fDisabledOld.isTrashed(), false, "DISABLED_DIST photo must NOT be trashed (mutation 0)");
+  assert.equal(fOkayamaOld.isTrashed(), false, "Other district photo must NOT be trashed (mutation 0)");
 });
 
 // -----------------------------------------------------------------------------
-// TEST 28: getStorageFolderId() の空 districtId Fail-Closed & 存在判定統一
+// TEST 28: getStorageFolderId() の STORAGE_PARENT_ID 解決 & DISTRICT_REGISTRY 無視検証
 // -----------------------------------------------------------------------------
-runTest("Scenario 28: getStorageFolderId() の空 districtId Fail-Closed & 存在判定統一", () => {
-  const reg = {
-    "KUWANA": { spreadsheetId: "ss-kuwana-id", storageFolderId: "folder_kuwana_id", enabled: true }
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(reg);
-
-  // 1. DISTRICT_REGISTRY 設定時に空 districtId ➔ 例外スロー (global fallback 禁止)
-  assert.throws(() => {
-    getStorageFolderId("");
-  }, /districtId is required for multi-district drive resolution/, "Empty districtId must throw when registry configured");
-
-  // 2. DISTRICT_REGISTRY が空文字 ➔ configured-corrupt (例外スロー)
-  mockScriptProperties["DISTRICT_REGISTRY"] = "   ";
-  assert.throws(() => {
-    getStorageFolderId("KUWANA");
-  }, /DISTRICT_REGISTRY is configured but empty/, "Whitespace registry must throw corrupted");
-
-  // 3. DISTRICT_REGISTRY 未設定 (null) ➔ STORAGE_PARENT_ID fallback
-  delete mockScriptProperties["DISTRICT_REGISTRY"];
-  mockScriptProperties["STORAGE_PARENT_ID"] = "fallback_folder_id";
-  const fallbackId = getStorageFolderId("");
-  assert.equal(fallbackId, "fallback_folder_id", "null registry must fallback to STORAGE_PARENT_ID");
+runTest("Scenario 28: getStorageFolderId() の STORAGE_PARENT_ID 解決 & DISTRICT_REGISTRY 無視検証", () => {
+  mockScriptProperties["STORAGE_PARENT_ID"] = "single_district_storage_folder_id";
+  assert.equal(getStorageFolderId(""), "single_district_storage_folder_id");
+  assert.equal(getStorageFolderId("KUWANA"), "single_district_storage_folder_id");
+  mockScriptProperties["STORAGE_PARENT_ID"] = "folder_kuwana_id";
 });
 
 // -----------------------------------------------------------------------------
-// TEST 29: getEnabledDistricts() の厳格状態区分 & Registry 破損時の Fail-Closed
+// TEST 29: SpreadsheetResolver からの getEnabledDistricts 撤去確認 (1地区閉塞契約)
 // -----------------------------------------------------------------------------
-runTest("Scenario 29: getEnabledDistricts() の厳格状態区分 & Registry 破損時の Fail-Closed", () => {
+runTest("Scenario 29: SpreadsheetResolver からの getEnabledDistricts 撤去確認 (1地区閉塞契約)", () => {
   const resolver = SpreadsheetResolver.getInstance();
-
-  // 1. 未設定 (null) ➔ null
-  delete mockScriptProperties["DISTRICT_REGISTRY"];
-  assert.equal(resolver.getEnabledDistricts(), null, "Unconfigured registry must return null (Legacy)");
-
-  // 2. 空文字 ➔ 例外スロー
-  mockScriptProperties["DISTRICT_REGISTRY"] = "";
-  assert.throws(() => {
-    resolver.getEnabledDistricts();
-  }, /DISTRICT_REGISTRY is configured but empty/, "Empty string registry must throw");
-
-  // 3. 設定済みだが有効地区 0 件 ({}) ➔ []
-  mockScriptProperties["DISTRICT_REGISTRY"] = "{}";
-  assert.deepEqual(resolver.getEnabledDistricts(), [], "Empty object registry must return []");
-
-  // 4. 全地区 disabled ➔ []
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify({
-    "DIST_A": { spreadsheetId: "ss-a", enabled: false },
-    "DIST_B": { spreadsheetId: "ss-b", enabled: false }
-  });
-  assert.deepEqual(resolver.getEnabledDistricts(), [], "All-disabled registry must return []");
-
-  // 5. 破損 JSON ➔ 例外スロー
-  mockScriptProperties["DISTRICT_REGISTRY"] = "{bad_json";
-  assert.throws(() => {
-    resolver.getEnabledDistricts();
-  }, /DISTRICT_REGISTRY is corrupted/, "Corrupted JSON registry must throw");
+  assert.equal(typeof resolver.getEnabledDistricts, "undefined", "getEnabledDistricts must be retired in 1-district mode");
 });
 
 // -----------------------------------------------------------------------------
 // TEST 30: setupRosterSheet(districtId) および v2_api Provisioning 経路の明示的伝播
 // -----------------------------------------------------------------------------
 runTest("Scenario 30: setupRosterSheet(districtId) および v2_api Provisioning 経路の明示的伝播", () => {
-  const reg = {
-    "KUWANA": { spreadsheetId: "ss-kuwana-id", storageFolderId: "folder_kuwana_id", enabled: true },
-    "OKAYAMA": { spreadsheetId: "ss-okayama-id", storageFolderId: "folder_okayama_id", enabled: true }
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(reg);
-  SpreadsheetResolver.getInstance().clearCache();
+  bindActiveDistrict("ss-okayama-id", "folder_okayama_id");
 
   // 1. resetRoster アクションの特権認証 & districtId 伝播
-  // 1a. 一般Staff liffToken のみ => 拒絶 (UNAUTHORIZED)
   const staffResetReq = {
     postData: {
       contents: JSON.stringify({
@@ -1943,7 +1710,6 @@ runTest("Scenario 30: setupRosterSheet(districtId) および v2_api Provisioning
   assert.equal(staffResetData.success, false, "resetRoster without provisioningToken must be rejected");
   assert.equal(staffResetData.code, "UNAUTHORIZED");
 
-  // 1b. 有効な provisioningToken 付与 => 成功 & OKAYAMA ロスター再作成
   const privResetReq = {
     postData: {
       contents: JSON.stringify({
@@ -1958,7 +1724,7 @@ runTest("Scenario 30: setupRosterSheet(districtId) および v2_api Provisioning
   assert.equal(privResetData.success, true, "resetRoster with valid provisioningToken for OKAYAMA must succeed");
 
   // 2. syncSystemInfo の POST 専用性 & districtId 伝播
-  // テスト側 KUWANA SYSTEM_INFO fixture に事前設定 (新契約: HアプリURL Authority & 運用モード保証)
+  bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
   const kSS = mockSpreadsheets["ss-kuwana-id"];
   let kSysSheet = kSS.getSheetByName("SYSTEM_INFO");
   if (!kSysSheet) {
@@ -1979,7 +1745,6 @@ runTest("Scenario 30: setupRosterSheet(districtId) および v2_api Provisioning
   if (!hasHAppUrl) kSysSheet.rows.push(["HアプリURL", "https://kuwana.postingmap.jp/"]);
   if (!hasOpMode) kSysSheet.rows.push(["運用モード", "SUBSCRIPTION"]);
 
-  // 2a. doGet 経由 => METHOD_NOT_ALLOWED で拒絶
   const getSysReq = {
     parameter: {
       action: "syncSystemInfo",
@@ -1992,7 +1757,6 @@ runTest("Scenario 30: setupRosterSheet(districtId) および v2_api Provisioning
   assert.equal(getSysData.success, false, "doGet syncSystemInfo must fail");
   assert.equal(getSysData.code, "METHOD_NOT_ALLOWED", "doGet syncSystemInfo must return METHOD_NOT_ALLOWED");
 
-  // 2b. doPost 経由 => 成功 & KUWANA SYSTEM_INFO 同期
   const postSysReq = {
     postData: {
       contents: JSON.stringify({
@@ -2011,13 +1775,11 @@ runTest("Scenario 30: setupRosterSheet(districtId) および v2_api Provisioning
 // TEST 31: action=healSchemaHeaders の POST 専用性（GET 拒否 & METHOD_NOT_ALLOWED）
 // -----------------------------------------------------------------------------
 runTest("Scenario 31: action=healSchemaHeaders および runIdentityMigration の POST 専用性", () => {
-  // 1. doGet healSchemaHeaders -> METHOD_NOT_ALLOWED
   const getHealRes = doGet({ parameter: { action: "healSchemaHeaders" } });
   const getHealData = JSON.parse(getHealRes.text);
   assert.equal(getHealData.success, false);
   assert.equal(getHealData.code, "METHOD_NOT_ALLOWED");
 
-  // 2. doGet runIdentityMigration -> METHOD_NOT_ALLOWED
   const getMigRes = doGet({ parameter: { action: "runIdentityMigration" } });
   const getMigData = JSON.parse(getMigRes.text);
   assert.equal(getMigData.success, false);
@@ -2028,35 +1790,31 @@ runTest("Scenario 31: action=healSchemaHeaders および runIdentityMigration �
 // TEST 32: action=healSchemaHeaders の必須パラメータ検証 (token, districtId, targetMonth)
 // -----------------------------------------------------------------------------
 runTest("Scenario 32: action=healSchemaHeaders の必須パラメータ検証", () => {
-  // 1. token 不在 -> UNAUTHORIZED
+  bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
   const noTokenRes = doPost({
     postData: { contents: JSON.stringify({ action: "healSchemaHeaders", districtId: "KUWANA", targetMonth: "2026-10" }) }
   });
   assert.equal(JSON.parse(noTokenRes.text).success, false);
   assert.equal(JSON.parse(noTokenRes.text).code, "UNAUTHORIZED");
 
-  // 2. token 不正 -> UNAUTHORIZED
   const badTokenRes = doPost({
     postData: { contents: JSON.stringify({ action: "healSchemaHeaders", provisioningToken: "wrong", districtId: "KUWANA", targetMonth: "2026-10" }) }
   });
   assert.equal(JSON.parse(badTokenRes.text).success, false);
   assert.equal(JSON.parse(badTokenRes.text).code, "UNAUTHORIZED");
 
-  // 3. districtId 不在 -> MISSING_DISTRICT_ID
   const noDistRes = doPost({
     postData: { contents: JSON.stringify({ action: "healSchemaHeaders", provisioningToken: validToken, targetMonth: "2026-10" }) }
   });
   assert.equal(JSON.parse(noDistRes.text).success, false);
   assert.equal(JSON.parse(noDistRes.text).code, "MISSING_DISTRICT_ID");
 
-  // 4. targetMonth 不在 -> INVALID_ARGUMENT
   const noMonthRes = doPost({
     postData: { contents: JSON.stringify({ action: "healSchemaHeaders", provisioningToken: validToken, districtId: "KUWANA" }) }
   });
   assert.equal(JSON.parse(noMonthRes.text).success, false);
   assert.equal(JSON.parse(noMonthRes.text).code, "INVALID_ARGUMENT");
 
-  // 5. targetMonth フォーマット不正 ("2026/10") -> INVALID_ARGUMENT
   const badMonthRes = doPost({
     postData: { contents: JSON.stringify({ action: "healSchemaHeaders", provisioningToken: validToken, districtId: "KUWANA", targetMonth: "2026/10" }) }
   });
@@ -2068,14 +1826,8 @@ runTest("Scenario 32: action=healSchemaHeaders の必須パラメータ検証", 
 // TEST 33: action=healSchemaHeaders の targetSpreadsheetId バイパス禁止 & Runtime Resolver 解決
 // -----------------------------------------------------------------------------
 runTest("Scenario 33: action=healSchemaHeaders の targetSpreadsheetId バイパス禁止 & Runtime Resolver 解決", () => {
-  const reg = {
-    "KUWANA": { spreadsheetId: "ss-kuwana-id", storageFolderId: "folder_kuwana_id", enabled: true },
-    "DISABLED_DIST": { spreadsheetId: "ss-disabled-id", storageFolderId: "folder_disabled_id", enabled: false }
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(reg);
-  SpreadsheetResolver.getInstance().clearCache();
+  bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
 
-  // KUWANA SS に必要な原本・当月シートを準備 (原本5種は削除し新構造実証)
   const kSS = mockSpreadsheets["ss-kuwana-id"];
   ["配布実績の原本", "名簿の原本", "保有チラシ枚数の原本", "受渡要請履歴の原本", "PinStatusの原本"].forEach(m => {
     delete kSS.sheets[m];
@@ -2092,7 +1844,8 @@ runTest("Scenario 33: action=healSchemaHeaders の targetSpreadsheetId バイパ
     kuwanaSys.rows = [
       ["項目", "内容"],
       ["地区コード", "KUWANA"],
-      ["運用モード", "SUBSCRIPTION"]
+      ["運用モード", "SUBSCRIPTION"],
+      ["契約終了日", "2026-10-31"]
     ];
   }
 
@@ -2113,32 +1866,28 @@ runTest("Scenario 33: action=healSchemaHeaders の targetSpreadsheetId バイパ
   const bypassData = JSON.parse(bypassRes.text);
   assert.equal(bypassData.success, true, "Must succeed using KUWANA Runtime Resolver, ignoring targetSpreadsheetId");
 
-  // 2. enabled: false な地区は Runtime Resolver の enabled チェックで拒否されること
-  const reqDisabled = {
+  // 2. 不一致な districtId は Runtime Resolver の verifyIntegrityGuard で拒否されること
+  const reqMismatch = {
     postData: {
       contents: JSON.stringify({
         action: "healSchemaHeaders",
         provisioningToken: validToken,
-        districtId: "DISABLED_DIST",
+        districtId: "WRONG_DIST",
         targetMonth: "2026-10"
       })
     }
   };
-  const disabledRes = doPost(reqDisabled);
-  const disabledData = JSON.parse(disabledRes.text);
-  assert.equal(disabledData.success, false, "Disabled district must be rejected");
-  assert.equal(disabledData.code, "SPREADSHEET_NOT_FOUND");
+  const mismatchRes = doPost(reqMismatch);
+  const mismatchData = JSON.parse(mismatchRes.text);
+  assert.equal(mismatchData.success, false, "Mismatched district must be rejected");
+  assert.equal(mismatchData.code, "SPREADSHEET_NOT_FOUND");
 });
 
 // -----------------------------------------------------------------------------
 // TEST 34: action=runIdentityMigration の districtId 伝播検証
 // -----------------------------------------------------------------------------
 runTest("Scenario 34: action=runIdentityMigration の districtId 伝播検証", () => {
-  const reg = {
-    "KUWANA": { spreadsheetId: "ss-kuwana-id", storageFolderId: "folder_kuwana_id", enabled: true }
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(reg);
-  SpreadsheetResolver.getInstance().clearCache();
+  bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
 
   const req = {
     postData: {
@@ -2157,321 +1906,39 @@ runTest("Scenario 34: action=runIdentityMigration の districtId 伝播検証", 
 });
 
 // -----------------------------------------------------------------------------
-// TEST 35: action=switchDistrictSpreadsheet の Fail-Closed / バリデーション検証
+// TEST 35 & 36: 廃止された親GAS専用管理アクションの完全拒絶と無副作用保証
 // -----------------------------------------------------------------------------
-runTest("Scenario 35: action=switchDistrictSpreadsheet の Fail-Closed / バリデーション検証 (mutation 0)", () => {
-  const baseReg = {
-    "KUWANA": { spreadsheetId: "ss-kuwana-id", storageFolderId: "folder_kuwana_id", enabled: true, name: "桑名" },
-    "OKAYAMA": { spreadsheetId: "ss-okayama-id", storageFolderId: "folder_okayama_id", enabled: true, name: "岡山" }
-  };
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(baseReg);
-  mockScriptProperties["STORAGE_PARENT_ID"] = "parent_folder_id";
-  mockScriptProperties["PROVISIONING_TOKEN_HASH"] = crypto.createHash('sha256').update(validToken).digest('hex');
-  SpreadsheetResolver.getInstance().clearCache();
-
+runTest("Scenario 35: 廃止された親GAS専用管理アクション (switchDistrictSpreadsheet / repairDistrictDriveBinding / migrateDistrictPhotos) の POST/GET 完全拒絶", () => {
+  bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
   const snapProps = JSON.stringify(mockScriptProperties);
 
-  // 1. Tokenなし → UNAUTHORIZED / mutation 0
-  const resNoToken = doPost({
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        districtId: "KUWANA",
-        expectedCurrentSpreadsheetId: "ss-kuwana-id",
-        targetSpreadsheetId: "ss-new-kuwana-id"
-      })
-    }
-  });
-  const dataNoToken = JSON.parse(resNoToken.text);
-  assert.equal(dataNoToken.success, false);
-  assert.equal(dataNoToken.code, "UNAUTHORIZED");
-  assert.equal(JSON.stringify(mockScriptProperties), snapProps, "Props must have mutation 0 on UNAUTHORIZED");
-
-  // 2. 必須引数欠損 → INVALID_ARGUMENT / mutation 0
-  // 2a. districtId 欠損
-  const resMissingDist = doPost({
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        provisioningToken: validToken,
-        expectedCurrentSpreadsheetId: "ss-kuwana-id",
-        targetSpreadsheetId: "ss-new-kuwana-id"
-      })
-    }
-  });
-  const dataMissingDist = JSON.parse(resMissingDist.text);
-  assert.equal(dataMissingDist.success, false);
-  assert.equal(dataMissingDist.code, "INVALID_ARGUMENT");
-
-  // 2b. expectedCurrentSpreadsheetId 欠損
-  const resMissingExpected = doPost({
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        provisioningToken: validToken,
-        districtId: "KUWANA",
-        targetSpreadsheetId: "ss-new-kuwana-id"
-      })
-    }
-  });
-  const dataMissingExpected = JSON.parse(resMissingExpected.text);
-  assert.equal(dataMissingExpected.success, false);
-  assert.equal(dataMissingExpected.code, "INVALID_ARGUMENT");
-
-  // 2c. targetSpreadsheetId 欠損
-  const resMissingTarget = doPost({
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        provisioningToken: validToken,
-        districtId: "KUWANA",
-        expectedCurrentSpreadsheetId: "ss-kuwana-id"
-      })
-    }
-  });
-  const dataMissingTarget = JSON.parse(resMissingTarget.text);
-  assert.equal(dataMissingTarget.success, false);
-  assert.equal(dataMissingTarget.code, "INVALID_ARGUMENT");
-  assert.equal(JSON.stringify(mockScriptProperties), snapProps, "Props must have mutation 0 on INVALID_ARGUMENT");
-
-  // 3. Registry空文字 → CORRUPTED_REGISTRY / mutation 0
-  mockScriptProperties["DISTRICT_REGISTRY"] = "";
-  const resEmptyReg = doPost({
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        provisioningToken: validToken,
-        districtId: "KUWANA",
-        expectedCurrentSpreadsheetId: "ss-kuwana-id",
-        targetSpreadsheetId: "ss-new-kuwana-id"
-      })
-    }
-  });
-  const dataEmptyReg = JSON.parse(resEmptyReg.text);
-  assert.equal(dataEmptyReg.success, false);
-  assert.equal(dataEmptyReg.code, "CORRUPTED_REGISTRY");
-  assert.equal(mockScriptProperties["DISTRICT_REGISTRY"], "", "Registry remains empty with mutation 0");
-
-  // 4. Registry破損JSON → CORRUPTED_REGISTRY / mutation 0
-  mockScriptProperties["DISTRICT_REGISTRY"] = "{ broken json !!";
-  const resBrokenJson = doPost({
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        provisioningToken: validToken,
-        districtId: "KUWANA",
-        expectedCurrentSpreadsheetId: "ss-kuwana-id",
-        targetSpreadsheetId: "ss-new-kuwana-id"
-      })
-    }
-  });
-  const dataBrokenJson = JSON.parse(resBrokenJson.text);
-  assert.equal(dataBrokenJson.success, false);
-  assert.equal(dataBrokenJson.code, "CORRUPTED_REGISTRY");
-  assert.equal(mockScriptProperties["DISTRICT_REGISTRY"], "{ broken json !!", "Registry remains intact with mutation 0");
-
-  // Registry復元
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(baseReg);
-
-  // 5. district不存在 → DISTRICT_NOT_FOUND / mutation 0
-  const resUnknownDist = doPost({
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        provisioningToken: validToken,
-        districtId: "UNKNOWN_DISTRICT",
-        expectedCurrentSpreadsheetId: "ss-kuwana-id",
-        targetSpreadsheetId: "ss-new-kuwana-id"
-      })
-    }
-  });
-  const dataUnknownDist = JSON.parse(resUnknownDist.text);
-  assert.equal(dataUnknownDist.success, false);
-  assert.equal(dataUnknownDist.code, "DISTRICT_NOT_FOUND");
-  assert.equal(JSON.stringify(mockScriptProperties), snapProps, "Props must have mutation 0 on DISTRICT_NOT_FOUND");
-
-  // 6. expectedCurrentSpreadsheetId不一致 → STALE_WRITE / mutation 0
-  const resStaleWrite = doPost({
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        provisioningToken: validToken,
-        districtId: "KUWANA",
-        expectedCurrentSpreadsheetId: "ss-wrong-old-id",
-        targetSpreadsheetId: "ss-new-kuwana-id"
-      })
-    }
-  });
-  const dataStaleWrite = JSON.parse(resStaleWrite.text);
-  assert.equal(dataStaleWrite.success, false);
-  assert.equal(dataStaleWrite.code, "STALE_WRITE");
-  assert.equal(JSON.stringify(mockScriptProperties), snapProps, "Props must have mutation 0 on STALE_WRITE");
-
-  // 7. targetSpreadsheetId不存在 → RESOURCE_NOT_FOUND / mutation 0
-  const resNotFound = doPost({
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        provisioningToken: validToken,
-        districtId: "KUWANA",
-        expectedCurrentSpreadsheetId: "ss-kuwana-id",
-        targetSpreadsheetId: "ss-nonexistent-target-id"
-      })
-    }
-  });
-  const dataNotFound = JSON.parse(resNotFound.text);
-  assert.equal(dataNotFound.success, false);
-  assert.equal(dataNotFound.code, "RESOURCE_NOT_FOUND");
-  assert.equal(JSON.stringify(mockScriptProperties), snapProps, "Props must have mutation 0 on RESOURCE_NOT_FOUND");
-
-  // 8. target SYSTEM_INFO地区コード不一致 → DISTRICT_MISMATCH / mutation 0
-  const ssMismatch = new MockSpreadsheet("ss-mismatch-kuwana-id", "POSTING_MAP_MISMATCH");
-  const sMismatchSys = ssMismatch.addSheet("SYSTEM_INFO");
-  sMismatchSys.rows = [
-    ["項目", "内容"],
-    ["地区コード", "WRONG_DISTRICT_CODE"]
-  ];
-  mockSpreadsheets["ss-mismatch-kuwana-id"] = ssMismatch;
-
-  const resMismatch = doPost({
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        provisioningToken: validToken,
-        districtId: "KUWANA",
-        expectedCurrentSpreadsheetId: "ss-kuwana-id",
-        targetSpreadsheetId: "ss-mismatch-kuwana-id"
-      })
-    }
-  });
-  const dataMismatch = JSON.parse(resMismatch.text);
-  assert.equal(dataMismatch.success, false);
-  assert.equal(dataMismatch.code, "DISTRICT_MISMATCH");
-  assert.equal(JSON.stringify(mockScriptProperties), snapProps, "Props must have mutation 0 on DISTRICT_MISMATCH");
-
-  // 13. GET switchDistrictSpreadsheet → METHOD_NOT_ALLOWED
-  const resGet = doGet({
-    parameter: {
-      action: "switchDistrictSpreadsheet",
-      provisioningToken: validToken,
-      districtId: "KUWANA"
-    }
-  });
-  const dataGet = JSON.parse(resGet.text);
-  assert.equal(dataGet.success, false);
-  assert.equal(dataGet.code, "METHOD_NOT_ALLOWED");
-  assert.equal(JSON.stringify(mockScriptProperties), snapProps, "Props must have mutation 0 on GET METHOD_NOT_ALLOWED");
-});
-
-// -----------------------------------------------------------------------------
-// TEST 36: action=switchDistrictSpreadsheet 正常切替と絶対境界保護
-// -----------------------------------------------------------------------------
-runTest("Scenario 36: action=switchDistrictSpreadsheet 正常切替と絶対境界保護 (KUWANA.spreadsheetIdのみ変更、他完全不変)", () => {
-  const initialRegistry = {
-    "KUWANA": {
-      spreadsheetId: "ss-kuwana-old-id",
-      storageFolderId: "folder_kuwana_id",
-      enabled: true,
-      name: "桑名地区"
-    },
-    "OKAYAMA": {
-      spreadsheetId: "ss-okayama-id",
-      storageFolderId: "folder_okayama_id",
-      enabled: true,
-      name: "岡山地区"
-    },
-    "DISABLED_DIST": {
-      spreadsheetId: "ss-disabled-id",
-      storageFolderId: "folder_disabled_id",
-      enabled: false,
-      name: "停止地区"
-    }
-  };
-
-  mockScriptProperties["DISTRICT_REGISTRY"] = JSON.stringify(initialRegistry);
-  mockScriptProperties["STORAGE_PARENT_ID"] = "parent_folder_123";
-  mockScriptProperties["PROVISIONING_TOKEN_HASH"] = crypto.createHash('sha256').update(validToken).digest('hex');
-  mockScriptProperties["OTHER_SECRET_KEY"] = "untouchable_value";
-
-  const otherPropsBefore = {
-    STORAGE_PARENT_ID: mockScriptProperties["STORAGE_PARENT_ID"],
-    PROVISIONING_TOKEN_HASH: mockScriptProperties["PROVISIONING_TOKEN_HASH"],
-    OTHER_SECRET_KEY: mockScriptProperties["OTHER_SECRET_KEY"]
-  };
-
-  // 新スプレッドシート（新世代DB）を準備
-  const newKuwanaSS = new MockSpreadsheet("ss-kuwana-new-gen2-id", "POSTING_MAP_KUWANA_V2");
-  const newSysSheet = newKuwanaSS.addSheet("SYSTEM_INFO");
-  newSysSheet.rows = [
-    ["項目", "内容"],
-    ["地区コード", "KUWANA"],
-    ["地区名", "桑名地区"],
-    ["HアプリURL", "https://kuwana.postingmap.jp/"],
-    ["運用モード", "SUBSCRIPTION"],
-    ["契約終了日", "2026-12-31"]
-  ];
-  mockSpreadsheets["ss-kuwana-new-gen2-id"] = newKuwanaSS;
-
-  SpreadsheetResolver.getInstance().clearCache();
-
-  // 9. 正常切替実行
-  const switchReq = {
-    postData: {
-      contents: JSON.stringify({
-        action: "switchDistrictSpreadsheet",
-        provisioningToken: validToken,
-        districtId: "KUWANA",
-        expectedCurrentSpreadsheetId: "ss-kuwana-old-id",
-        targetSpreadsheetId: "ss-kuwana-new-gen2-id"
-      })
-    }
-  };
-
-  const res = doPost(switchReq);
-  const data = JSON.parse(res.text);
-
-  assert.equal(data.success, true, "switchDistrictSpreadsheet must succeed");
-  assert.equal(data.districtId, "KUWANA");
-  assert.equal(data.previousSpreadsheetId, "ss-kuwana-old-id");
-  assert.equal(data.newSpreadsheetId, "ss-kuwana-new-gen2-id");
-
-  // 変更後Registry取得
-  const updatedRegistry = JSON.parse(mockScriptProperties["DISTRICT_REGISTRY"]);
-
-  // 9. KUWANA.spreadsheetId だけ変更されていること
-  assert.equal(updatedRegistry["KUWANA"].spreadsheetId, "ss-kuwana-new-gen2-id");
-
-  // 10. KUWANA.enabled / storageFolderId / name 完全不変
-  assert.equal(updatedRegistry["KUWANA"].enabled, initialRegistry["KUWANA"].enabled);
-  assert.equal(updatedRegistry["KUWANA"].storageFolderId, initialRegistry["KUWANA"].storageFolderId);
-  assert.equal(updatedRegistry["KUWANA"].name, initialRegistry["KUWANA"].name);
-
-  // 11. 他地区（OKAYAMA, DISABLED_DIST）deepEqual 完全不変
-  assert.deepEqual(updatedRegistry["OKAYAMA"], initialRegistry["OKAYAMA"], "OKAYAMA must be completely unchanged");
-  assert.deepEqual(updatedRegistry["DISABLED_DIST"], initialRegistry["DISABLED_DIST"], "DISABLED_DIST must be completely unchanged");
-
-  // 12. STORAGE_PARENT_ID等、他Script Properties完全不変
-  assert.equal(mockScriptProperties["STORAGE_PARENT_ID"], otherPropsBefore.STORAGE_PARENT_ID);
-  assert.equal(mockScriptProperties["PROVISIONING_TOKEN_HASH"], otherPropsBefore.PROVISIONING_TOKEN_HASH);
-  assert.equal(mockScriptProperties["OTHER_SECRET_KEY"], otherPropsBefore.OTHER_SECRET_KEY);
-
-  // 機械検証: 変更前Registry全体と変更後Registry全体を比較し、差分がKUWANA.spreadsheetId 1箇所だけであることを検証
-  const diffKeys = [];
-  Object.keys(initialRegistry).forEach(distKey => {
-    const origEntry = initialRegistry[distKey];
-    const newEntry = updatedRegistry[distKey];
-    Object.keys(origEntry).forEach(prop => {
-      if (origEntry[prop] !== newEntry[prop]) {
-        diffKeys.push(`${distKey}.${prop}: ${origEntry[prop]} -> ${newEntry[prop]}`);
+  for (const deprecatedAction of ["switchDistrictSpreadsheet", "repairDistrictDriveBinding", "migrateDistrictPhotos"]) {
+    const resPost = doPost({
+      postData: {
+        contents: JSON.stringify({
+          action: deprecatedAction,
+          provisioningToken: validToken,
+          liffToken: "token_kuwana_user1",
+          districtId: "KUWANA"
+        })
       }
     });
-  });
-  assert.equal(diffKeys.length, 1, `Exactly 1 property must differ in entire registry: ${JSON.stringify(diffKeys)}`);
-  assert.equal(diffKeys[0], "KUWANA.spreadsheetId: ss-kuwana-old-id -> ss-kuwana-new-gen2-id");
+    const dataPost = JSON.parse(resPost.text);
+    assert.equal(dataPost.success, false, `${deprecatedAction} POST must fail`);
+    assert.match(dataPost.message, /Invalid POST action/);
 
-  // Resolver cache clear の確認: getSpreadsheet("KUWANA") で新SSが返ること
-  const resolvedSS = SpreadsheetResolver.getInstance().getSpreadsheet("KUWANA");
-  assert.equal(resolvedSS.getId(), "ss-kuwana-new-gen2-id", "Resolver must resolve newly switched spreadsheet ID");
+    const resGet = doGet({
+      parameter: {
+        action: deprecatedAction,
+        districtId: "KUWANA"
+      }
+    });
+    const dataGet = JSON.parse(resGet.text);
+    assert.equal(dataGet.success, false, `${deprecatedAction} GET must fail`);
+    assert.match(dataGet.message, /Authentication required|Invalid GET action/);
+  }
+
+  assert.equal(JSON.stringify(mockScriptProperties), snapProps, "ScriptProperties must have mutation 0");
 });
 
 console.log('\n================================================================');

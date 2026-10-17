@@ -236,8 +236,8 @@ const mockSpreadsheetObj = {
 global.PropertiesService = {
   getScriptProperties: () => ({
     getProperty: (key) => {
-      if (key === 'DISTRICT_REGISTRY') {
-        return JSON.stringify({ 'TEST-DISTRICT': { spreadsheetId: 'ss-test-123' } });
+      if (key === 'TARGET_SPREADSHEET_ID') {
+        return 'ss-test-123';
       }
       return null;
     }

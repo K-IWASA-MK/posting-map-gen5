@@ -27,92 +27,13 @@ class SpreadsheetResolver {
   }
 
   getSpreadsheetId(districtId) {
-    const cleanDistrictId = String(districtId || "").trim().toUpperCase();
     try {
       const props = PropertiesService.getScriptProperties();
-      const registryRaw = props.getProperty("DISTRICT_REGISTRY");
-
-      if (registryRaw !== null) {
-        if (typeof registryRaw === "string" && registryRaw.trim() === "") {
-          throw new Error("[SpreadsheetResolver] DISTRICT_REGISTRY is configured but empty (corrupted).");
-        }
-
-        let registry = {};
-        try {
-          registry = JSON.parse(registryRaw);
-        } catch (errP) {
-          console.error("[SpreadsheetResolver] Failed to parse DISTRICT_REGISTRY JSON:", errP);
-          throw new Error("[SpreadsheetResolver] DISTRICT_REGISTRY is corrupted.");
-        }
-
-        if (!cleanDistrictId) {
-          throw new Error("[SpreadsheetResolver] districtId is required for multi-district routing. No fallback allowed.");
-        }
-
-        const normalizedKey = Object.keys(registry).find(k => k.trim().toUpperCase() === cleanDistrictId);
-        if (normalizedKey && registry[normalizedKey]) {
-          const entry = registry[normalizedKey];
-          if (typeof entry === "object" && entry !== null) {
-            if (entry.enabled === false) {
-              throw new Error(`[SpreadsheetResolver] District "${cleanDistrictId}" not found in DISTRICT_REGISTRY.`);
-            }
-            if (entry.spreadsheetId) {
-              return String(entry.spreadsheetId).trim();
-            }
-          } else {
-            return String(entry).trim();
-          }
-        }
-
-        throw new Error(`[SpreadsheetResolver] District "${cleanDistrictId}" not found in DISTRICT_REGISTRY.`);
-      }
-
-      // レジストリ未設定 (null) の完全単一旧環境に対する後方互換のみ
-      const legacyId = props.getProperty("TARGET_SPREADSHEET_ID") || props.getProperty("SPREADSHEET_ID") || "";
+      const legacyId = (props && (props.getProperty("TARGET_SPREADSHEET_ID") || props.getProperty("SPREADSHEET_ID"))) || "";
       if (legacyId) {
-        return legacyId;
+        return String(legacyId).trim();
       }
       return "";
-    } catch (e) {
-      throw e;
-    }
-  }
-
-  getEnabledDistricts() {
-    try {
-      const props = PropertiesService.getScriptProperties();
-      const registryRaw = props.getProperty("DISTRICT_REGISTRY");
-
-      if (registryRaw === null) {
-        return null; // Legacy 未設定
-      }
-
-      if (typeof registryRaw === "string" && registryRaw.trim() === "") {
-        throw new Error("[SpreadsheetResolver] DISTRICT_REGISTRY is configured but empty (corrupted).");
-      }
-
-      let registry = {};
-      try {
-        registry = JSON.parse(registryRaw);
-      } catch (errP) {
-        console.error("[SpreadsheetResolver] Failed to parse DISTRICT_REGISTRY JSON:", errP);
-        throw new Error("[SpreadsheetResolver] DISTRICT_REGISTRY is corrupted.");
-      }
-
-      const enabledDistricts = [];
-      Object.keys(registry).forEach(key => {
-        const cleanKey = String(key || "").trim().toUpperCase();
-        const entry = registry[key];
-        if (typeof entry === "object" && entry !== null) {
-          if (entry.enabled !== false) {
-            enabledDistricts.push(cleanKey);
-          }
-        } else if (entry) {
-          enabledDistricts.push(cleanKey);
-        }
-      });
-
-      return enabledDistricts;
     } catch (e) {
       throw e;
     }
@@ -179,12 +100,20 @@ class SpreadsheetResolver {
     }
 
     if (typeof SpreadsheetApp !== 'undefined' && typeof SpreadsheetApp.getActiveSpreadsheet === 'function') {
+      let activeSs = null;
       try {
-        const activeSs = SpreadsheetApp.getActiveSpreadsheet();
-        if (activeSs && activeSs.getId()) {
-          return activeSs;
-        }
+        activeSs = SpreadsheetApp.getActiveSpreadsheet();
       } catch (e) {}
+      if (activeSs && activeSs.getId()) {
+        if (cleanDistrictId) {
+          const systemInfoData = this.verifyIntegrityGuard(activeSs, cleanDistrictId);
+          if (context && typeof context === 'object') {
+            context.systemInfoData = systemInfoData;
+          }
+        }
+        this.spreadsheetCacheByDistrict[cacheKey] = activeSs;
+        return activeSs;
+      }
     }
 
     throw new Error('[SpreadsheetResolver] Target spreadsheet cannot be resolved.');

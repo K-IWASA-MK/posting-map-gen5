@@ -34,14 +34,7 @@ console.log('================================================================\n'
 const rootDir = process.cwd();
 const cacheStore = new Map();
 const propertiesStore = {
-  DISTRICT_REGISTRY: JSON.stringify({
-    KUWANA: 'ss-kuwana-id',
-    KURASHIKI: 'ss-kurashiki-id',
-    KAMEYAMA: 'ss-kameyama-id',
-    EXPIRED_DIST: 'ss-expired-id',
-    NOKEY_DIST: 'ss-nokey-id',
-    MISMATCH_DIST: 'ss-mismatch-id'
-  }),
+  TARGET_SPREADSHEET_ID: 'ss-kuwana-id',
   GOOGLE_MAPS_API_KEY: 'AIza-legacy-shared-fallback-key',
   GOOGLE_MAPS_API_KEY_KUWANA: 'AIza-kuwana-dedicated-key',
   GOOGLE_MAPS_API_KEY_KURASHIKI: 'AIza-kurashiki-dedicated-key',
@@ -282,30 +275,44 @@ runTest('A地区Session + B地区districtId → UNAUTHORIZED (Session Binding)',
   assert.match(res.message, /Session district mismatch/);
 });
 
-// Test-04: 未知districtId → DISTRICT_NOT_FOUND
-runTest('未知districtId → DISTRICT_NOT_FOUND', () => {
+// Test-04: 未知districtId → DISTRICT_NOT_FOUND / DISTRICT_MISMATCH (1地区専用GASモードでは接続先SSとの不一致により Fail-Closed 遮断)
+runTest('未知districtId → Fail-Closed 遮断 (DISTRICT_NOT_FOUND / DISTRICT_MISMATCH)', () => {
   const res = parseRes(sandbox.handleGetMapsApiKey('UNKNOWN_DISTRICT'));
   assert.equal(res.success, false);
-  assert.equal(res.code, 'DISTRICT_NOT_FOUND');
-  assert.match(res.message, /not registered in DISTRICT_REGISTRY/);
+  assert.ok(res.code === 'DISTRICT_NOT_FOUND' || res.code === 'DISTRICT_MISMATCH');
+  assert.equal(res.mapsApiKey, undefined);
 });
 
 // Test-05: 契約終了地区 → CONTRACT_EXPIRED
 runTest('契約終了地区 → CONTRACT_EXPIRED (Key返却なし)', () => {
-  const res = parseRes(sandbox.handleGetMapsApiKey('EXPIRED_DIST'));
-  assert.equal(res.success, false);
-  assert.equal(res.code, 'CONTRACT_EXPIRED');
-  assert.equal(res.mapsApiKey, undefined);
+  propertiesStore.TARGET_SPREADSHEET_ID = 'ss-expired-id';
+  vm.runInContext('SpreadsheetResolver.getInstance().clearCache()', sandbox);
+  try {
+    const res = parseRes(sandbox.handleGetMapsApiKey('EXPIRED_DIST'));
+    assert.equal(res.success, false);
+    assert.equal(res.code, 'CONTRACT_EXPIRED');
+    assert.equal(res.mapsApiKey, undefined);
+  } finally {
+    propertiesStore.TARGET_SPREADSHEET_ID = 'ss-kuwana-id';
+    vm.runInContext('SpreadsheetResolver.getInstance().clearCache()', sandbox);
+  }
 });
 
 // Test-06: 地区別Keyなし + legacy Keyあり → legacy Key + isFallback: true
 runTest('地区別Keyなし + legacy Keyあり → legacy Key + isFallback: true', () => {
-  // KAMEYAMA は専用Key未設定、legacy Keyあり
-  const res = parseRes(sandbox.handleGetMapsApiKey('KAMEYAMA'));
-  assert.equal(res.success, true);
-  assert.equal(res.districtId, 'KAMEYAMA');
-  assert.equal(res.mapsApiKey, 'AIza-legacy-shared-fallback-key');
-  assert.equal(res.isFallback, true);
+  propertiesStore.TARGET_SPREADSHEET_ID = 'ss-kameyama-id';
+  vm.runInContext('SpreadsheetResolver.getInstance().clearCache()', sandbox);
+  try {
+    // KAMEYAMA は専用Key未設定、legacy Keyあり
+    const res = parseRes(sandbox.handleGetMapsApiKey('KAMEYAMA'));
+    assert.equal(res.success, true);
+    assert.equal(res.districtId, 'KAMEYAMA');
+    assert.equal(res.mapsApiKey, 'AIza-legacy-shared-fallback-key');
+    assert.equal(res.isFallback, true);
+  } finally {
+    propertiesStore.TARGET_SPREADSHEET_ID = 'ss-kuwana-id';
+    vm.runInContext('SpreadsheetResolver.getInstance().clearCache()', sandbox);
+  }
 });
 
 // Test-07: 地区別Keyあり → legacy Keyではなく地区別Key + isFallback: false
@@ -322,6 +329,8 @@ runTest('地区別Keyあり → legacy Keyではなく地区別Key + isFallback:
 runTest('地区別Keyなし + legacy Keyなし → MAPS_KEY_NOT_CONFIGURED', () => {
   const savedLegacy = propertiesStore.GOOGLE_MAPS_API_KEY;
   delete propertiesStore.GOOGLE_MAPS_API_KEY;
+  propertiesStore.TARGET_SPREADSHEET_ID = 'ss-nokey-id';
+  vm.runInContext('SpreadsheetResolver.getInstance().clearCache()', sandbox);
   try {
     const res = parseRes(sandbox.handleGetMapsApiKey('NOKEY_DIST'));
     assert.equal(res.success, false);
@@ -329,12 +338,14 @@ runTest('地区別Keyなし + legacy Keyなし → MAPS_KEY_NOT_CONFIGURED', () 
     assert.match(res.message, /not configured/);
   } finally {
     propertiesStore.GOOGLE_MAPS_API_KEY = savedLegacy;
+    propertiesStore.TARGET_SPREADSHEET_ID = 'ss-kuwana-id';
+    vm.runInContext('SpreadsheetResolver.getInstance().clearCache()', sandbox);
   }
 });
 
 // Test-09: 地区別Keyが存在しない新地区のProvisioning → Provisioning Gate FAIL
 runTest('新地区Provisioning時、地区別Key未設定 → Provisioning Gate FAIL', () => {
-  const svc = sandbox.SystemInfoService.getInstance();
+  const svc = vm.runInContext('SystemInfoService.getInstance()', sandbox);
   // NEW_DISTRICT は Script Properties に GOOGLE_MAPS_API_KEY_NEW_DISTRICT がない
   const checkFail = svc.verifyProvisioningMapsKey('NEW_DISTRICT');
   assert.equal(checkFail.success, false);
@@ -354,19 +365,33 @@ runTest('新地区Provisioning時、地区別Key未設定 → Provisioning Gate 
 
 // Test-10: 旧Keyへの意図しない別地区フォールバックが発生しないこと
 runTest('旧Keyへの意図しない別地区フォールバックが発生しないこと (B地区にA地区Keyが漏れない)', () => {
-  // KURASHIKI を要求
-  const res = parseRes(sandbox.handleGetMapsApiKey('KURASHIKI'));
-  assert.equal(res.success, true);
-  assert.equal(res.districtId, 'KURASHIKI');
-  assert.equal(res.mapsApiKey, 'AIza-kurashiki-dedicated-key');
-  assert.notEqual(res.mapsApiKey, propertiesStore.GOOGLE_MAPS_API_KEY_KUWANA);
+  propertiesStore.TARGET_SPREADSHEET_ID = 'ss-kurashiki-id';
+  vm.runInContext('SpreadsheetResolver.getInstance().clearCache()', sandbox);
+  try {
+    // KURASHIKI を要求
+    const res = parseRes(sandbox.handleGetMapsApiKey('KURASHIKI'));
+    assert.equal(res.success, true);
+    assert.equal(res.districtId, 'KURASHIKI');
+    assert.equal(res.mapsApiKey, 'AIza-kurashiki-dedicated-key');
+    assert.notEqual(res.mapsApiKey, propertiesStore.GOOGLE_MAPS_API_KEY_KUWANA);
+  } finally {
+    propertiesStore.TARGET_SPREADSHEET_ID = 'ss-kuwana-id';
+    vm.runInContext('SpreadsheetResolver.getInstance().clearCache()', sandbox);
+  }
 });
 
-// Test-11: DISTRICT_REGISTRYとSYSTEM_INFO地区コード不一致 → DISTRICT_MISMATCH
-runTest('DISTRICT_REGISTRYとSYSTEM_INFO地区コード不一致 → DISTRICT_MISMATCH', () => {
-  const res = parseRes(sandbox.handleGetMapsApiKey('MISMATCH_DIST'));
-  assert.equal(res.success, false);
-  assert.equal(res.code, 'DISTRICT_MISMATCH');
+// Test-11: TARGET_SPREADSHEET_IDとSYSTEM_INFO地区コード不一致 → DISTRICT_MISMATCH
+runTest('TARGET_SPREADSHEET_IDとSYSTEM_INFO地区コード不一致 → DISTRICT_MISMATCH', () => {
+  propertiesStore.TARGET_SPREADSHEET_ID = 'ss-mismatch-id';
+  vm.runInContext('SpreadsheetResolver.getInstance().clearCache()', sandbox);
+  try {
+    const res = parseRes(sandbox.handleGetMapsApiKey('MISMATCH_DIST'));
+    assert.equal(res.success, false);
+    assert.equal(res.code, 'DISTRICT_MISMATCH');
+  } finally {
+    propertiesStore.TARGET_SPREADSHEET_ID = 'ss-kuwana-id';
+    vm.runInContext('SpreadsheetResolver.getInstance().clearCache()', sandbox);
+  }
 });
 
 // Test-12: Public GET → 契約通り動作
