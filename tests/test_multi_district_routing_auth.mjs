@@ -478,7 +478,7 @@ kuwanaStaff.rows = [
 const kuwanaDist = kuwanaSS.addSheet(distSheetName);
 kuwanaDist.rows = [
   ["rowId", "cityName", "townName", "completedAt", "count", "staffId", "staffName", "", "", "", "", "", "", "", "", "lineUserId"],
-  ["1", "桑名市", "中央町1", "2026/09/20", 100, "K001", "桑名 太郎", "", "", "", "", "", "", "", "", "U_KUWANA_001"]
+  ["1", "サンプル市A", "中央町1", "2026/09/20", 100, "K001", "桑名 太郎", "", "", "", "", "", "", "", "", "U_KUWANA_001"]
 ];
 mockSpreadsheets["ss-kuwana-id"] = kuwanaSS;
 
@@ -1425,7 +1425,7 @@ runTest("Scenario 24: District Context Propagation & Drive Isolation / Fail-Clos
   const okayamaDistSnapshot = JSON.parse(JSON.stringify(okayamaDist.rows));
   const okayamaStaffSnapshot = JSON.parse(JSON.stringify(okayamaStaff.rows));
 
-  kuwanaDist.rows.push(["2", "桑名市", "中央町2", "", 0, "", "", "", "", "", "", "", "", "", "", ""]);
+  kuwanaDist.rows.push(["2", "サンプル市A", "中央町2", "", 0, "", "", "", "", "", "", "", "", "", "", ""]);
 
   // 2-1. KUWANA 写真アップロードの実行
   bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
@@ -1548,7 +1548,7 @@ runTest("Scenario 25: Provisioning Blast Radius 固定 ＆ 月次 rollover 1地�
 
   // 1-1. KUWANA のみ Provision 実行 ➔ OKAYAMA の PinStatus は完全不変 (mutation 0) を実証
   bindActiveDistrict("ss-kuwana-id", "folder_kuwana_id");
-  const sampleAddresses = [{ rowId: 1, cityName: "桑名市", townName: "大山田" }];
+  const sampleAddresses = [{ rowId: 1, cityName: "サンプル市A", townName: "大山田" }];
   const provResult = DistrictProvisioner.getInstance().provisionNewDistrict(
     sampleAddresses,
     { provisioningToken: validToken, targetSpreadsheetId: "ss-kuwana-id", operationMode: "SUBSCRIPTION", targetMonth: "2026-09" },

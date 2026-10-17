@@ -183,7 +183,7 @@ Backend: StaffService.resolveStaffIdentity(lineUserId)
   ├─ 名簿の原本 (SSOT) を照合
   ▼
 Backend: ペイロード強制上書き (クライアント送信値を破棄)
-  postData.staffId = identity.staffId;         // 例: "STF-24205-001"
+  postData.staffId = identity.staffId;         // 例: "STF-00000-001"
   postData.staffName = identity.staffName;     // 例: "山田 太郎"
   postData.resolvedLineUserId = lineUserId;    // 内部監査専用
 ```
@@ -341,7 +341,7 @@ DistributionRecord (配布実績事実)
   "longitude": 136.6834,
   "accuracy": 12.5,
   "photoData": "data:image/jpeg;base64,/9j/4AAQSkZJRg...",
-  "areaName": "桑名市相生町"
+  "areaName": "サンプル市中央町1丁目"
 }
 ```
 
@@ -398,9 +398,9 @@ DistributionRecord (配布実績事実)
     "count": 1250
   },
   "ranking": [
-    { "rank": 1, "staffId": "STF-24205-008", "name": "STF-24205-008", "count": 2100, "isMe": false },
-    { "rank": 2, "staffId": "STF-24205-003", "name": "STF-24205-003", "count": 1800, "isMe": false },
-    { "rank": 3, "staffId": "STF-24205-001", "name": "山田 太郎",       "count": 1250, "isMe": true }
+    { "rank": 1, "staffId": "STF-00000-008", "name": "STF-00000-008", "count": 2100, "isMe": false },
+    { "rank": 2, "staffId": "STF-00000-003", "name": "STF-00000-003", "count": 1800, "isMe": false },
+    { "rank": 3, "staffId": "STF-00000-001", "name": "山田 太郎",       "count": 1250, "isMe": true }
   ]
 }
 ```
@@ -717,7 +717,7 @@ Step 7: 完了確定 (COMPLETED) ────► サーバー success: true か�
   "timestamp": "2026-09-22T18:30:00.123Z",
   "traceId": "req_550e8400-e29b-41d4-a716-446655440000",
   "action": "updateRecordWithGPSPhoto",
-  "authenticatedStaffId": "STF-24205-001",
+  "authenticatedStaffId": "STF-00000-001",
   "subjectHash": "sha256_7a8b9c...",
   "rowId": 142,
   "count": 350,

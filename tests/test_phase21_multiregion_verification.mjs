@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { extractDistrictTokens } from '../scripts/check-universal-invariants.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,6 +33,12 @@ console.log('====================================================\n');
 console.log('[Gate 1] Runtime Identity: active/ 共通Runtime のコード不可侵・ハードコードゼロ検証...');
 
 const activeDir = path.join(REPO_ROOT, 'active');
+const dataDir = path.join(REPO_ROOT, 'data');
+
+function escapeRegexLiteral(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function scanDirForPatterns(dir, patterns) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const matches = [];
@@ -51,11 +58,19 @@ function scanDirForPatterns(dir, patterns) {
   return matches;
 }
 
-// 実行経路における地区依存ハードコードの網羅的スキャン
+// data/** SSOT から現在地区トークンを動的導出し、固定ガードと共に active/ 全域を網羅スキャン
+const dynamicSsotTokens = extractDistrictTokens(dataDir);
+assert.ok(dynamicSsotTokens.length > 0, 'Gate 1 must dynamically derive at least 1 district token from data/** SSOT');
+
 const forbiddenPatterns = [
+  ...dynamicSsotTokens.map(token => {
+    const isAscii = /^[\x00-\x7F]+$/.test(token);
+    return {
+      regex: isAscii ? new RegExp('\\b' + escapeRegexLiteral(token) + '\\b') : new RegExp(escapeRegexLiteral(token)),
+      label: `Dynamic SSOT District Token (${token})`
+    };
+  }),
   { regex: /\bKUWANA\b/, label: 'District Code KUWANA' },
-  { regex: /桑名市?/, label: 'City Name 桑名' },
-  { regex: /\b24205\b/, label: 'City Code 24205' },
   { regex: /\b337\b/, label: 'Hardcoded Town Count 337' }
 ];
 
@@ -196,7 +211,7 @@ staffA.rows = [
 const distA = ssA.addSheet(`配布実績${currentMonth}`);
 distA.rows = [
   ['rowId', 'cityName', 'townName', 'completedAt', 'count', 'staffId', 'staffName', '', '', '', '', '', '', '', '', 'lineUserId'],
-  ['1', '桑名市', '相生町', '2026/09/20', 100, 'K001', '桑名 太郎', '', '', '', '', '', '', '', '', 'U_KUWANA_001']
+  ['1', 'サンプル市A', '相生町', '2026/09/20', 100, 'K001', '桑名 太郎', '', '', '', '', '', '', '', '', 'U_KUWANA_001']
 ];
 mockSpreadsheets['ss-kuwana-id'] = ssA;
 
@@ -245,24 +260,24 @@ console.log('\n[Gate 2] Data Binding: 動的データ解決および件数非固
 
 // 1. Region A (337件規模) の住所マスターパース検証
 const mockCsvTextA = `rowId,city_name,town_name,latitude,longitude,households,population,e_stat_code\n` +
-  Array.from({ length: 337 }, (_, i) => `${i + 1},桑名市,町名${i + 1},35.06,136.68,100,200,24205${i}`).join('\n');
+  Array.from({ length: 337 }, (_, i) => `${i + 1},サンプル市A,町名${i + 1},35.06,136.68,100,200,00001${i}`).join('\n');
 const parsedA = vm.runInContext(`AddressMasterService.getInstance().parseCsv(\`${mockCsvTextA}\`)`, sandbox);
 assert.equal(parsedA.length, 337, 'Region A parsed count must dynamically equal 337');
-assert.equal(parsedA[0].city_name, '桑名市', 'Region A city_name must be 桑名市');
+assert.equal(parsedA[0].city_name, 'サンプル市A', 'Region A city_name must be サンプル市A');
 
 // 2. Region B (120件規模・倉敷市) の住所マスターパース検証（コード変更なし）
 const mockCsvTextB = `rowId,city_name,town_name,latitude,longitude,households,population,e_stat_code\n` +
   Array.from({ length: 120 }, (_, i) => `${i + 1},倉敷市,町名B${i + 1},34.58,133.77,80,160,33202${i}`).join('\n');
 const parsedB = vm.runInContext(`AddressMasterService.getInstance().parseCsv(\`${mockCsvTextB}\`)`, sandbox);
 assert.equal(parsedB.length, 120, 'Region B parsed count must dynamically equal 120 (NOT fixed to 337)');
-assert.equal(parsedB[0].city_name, '倉敷市', 'Region B city_name must be 倉敷市 (NOT fixed to 桑名市)');
+assert.equal(parsedB[0].city_name, '倉敷市', 'Region B city_name must be 倉敷市 (NOT fixed to サンプル市A)');
 
 // 3. 座標バウンディングボックスの動的算出検証
 const minLatB = Math.min(...parsedB.map(p => p.latitude));
 const maxLatB = Math.max(...parsedB.map(p => p.latitude));
 assert.ok(minLatB > 34.0 && maxLatB < 35.0, 'Region B coordinates must fall dynamically in Kurashiki latitude range');
 
-console.log('  ✅ Gate 2 PASS: 異なる地域データ（337件・桑名市 vs 120件・倉敷市）が同一コードで動的解決されることを確認');
+console.log('  ✅ Gate 2 PASS: 異なる地域データ（337件・サンプル市A vs 120件・倉敷市）が同一コードで動的解決されることを確認');
 
 // ─── GATE 3: Tenant Isolation (テナント分離・認可境界検証) ───
 console.log('\n[Gate 3] Tenant Isolation: 1地区専用DB解決 + SYSTEM_INFO 認可境界の検証...');

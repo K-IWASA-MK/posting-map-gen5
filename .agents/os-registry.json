@@ -100,7 +100,7 @@
       "canonicalSources": [
         {
           "path": "docs/api/API_CONTRACT.md",
-          "sha256": "471030d45447b93053dd9328a9eedcee0838c175c5911251329833e8d87a433d"
+          "sha256": "e3c134ff02696336f7fde681196dedc87c1971f8085a76954c4781b5eac4ebcc"
         },
         {
           "path": "active/api/v2_api.js",
@@ -147,7 +147,7 @@
       "canonicalSources": [
         {
           "path": "docs/api/API_CONTRACT.md",
-          "sha256": "471030d45447b93053dd9328a9eedcee0838c175c5911251329833e8d87a433d"
+          "sha256": "e3c134ff02696336f7fde681196dedc87c1971f8085a76954c4781b5eac4ebcc"
         },
         {
           "path": "docs/security/SECURITY_BASELINE.md",
