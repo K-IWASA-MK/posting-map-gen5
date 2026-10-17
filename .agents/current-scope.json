@@ -1,7 +1,14 @@
 {
-  "mission": "MIE-03 Election History Latest 3-Term Rectification",
+  "mission": "Independent Auditor Effectiveness Rectification",
   "files": [
     ".agents/current-scope.json",
-    "data/election_history.json"
+    "docs/ai-foundation.md",
+    "AGENTS.md",
+    ".agents/agents/auditor/agent.md",
+    ".agents/skills/release-integrity/SKILL.md",
+    "scripts/check-universal-invariants.mjs",
+    "scripts/check-auditor-gate.mjs",
+    "tests/test_auditor_gate.mjs",
+    "tests/test_auditor_effectiveness_regression.mjs"
   ]
 }
