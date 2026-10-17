@@ -194,11 +194,11 @@
       "canonicalSources": [
         {
           "path": "docs/ai-foundation.md",
-          "sha256": "53ad91050667a4c6c46fe0868bac7b7220efb06944d2e687275ada3c4d00ef08"
+          "sha256": "0f0de7537a9b983645a2c5429882c83e743de594b26e0cee53334e9eeec9257f"
         },
         {
           "path": "AGENTS.md",
-          "sha256": "042d04e714aab45dd357f86dad1a74d7f8361931ce181acd6f661962a67ae743"
+          "sha256": "380373fff602d2a1803ad78685a132032537b81d689ad23b29bd7e3a09e61342"
         }
       ],
       "evidenceSources": [

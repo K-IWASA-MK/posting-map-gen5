@@ -67,7 +67,7 @@
      - Execution AI は `invoke_subagent` により Independent Auditor を起動する。
      - Auditor は **Fresh isolated child context**（親の思考過程・試行錯誤を引き継がない独立セッション）で起動される。
      - **Policy-Level ZERO WRITE**: ファイル編集・生成禁止、Git操作禁止、Deploy禁止、invoke_subagent / manage_subagents 禁止、再委任禁止。
-     - **客観的独立再実行**: 親Executionの主張やPASS表明を信用せず、必須コマンド（`git diff`, `npm test`, `node scripts/check-scope.mjs`）を自ら独立再実行し、PASS / REJECT を独自に判定して `[AUDITOR VERDICT]` を返却する。
+     - **客観的独立再実行と意味的全文査読（テスト追認の禁止）**: 親Executionの主張やPASS表明を信用せず、必須コマンド（`git diff`, `npm test`, `node scripts/check-scope.mjs`）を自ら独立再実行する。単なる機械的テストPASSを根拠とした追認は厳禁とし、変更対象ファイルの全文（Full-File）を精査して未変更行に残存する旧地区リテラル・固定値の有無を検証し、反証分析（「他地区展開時に破壊されないか」）を経てPASS / REJECT を独自に判定して `[AUDITOR VERDICT]` を返却する。
    - **Mechanical Auditor Gate (`npm run gate:auditor`)**:
      - Execution AI は Auditor 返却後、`npm run gate:auditor -- --base <BASE> --target <TARGET>` を実行する。
      - `.agents/current-scope.json` の `mission` を正本として Stage 0 Entrance Gate の PASS 証跡を二重防御として再検証した上で、Event A（invoke_subagent with BASE/TARGET/SCOPE）➔ Event B（childConversationId）➔ Event C（childからの [AUDITOR VERDICT] PASS）の相関チェーンを検証する。
@@ -114,8 +114,8 @@
   - *Authority*: 親Executionから排他割当された単一ファイルの実装・編集、または Stage 9 確定差分残骸・Governance Closure 監査（Cleanup Profile）。
   - *Prohibition*: 再委任（Subagent Dispatch）禁止、担当外ファイル編集、自律的Scope拡張、Cleanup Profile時のファイル書込・削除・任意コマンド実行、他地区参照（永久原則）。
 - **Leaf Specialist: Independent Auditor AI (auditor)**:
-  - *Authority*: Executionからの内部ディスパッチ（Fresh isolated child context）受容、提示された差分・客観的証跡の独立査読、allowlist検証コマンド独立再実行（`git diff`, `npm test`, `check-scope.mjs`）、独立判定（PASS / REJECT）の `[AUDITOR VERDICT]` チャット返却。
-  - *Prohibition*: ファイル編集・生成（Policy-Level Zero Write、verdictファイル作成禁止）、Git Commit/Push/Deploy、非 allowlist コマンド実行、忖度・推測による判定、再委任（Subagent Dispatch）禁止、他地区参照（永久原則）。
+  - *Authority*: Executionからの内部ディスパッチ（Fresh isolated child context）受容、提示された差分および変更ファイル全文の独立査読、allowlist検証コマンド独立再実行（`git diff`, `npm test`, `check-scope.mjs`）、反証分析（他地区展開耐性・非data/**への地区リテラル埋込排除）、独立判定（PASS / REJECT）の `[AUDITOR VERDICT]` チャット返却。
+  - *Prohibition*: ファイル編集・生成（Policy-Level Zero Write、verdictファイル作成禁止）、Git Commit/Push/Deploy、非 allowlist コマンド実行、機械的テスト追認（テストPASSのみによる無精査合格）、忖度・推測による判定、再委任（Subagent Dispatch）禁止、他地区参照（永久原則）。
 - **Leaf Specialist: District Provisioning AI (deployer)**:
   - *Authority*: Executionからの内部ディスパッチ受容、新地区プロビジョニング手順執行、マスターデータ生成、親GAS Registryバインド、受入ゲート検証、`[DEPLOYER REPORT]` 返却。書込対象は `data/**` および不可避な地区固有設定のみ。
   - *Prohibition*: code deploy禁止、Git Commit/Push禁止、共通Runtime（`active/**`）改変禁止、共通テスト（`tests/**`）改変禁止、自律Scope拡張禁止、再委任（Subagent Dispatch）禁止、他地区参照（永久原則）。

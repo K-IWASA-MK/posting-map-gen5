@@ -67,18 +67,22 @@ function makeAuditorEventC({
   target = T1,
   scopeVerified = true,
   commands = ['git diff', 'npm test', 'node scripts/check-scope.mjs'],
+  semanticVerified = true,
   blockingFindings = 0,
   verdict = 'PASS',
   source = 'SYSTEM',
   type = 'SYSTEM_MESSAGE'
 } = {}) {
   const scopeLine = scopeVerified ? 'Approved Scope: VERIFIED' : '';
+  const semanticLine = semanticVerified
+    ? 'Semantic Review:\n- Full-File & Diff Review: executed (PASS)\n- Universal Invariants & Falsification: verified (PASS)'
+    : '';
   const cmdLines = commands.map(c => `- ${c}: executed (PASS)`).join('\n');
   return JSON.stringify({
     step_index: step,
     source,
     type,
-    content: `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-10T12:00:00Z sender=${sender} priority=MESSAGE_PRIORITY_HIGH content=[AUDITOR VERDICT]\nMission: Test Mission\nBase Commit: ${base}\nTarget Commit: ${target}\n${scopeLine}\nIndependent Commands Executed:\n${cmdLines}\nBlocking Findings: ${blockingFindings}\nFinal Verdict: ${verdict}\n</SYSTEM_MESSAGE>`
+    content: `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-10T12:00:00Z sender=${sender} priority=MESSAGE_PRIORITY_HIGH content=[AUDITOR VERDICT]\nMission: Test Mission\nBase Commit: ${base}\nTarget Commit: ${target}\n${scopeLine}\n${semanticLine}\nIndependent Commands Executed:\n${cmdLines}\nBlocking Findings: ${blockingFindings}\nFinal Verdict: ${verdict}\n</SYSTEM_MESSAGE>`
   });
 }
 
@@ -591,6 +595,61 @@ runTest('E8: 二重防御 (gate:auditor) — 同一Missionの Stage 0 PASS が�
   });
   assert.equal(res.pass, true);
   assert.equal(res.chain.verdict, 'PASS');
+});
+
+runTest('N16: mandatory semantic review evidence missing (全文査読・反証分析の証跡欠損による REJECT)', () => {
+  const lines = [
+    makeAuditorEventA(1, B1, T1),
+    makeAuditorEventB(2, AUDITOR_CONV),
+    makeAuditorEventC({
+      step: 3,
+      sender: AUDITOR_CONV,
+      base: B1,
+      target: T1,
+      semanticVerified: false
+    })
+  ];
+  const res = verifyAuditorGate({
+    baseCommit: B1,
+    targetCommit: T1,
+    transcriptLines: lines,
+    gitResolver: mockGitResolver
+  });
+  assert.equal(res.pass, false);
+  assert.match(res.error, /missing mandatory semantic review evidence/i);
+  assert.match(res.error, /Full-File & Diff Review/);
+  assert.match(res.error, /Universal Invariants & Falsification/);
+});
+
+runTest('N17: partial semantic review missing falsification analysis (反証分析欠損による REJECT)', () => {
+  const customContent = JSON.stringify({
+    step_index: 3,
+    source: 'SYSTEM',
+    type: 'SYSTEM_MESSAGE',
+    content: `<SYSTEM_MESSAGE>\n[Message] sender=${AUDITOR_CONV} content=[AUDITOR VERDICT]\nMission: Test Mission\nBase Commit: ${B1}\nTarget Commit: ${T1}\nApproved Scope: VERIFIED\nSemantic Review:\n- Full-File & Diff Review: executed (PASS)\nIndependent Commands Executed:\n- git diff: executed (PASS)\n- npm test: executed (PASS)\n- node scripts/check-scope.mjs: executed (PASS)\nBlocking Findings: none\nFinal Verdict: PASS\n</SYSTEM_MESSAGE>`
+  });
+  const lines = [
+    makeAuditorEventA(1, B1, T1),
+    makeAuditorEventB(2, AUDITOR_CONV),
+    customContent
+  ];
+  const res = verifyAuditorGate({
+    baseCommit: B1,
+    targetCommit: T1,
+    transcriptLines: lines,
+    gitResolver: mockGitResolver
+  });
+  assert.equal(res.pass, false);
+  assert.match(res.error, /missing mandatory semantic review evidence.*Universal Invariants & Falsification/i);
+});
+
+runTest('S1: Independent Auditor Effectiveness Regression Suite executes with 100% PASS', () => {
+  const regPath = path.join(REPO_ROOT, 'tests', 'test_auditor_effectiveness_regression.mjs');
+  const res = spawnSync(process.execPath, [regPath], { stdio: 'pipe', encoding: 'utf8' });
+  if (res.status !== 0) {
+    throw new Error(`Regression test suite failed:\n${res.stderr || res.stdout}`);
+  }
+  assert.equal(res.status, 0);
 });
 
 

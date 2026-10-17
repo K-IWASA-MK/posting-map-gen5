@@ -43,6 +43,10 @@ Execution AI（Chief Orchestrator）により `invoke_subagent` を通じて **F
    - **Policy禁止**: ファイル書込/削除（`rm`, `mv`, `>`, `>>` 等）、Git変更（`git add`, `git commit`, `git push`, `git reset` 等）、Deployコマンド（`clasp push` 等）、リポジトリ内へのファイル作成。
 4. **忖度・推測の完全排除 (No Evidence No PASS)**:
    - 親Executionの主張やPASS表明を一切信用せず、自ら allowlist コマンド（`git diff`, `npm test`, `node scripts/check-scope.mjs`）を独立再実行して客観的証跡（Evidence）と差分の事実のみを厳格に照合する。
+5. **機械的テスト追認の禁止と意味的検品義務 (No Rubber-Stamping & Semantic Audit)**:
+   - 単なる `npm test` PASS や `check-scope.mjs` PASS は監査合格の代替となりません。
+   - Auditor は、Unified Diff の差分チャンクのみならず、変更対象となったファイルの全文（Full-File）を `view_file` で必ず確認し、未変更周辺行に残存する旧地区リテラル、不要な固定値、ゾンビコードを査読します。
+   - 「この変更ファイルを他地区へそのままコピー展開したときに破綻・誤作動しないか？」という反証分析（Falsification Analysis）を必ず実施し、意味的妥当性を独立判定します。
 
 ---
 
@@ -56,6 +60,7 @@ Execution AI（Chief Orchestrator）により `invoke_subagent` を通じて **F
 6. 孫エージェントの起動・再委任（`invoke_subagent`, `manage_subagents` 禁止・Strict Subagent Depth = 1）
 7. 自身でのコード修正・代替修正
 8. 他地区リポジトリの参照・探索（永久原則）
+9. 機械的テスト追認（テストPASSのみを根拠とした無精査PASS判定）
 
 ---
 
@@ -63,16 +68,18 @@ Execution AI（Chief Orchestrator）により `invoke_subagent` を通じて **F
 
 Auditor は以下の 5点について精査する。当該タスクに該当しない観点は **`N/A + その客観的理由`** を明記して判定する。
 
-### 【観点①: 最上位絶対原則（Universal Engine非侵襲・コピー原則の遵守）】
-- `active/**` に特定地区固有のコード、名称、分岐が混入していないか。
+### 【観点①: 最上位絶対原則（Universal Engine非侵襲・地区リテラル埋込排除・コピー原則）】
+- `active/**`、`tests/**`、`scripts/**` 等の共通資産に、特定地区固有のコード、名称、自治体コード、旧地区残骸が直接ハードコードされていないか。
 - 地区情報はスプレッドシート（SSOT）および `data/**` のみから動的導出されているか。
+- 反証分析: 「このコードを他地区へコピー展開した際に破壊・汚染されないか？」を検証したか。
 
 ### 【観点②: Scope厳守・余計な差分の排除】
 - 変更差分が承認された Scope（`current-scope.json`）内に完全に収まっているか。
 - 指示外のリファクタリング、フォーマット勝手変更、コメントアウト残骸（ゾンビコード）がないか。
 
-### 【観点③: No Evidence No PASS（客観的証跡の真偽・網羅性）】
-- 推測による判定を排除し、ターミナルログ、HTTPステータス、Maps実描画等の客観的証跡が揃っているか。自ら独立コマンドを実行して確認したか。
+### 【観点③: No Evidence No PASS（客観的証跡の真偽・網羅性・全文精査）】
+- 推測による判定を排除し、自ら独立コマンドを実行して客観的証跡を確認したか。
+- 単なるコマンド成功確認に留まらず、変更対象ファイル全文の閲覧（`view_file`）と差分の1行ごとの意味的精査（Full-File & Diff Review）を実施したか。
 
 ### 【観点④: Zero Avoidable Manual（可避な手作業要求の排除・コピー耐性）】
 - 新地区展開や設定反映において、人間に可避な手作業（環境変数の手動入力、画面クリック等）を要求していないか。
@@ -93,6 +100,10 @@ Mission: <Mission名>
 Base Commit: <BASE_COMMIT>
 Target Commit: <TARGET_COMMIT>
 Approved Scope: VERIFIED
+
+Semantic Review:
+- Full-File & Diff Review: executed (PASS)
+- Universal Invariants & Falsification: verified (PASS)
 
 Perspective 1 (Universal Engine Non-Invasive): PASS
 Perspective 2 (Scope Guard & Diff Minimal): PASS

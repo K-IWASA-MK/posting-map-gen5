@@ -70,6 +70,7 @@ export function isMutatingCommand(commandLine) {
     'npm run gate:auditor',
     'node scripts/check-scope.mjs',
     'npm run audit:gate',
+    'node scripts/check-universal-invariants.mjs',
     'npm test'
   ];
 
@@ -238,6 +239,11 @@ export function verifyAuditorGate({
 
           const hasScopeReport = /Scope(?:\s*Verified)?:\s*(.+)/i.test(content) || /Approved Scope:/i.test(content);
 
+          // Semantic Review Evidence
+          const hasFullFileReview = /Full-File(?:\s*&\s*Diff)?\s*Review/i.test(content);
+          const hasFalsification = /Universal\s*Invariants(?:\s*&\s*Falsification)?/i.test(content) || /Falsification/i.test(content);
+          const hasSemanticReview = hasFullFileReview && hasFalsification;
+
           // Independent Commands Executed
           const hasGitDiff = /git diff/i.test(content);
           const hasNpmTest = /npm test/i.test(content);
@@ -262,6 +268,9 @@ export function verifyAuditorGate({
             reportBaseMatches,
             reportTargetMatches,
             hasScopeReport,
+            hasSemanticReview,
+            hasFullFileReview,
+            hasFalsification,
             hasIndependentCommands,
             hasGitDiff,
             hasNpmTest,
@@ -317,6 +326,14 @@ export function verifyAuditorGate({
     if (!latestChain.hasNpmTest) missing.push('npm test');
     if (!latestChain.hasCheckScope) missing.push('node scripts/check-scope.mjs');
     return { pass: false, error: `Event C [AUDITOR VERDICT] missing mandatory independent command evidence: ${missing.join(', ')}.` };
+  }
+
+  // 意味的全文検品証跡 (Semantic Review Evidence)
+  if (!latestChain.hasSemanticReview) {
+    const missing = [];
+    if (!latestChain.hasFullFileReview) missing.push('Full-File & Diff Review');
+    if (!latestChain.hasFalsification) missing.push('Universal Invariants & Falsification');
+    return { pass: false, error: `Event C [AUDITOR VERDICT] missing mandatory semantic review evidence: ${missing.join(', ')}.` };
   }
 
   // ブロッキング課題と Verdict
@@ -427,6 +444,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
     execSync('node scripts/check-secrets.mjs', { cwd: rootDir, stdio: 'inherit' });
   } catch (err) {
     exitFail('Preflight Secret Scan FAILED. Plaintext secrets detected in tracked files.');
+  }
+
+  // Preflight Gate 2: Universal Invariants Scanner must PASS across changed non-data files
+  try {
+    execSync(`node scripts/check-universal-invariants.mjs --base "${baseCommit}" --target "${targetCommit}"`, { cwd: rootDir, stdio: 'inherit' });
+  } catch (err) {
+    exitFail('Preflight Universal Invariants Check FAILED. Current district literals detected in changed non-data files.');
   }
 
   let transcriptPath;
