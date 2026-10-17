@@ -319,7 +319,7 @@ describe('Universal Phase 2 & Latest Census Dataset Resolution Gate Contract Tes
         '--estat-dir', estatDir,
         '--out-csv', path.join(testDir, 'out.csv')
       ], { stdio: 'pipe' });
-    }, /FATAL HARD STOP \[Cardinality 1:0\]: Skeleton town '架空市 存在しない町' \(rowId: 1\) has NO matching e-Stat record/);
+    }, /FATAL HARD STOP \[Cardinality 1:0\]: Skeleton town '架空市 存在しない町' \(rowId: 1.*\) has NO matching e-Stat record/);
   });
 
   // -------------------------------------------------------------
@@ -700,5 +700,210 @@ describe('Universal Phase 2 & Latest Census Dataset Resolution Gate Contract Tes
     const sortedContent = fs.readFileSync(sortedCsv, 'utf-8');
 
     assert.equal(sortedContent, originalContent, 'Re-sorting must produce diff -u == 0');
+  });
+
+  // -------------------------------------------------------------
+  // Test 13: Cardinality 1:0 With Complete 8-Field Evidence Passes as Blank
+  // -------------------------------------------------------------
+  it('Requirement 15: 1:0 with verified 8-field no_independent_estat_small_area passes with blank attributes and MLIT coordinates', () => {
+    const testDir = path.join(TEST_TMP_DIR, 'case_1to0_evidence_pass');
+    fs.mkdirSync(testDir, { recursive: true });
+
+    const skelCsv = path.join(testDir, 'skeleton.csv');
+    fs.writeFileSync(skelCsv, "rowId,city_name,town_name\n1,架空市,無小地域町\n");
+
+    const skelProv = path.join(testDir, 'skel_prov.json');
+    fs.writeFileSync(skelProv, JSON.stringify({
+      records: [
+        { city_name: '架空市', town_name: '無小地域町', latitude: '35.123456', longitude: '136.654321', city_code: '99001' }
+      ]
+    }));
+
+    const estatDir = path.join(testDir, 'estat');
+    fs.mkdirSync(estatDir, { recursive: true });
+    const fields = [
+      { name: 'KEY_CODE', len: 11 }, { name: 'S_NAME', len: 20 },
+      { name: 'JINKO', len: 10 }, { name: 'SETAI', len: 10 }, { name: 'HCODE', len: 4 }
+    ];
+    fs.writeFileSync(path.join(estatDir, 'mock.dbf'), buildMockDbf([], fields));
+
+    const reconJson = path.join(testDir, 'reconciliations.json');
+    fs.writeFileSync(reconJson, JSON.stringify({
+      "99001:無小地域町": {
+        city_code: "99001",
+        skeleton_town_name: "無小地域町",
+        reconciled_status: "no_independent_estat_small_area",
+        source_provider: "総務省統計局",
+        source_document_title: "令和X年国勢調査 小地域集計",
+        source_url: "https://example.gov.jp/census",
+        source_section_or_page: "小地域集計境界未設定（無住新田）",
+        verified_date: "2026-10-17"
+      }
+    }, null, 2));
+
+    const outCsv = path.join(testDir, 'out.csv');
+    const outProv = path.join(testDir, 'out_prov.json');
+
+    runPython([
+      path.join(REPO_ROOT, 'scripts', 'build-district-master.py'),
+      '--phase1-skeleton', skelCsv,
+      '--skeleton-provenance', skelProv,
+      '--estat-dir', estatDir,
+      '--estat-reconciliation', reconJson,
+      '--out-csv', outCsv,
+      '--provenance-out', outProv
+    ]);
+
+    const csvContent = fs.readFileSync(outCsv, 'utf-8').trim().split('\n');
+    assert.equal(csvContent.length, 2);
+    const r = csvContent[1].split(',');
+    assert.equal(r[0], '1');
+    assert.equal(r[1], '架空市');
+    assert.equal(r[2], '無小地域町');
+    assert.equal(r[3], '35.123456');
+    assert.equal(r[4], '136.654321');
+    assert.equal(r[5], ''); // households
+    assert.equal(r[6], ''); // population
+    assert.equal(r[7], ''); // e_stat_code
+
+    const prov = JSON.parse(fs.readFileSync(outProv, 'utf-8'));
+    assert.equal(prov.records[0].coordinate_source, 'skeleton_reference_point');
+    assert.equal(prov.records[0].coordinate_validation, 'skeleton_provenance_verified');
+    assert.match(prov.records[0].matching_evidence, /no_independent_estat_small_area: 令和X年国勢調査 小地域集計/);
+  });
+
+  // -------------------------------------------------------------
+  // Test 14: Incomplete 8-Field Evidence Triggers FATAL HARD STOP
+  // -------------------------------------------------------------
+  it('Requirement 16: Missing any of the 8 required reconciliation fields triggers FATAL HARD STOP', () => {
+    const testDir = path.join(TEST_TMP_DIR, 'case_1to0_incomplete_evidence');
+    fs.mkdirSync(testDir, { recursive: true });
+
+    const skelCsv = path.join(testDir, 'skeleton.csv');
+    fs.writeFileSync(skelCsv, "rowId,city_name,town_name\n1,架空市,不完全町\n");
+
+    const skelProv = path.join(testDir, 'skel_prov.json');
+    fs.writeFileSync(skelProv, JSON.stringify({
+      records: [
+        { city_name: '架空市', town_name: '不完全町', latitude: '35.0', longitude: '136.0', city_code: '99001' }
+      ]
+    }));
+
+    const estatDir = path.join(testDir, 'estat');
+    fs.mkdirSync(estatDir, { recursive: true });
+    const fields = [
+      { name: 'KEY_CODE', len: 11 }, { name: 'S_NAME', len: 20 },
+      { name: 'JINKO', len: 10 }, { name: 'SETAI', len: 10 }, { name: 'HCODE', len: 4 }
+    ];
+    fs.writeFileSync(path.join(estatDir, 'mock.dbf'), buildMockDbf([], fields));
+
+    // Missing 'source_url'
+    const reconJson = path.join(testDir, 'reconciliations.json');
+    fs.writeFileSync(reconJson, JSON.stringify({
+      "99001:不完全町": {
+        city_code: "99001",
+        skeleton_town_name: "不完全町",
+        reconciled_status: "no_independent_estat_small_area",
+        source_provider: "総務省統計局",
+        source_document_title: "小地域集計",
+        source_section_or_page: "未設定",
+        verified_date: "2026-10-17"
+      }
+    }, null, 2));
+
+    assert.throws(() => {
+      runPython([
+        path.join(REPO_ROOT, 'scripts', 'build-district-master.py'),
+        '--phase1-skeleton', skelCsv,
+        '--skeleton-provenance', skelProv,
+        '--estat-dir', estatDir,
+        '--estat-reconciliation', reconJson,
+        '--out-csv', path.join(testDir, 'out.csv')
+      ], { stdio: 'pipe' });
+    }, /FATAL HARD STOP \[Rule 4.6 Reconciliation\]: Missing or empty required reconciliation field 'source_url'/);
+  });
+
+  // -------------------------------------------------------------
+  // Test 15: MultiPolygon With Hole Topology (2 Disjoint Parts + 1 Hole)
+  // -------------------------------------------------------------
+  it('Requirement 17 & MASTER Constraint 3: MultiPolygon with 2 disjoint parts + 1 hole strictly rejects points in hole and derives valid interior point', () => {
+    const testDir = path.join(TEST_TMP_DIR, 'case_multipolygon_hole');
+    fs.mkdirSync(testDir, { recursive: true });
+
+    const skelCsv = path.join(testDir, 'skeleton.csv');
+    fs.writeFileSync(skelCsv, "rowId,city_name,town_name\n1,架空市,穴島町\n");
+
+    const skelProv = path.join(testDir, 'skel_prov.json');
+    fs.writeFileSync(skelProv, JSON.stringify({
+      records: [
+        { city_name: '架空市', town_name: '穴島町', latitude: '35.0', longitude: '136.0', city_code: '99001' }
+      ]
+    }));
+
+    const estatDir = path.join(testDir, 'estat');
+    fs.mkdirSync(estatDir, { recursive: true });
+    const fields = [
+      { name: 'KEY_CODE', len: 11 }, { name: 'S_NAME', len: 20 },
+      { name: 'JINKO', len: 10 }, { name: 'SETAI', len: 10 }, { name: 'HCODE', len: 4 }
+    ];
+    // e-Stat record without official_lat/lon to force compute_deterministic_interior_point
+    const dbfBuf = buildMockDbf([
+      { KEY_CODE: '990010050', S_NAME: '穴島町', JINKO: '200', SETAI: '80', HCODE: '8101' }
+    ], fields);
+    fs.writeFileSync(path.join(estatDir, 'mock.dbf'), dbfBuf);
+
+    // Geometry: MultiPolygon with 2 parts:
+    // Part A: Box [136.00, 35.00] to [136.10, 35.10] (CW) with a central Hole [136.03, 35.03] to [136.07, 35.07] (CCW).
+    // Part B: Disjoint Box [136.20, 35.20] to [136.30, 35.30] (CW) without hole.
+    const shpBuf = buildMockShp([
+      {
+        bbox: [136.00, 35.00, 136.30, 35.30],
+        rings: [
+          // Part A Exterior (CW)
+          [
+            [136.00, 35.00], [136.00, 35.10], [136.10, 35.10], [136.10, 35.00], [136.00, 35.00]
+          ],
+          // Part A Hole (CCW)
+          [
+            [136.03, 35.03], [136.07, 35.03], [136.07, 35.07], [136.03, 35.07], [136.03, 35.03]
+          ],
+          // Part B Exterior (CW)
+          [
+            [136.20, 35.20], [136.20, 35.30], [136.30, 35.30], [136.30, 35.20], [136.20, 35.20]
+          ]
+        ]
+      }
+    ]);
+    fs.writeFileSync(path.join(estatDir, 'mock.shp'), shpBuf);
+
+    const outCsv = path.join(testDir, 'out.csv');
+    const outProv = path.join(testDir, 'out_prov.json');
+
+    runPython([
+      path.join(REPO_ROOT, 'scripts', 'build-district-master.py'),
+      '--phase1-skeleton', skelCsv,
+      '--skeleton-provenance', skelProv,
+      '--estat-dir', estatDir,
+      '--out-csv', outCsv,
+      '--provenance-out', outProv
+    ]);
+
+    const csvContent = fs.readFileSync(outCsv, 'utf-8').trim().split('\n');
+    assert.equal(csvContent.length, 2);
+    const r = csvContent[1].split(',');
+    const lat = parseFloat(r[3]);
+    const lon = parseFloat(r[4]);
+
+    // Verify coordinate is NOT inside the hole [136.03, 35.03] to [136.07, 35.07]
+    const inHole = (lon > 136.03 && lon < 136.07 && lat > 35.03 && lat < 35.07);
+    assert.equal(inHole, false, `Calculated coordinate (${lat}, ${lon}) must NOT fall inside the hole!`);
+
+    // Verify coordinate is inside Part A or Part B solid regions
+    const inPartA = (lon >= 136.00 && lon <= 136.10 && lat >= 35.00 && lat <= 35.10);
+    const inPartB = (lon >= 136.20 && lon <= 136.30 && lat >= 35.20 && lat <= 35.30);
+    assert.equal(inPartA || inPartB, true, `Coordinate (${lat}, ${lon}) must be inside solid polygon area!`);
+
+    const prov = JSON.parse(fs.readFileSync(outProv, 'utf-8'));
+    assert.equal(prov.records[0].coordinate_validation, 'point_in_polygon: pass');
   });
 });

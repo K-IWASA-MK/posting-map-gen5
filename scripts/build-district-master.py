@@ -49,7 +49,6 @@ def parse_args():
     parser.add_argument('--estat-dir', default=None, help='Directory containing e-Stat shapefile/dbf datasets')
     parser.add_argument('--estat-file', default=None, help='Direct path to single e-Stat DBF or Shapefile')
     parser.add_argument('--estat-reconciliation', default=None, help='Path to external official e-Stat reconciliation JSON (optional)')
-    parser.add_argument('--allow-empty-estat', action='store_true', help='Allow blank demographic/estat attributes when town has no independent e-Stat small area')
     parser.add_argument('--city-code', default=None, help='Municipality code (optional)')
     parser.add_argument('--target-cities', action='append', help='Target municipality codes for Phase 2 district assembly')
     parser.add_argument('--in-geojson', default=None, help='Path to existing boundaries.geojson (legacy)')
@@ -120,6 +119,63 @@ def load_reading_reconciliations(json_path):
                 )
 
     print(f"[Phase 1 Reconciliations] Loaded {len(data)} reconciliation entries.")
+    return data
+
+ESTAT_EMPTY_REQUIRED_FIELDS = [
+    'city_code',
+    'skeleton_town_name',
+    'reconciled_status',
+    'source_provider',
+    'source_document_title',
+    'source_url',
+    'source_section_or_page',
+    'verified_date'
+]
+
+def load_estat_reconciliations(json_path):
+    """
+    Load external official e-Stat reconciliation JSON.
+    Supports:
+      1. Small area mapping / 1:1 or 1:N expansions
+      2. Verified empty status (reconciled_status == 'no_independent_estat_small_area')
+    Key: "<city_code>:<skeleton_town_name>" (or key_code for 1:N expansions)
+    For empty status, strictly validates all 8 mandatory fields defined in Rule 4.6.
+    """
+    if not json_path:
+        return {}
+    if not os.path.exists(json_path):
+        sys.exit(f"FATAL HARD STOP: e-Stat reconciliation file not found: {json_path}")
+    print(f"[Phase 2 Reconciliations] Loading external official e-Stat reconciliations from {json_path}...")
+    with open(json_path, 'r', encoding='utf-8') as f:
+        try:
+            data = json.load(f)
+        except Exception as e:
+            sys.exit(f"FATAL HARD STOP: Malformed e-Stat reconciliation JSON ({json_path}): {e}")
+
+    if not isinstance(data, dict):
+        sys.exit(f"FATAL HARD STOP: e-Stat reconciliation JSON must be an object keyed by '<city_code>:<skeleton_town_name>': {json_path}")
+
+    for k, v in data.items():
+        if not isinstance(v, dict):
+            sys.exit(f"FATAL HARD STOP: e-Stat reconciliation entry '{k}' must be an object in {json_path}")
+
+        status = v.get('reconciled_status')
+        if status == 'no_independent_estat_small_area':
+            for field in ESTAT_EMPTY_REQUIRED_FIELDS:
+                val = v.get(field)
+                if val is None or not str(val).strip():
+                    sys.exit(
+                        f"FATAL HARD STOP [Rule 4.6 Reconciliation]: Missing or empty required reconciliation field '{field}' "
+                        f"for empty status entry '{k}' in {json_path}"
+                    )
+            expected_key = f"{v['city_code']}:{v['skeleton_town_name']}"
+            if k != expected_key:
+                sys.exit(
+                    f"FATAL HARD STOP [Rule 4.6 Reconciliation]: Key mismatch for empty status entry. "
+                    f"Expected '{expected_key}', got '{k}' in {json_path}"
+                )
+
+    print(f"[Phase 2 Reconciliations] Loaded {len(data)} e-Stat reconciliation entries.")
     return data
 
 def load_abr_readings_phase1(abr_paths):
@@ -689,44 +745,123 @@ def point_in_ring(px, py, ring):
     return inside
 
 def ring_signed_area(ring):
-    """Calculate signed area of a 2D ring to distinguish exterior ring vs interior ring (hole)."""
-    return sum(ring[i][0] * ring[(i + 1) % len(ring)][1] - ring[(i + 1) % len(ring)][0] * ring[i][1] for i in range(len(ring))) / 2.0
+    """
+    Calculate signed area of a 2D ring to distinguish exterior ring vs interior ring (hole).
+    In 2D Cartesian plane (X: longitude, Y: latitude):
+      Clockwise (CW) = signed_area < 0 (ESRI Shapefile exterior ring)
+      Counter-Clockwise (CCW) = signed_area > 0 (ESRI Shapefile hole ring)
+    """
+    n = len(ring)
+    if n < 3:
+        return 0.0
+    return sum(ring[i][0] * ring[(i + 1) % n][1] - ring[(i + 1) % n][0] * ring[i][1] for i in range(n)) / 2.0
+
+def classify_polygon_parts(rings):
+    """
+    Classify Polygon and MultiPolygon rings into exterior parts and associated holes.
+    Adheres strictly to MASTER Constraint 3:
+    1. Distinguish candidate exteriors vs candidate holes via ring orientation.
+    2. Rigorously verify geometric containment:
+       - Each hole must be contained in EXACTLY ONE exterior ring.
+       - A hole contained in 0 exterior rings or multiple exterior rings triggers FATAL HARD STOP.
+       - Exterior rings must not contain one another (disjoint parts in MultiPolygon).
+       - Ring orientation and containment contradiction triggers FATAL HARD STOP.
+    Returns: list of dicts: [ { 'exterior': ext_ring, 'holes': [h1, h2, ...] }, ... ]
+    """
+    if not rings:
+        return []
+
+    valid_rings = [r for r in rings if len(r) >= 3]
+    if not valid_rings:
+        return []
+
+    if len(valid_rings) == 1:
+        return [{'exterior': valid_rings[0], 'holes': []}]
+
+    # 1. Classify candidate exteriors and holes by signed area (ESRI Shapefile convention: CW < 0, CCW > 0)
+    candidate_exteriors = []
+    candidate_holes = []
+    for r in valid_rings:
+        area = ring_signed_area(r)
+        if area < 0:  # CW
+            candidate_exteriors.append(r)
+        else:  # CCW
+            candidate_holes.append(r)
+
+    # In case rings were provided in reverse convention (e.g. all CCW), detect based on containment
+    if not candidate_exteriors and candidate_holes:
+        candidate_exteriors = candidate_holes
+        candidate_holes = []
+
+    if not candidate_exteriors:
+        sys.exit("FATAL HARD STOP [Topology]: Geometry has no valid exterior ring.")
+
+    # 2. Verify exterior rings do not contain one another (disjoint parts in MultiPolygon)
+    for i, ext1 in enumerate(candidate_exteriors):
+        for j, ext2 in enumerate(candidate_exteriors):
+            if i != j:
+                pt = ext2[0]
+                if point_in_ring(pt[0], pt[1], ext1):
+                    sys.exit(
+                        f"FATAL HARD STOP [Topology]: Invalid MultiPolygon topology! "
+                        f"Exterior ring {j} is contained within exterior ring {i}."
+                    )
+
+    # 3. Associate each hole with its uniquely enclosing exterior ring
+    parts = [{'exterior': ext, 'holes': []} for ext in candidate_exteriors]
+
+    for h_idx, hole in enumerate(candidate_holes):
+        enclosing_indices = []
+        for p_idx, part in enumerate(parts):
+            # Test sample point of hole inside exterior
+            pt = hole[0]
+            if point_in_ring(pt[0], pt[1], part['exterior']):
+                enclosing_indices.append(p_idx)
+
+        if len(enclosing_indices) == 0:
+            sys.exit(
+                f"FATAL HARD STOP [Topology]: Hole ring {h_idx} is NOT enclosed by any exterior ring! "
+                f"Contradiction between ring orientation and containment."
+            )
+        elif len(enclosing_indices) > 1:
+            sys.exit(
+                f"FATAL HARD STOP [Topology]: Hole ring {h_idx} is enclosed by multiple exterior rings ({enclosing_indices})! "
+                f"Overlapping exterior parts detected."
+            )
+        else:
+            parts[enclosing_indices[0]]['holes'].append(hole)
+
+    return parts
 
 def point_in_polygon_geometry(px, py, rings):
     """
     Point-in-polygon verification handling MultiPolygon and holes.
-    Point must be inside at least one exterior ring and not inside any corresponding hole.
+    Point must be inside at least one exterior ring and NOT inside any corresponding hole.
     """
     if not rings:
         return False
 
-    exterior_rings = []
-    hole_rings = []
-    for r in rings:
-        if len(r) < 3:
-            continue
-        # In ESRI Shapefiles, clockwise = exterior (signed area < 0 or > 0 depending on coordinate order)
-        # Here we classify rings: standard exterior has positive or negative area consistently
-        exterior_rings.append(r)
-
-    # Check if point is inside any exterior ring
-    for r in exterior_rings:
-        if point_in_ring(px, py, r):
-            return True
+    parts = classify_polygon_parts(rings)
+    for part in parts:
+        ext = part['exterior']
+        holes = part['holes']
+        if point_in_ring(px, py, ext):
+            # Point is inside this exterior ring. Must NOT be in any hole.
+            if not any(point_in_ring(px, py, h) for h in holes):
+                return True
     return False
 
 def compute_deterministic_interior_point(rings, bbox):
     """
     Compute a strictly deterministic interior point (point-on-surface equivalent)
-    and verify with point-in-polygon.
+    and verify with point-in-polygon (handling MultiPolygon and holes).
     STRICT PROHIBITION: Simple vertex averaging is strictly forbidden!
     """
     if not rings or not any(len(r) >= 3 for r in rings):
         return 0.0, 0.0, False
 
     xmin, ymin, xmax, ymax = bbox
-    # Attempt horizontal scanlines at deterministic fractions: 0.5, 0.382, 0.618, 0.25, 0.75, etc.
-    fractions = [0.5, 0.382, 0.618, 0.25, 0.75, 0.2, 0.8, 0.1, 0.9, 0.3, 0.7]
+    fractions = [0.5, 0.382, 0.618, 0.25, 0.75, 0.2, 0.8, 0.1, 0.9, 0.3, 0.7, 0.15, 0.85]
 
     for frac in fractions:
         scan_y = ymin + (ymax - ymin) * frac
@@ -738,26 +873,24 @@ def compute_deterministic_interior_point(rings, bbox):
                 x1, y1 = r[i]
                 x2, y2 = r[(i + 1) % n]
                 if (y1 <= scan_y < y2) or (y2 <= scan_y < y1):
-                    # Compute intersection X
                     ix = x1 + (scan_y - y1) * (x2 - x1) / (y2 - y1 + 1e-15)
                     intersections.append(ix)
 
         intersections.sort()
-        # Pair intersections: [ (x0, x1), (x2, x3), ... ]
         for i in range(0, len(intersections) - 1, 2):
             x_in = intersections[i]
             x_out = intersections[i + 1]
             cand_x = (x_in + x_out) / 2.0
             if point_in_polygon_geometry(cand_x, scan_y, rings):
-                # Shapefile X is longitude, Y is latitude
                 return scan_y, cand_x, True
 
-    # Fallback to first valid vertex with slight inward offset or ring midpoint if degenerate
-    for r in rings:
-        if len(r) >= 3:
-            for pt in r:
-                if point_in_polygon_geometry(pt[0], pt[1], rings):
-                    return pt[1], pt[0], True
+    # Fallback search across deterministic grid fractions inside bbox verified by point_in_polygon_geometry
+    for fy in fractions:
+        sy = ymin + (ymax - ymin) * fy
+        for fx in fractions:
+            sx = xmin + (xmax - xmin) * fx
+            if point_in_polygon_geometry(sx, sy, rings):
+                return sy, sx, True
 
     return (ymin + ymax) / 2.0, (xmin + xmax) / 2.0, False
 
@@ -933,11 +1066,7 @@ def run_phase2_universal(args):
                     skeleton_prov_map[(rec['city_name'], rec['town_name'])] = rec
 
     # 4. Load External Reconciliations
-    estat_reconciliations = {}
-    if args.estat_reconciliation and os.path.exists(args.estat_reconciliation):
-        print(f"[Phase 2 Step 2] Loading e-Stat reconciliations from {args.estat_reconciliation}...")
-        with open(args.estat_reconciliation, 'r', encoding='utf-8') as f:
-            estat_reconciliations = json.load(f)
+    estat_reconciliations = load_estat_reconciliations(args.estat_reconciliation)
 
     # 5. Load Electoral Mapping if specified
     electoral_map = None
@@ -1080,20 +1209,26 @@ def run_phase2_universal(args):
                     if k in all_estat_records:
                         candidates.append(all_estat_records[k])
 
-        # Cardinality Gate 1: 1:0 (Missing e-Stat match -> HARD STOP unless allow_empty_estat)
+        # Cardinality Gate 1: 1:0 (Missing e-Stat match -> HARD STOP unless verified no_independent_estat_small_area evidence)
         if len(candidates) == 0:
-            allow_empty = False
-            rec_entry = estat_reconciliations.get(f"{sk_city_code}:{sk_town}") or estat_reconciliations.get(sk_town)
-            if rec_entry and rec_entry.get('reconciled_status') == 'no_independent_estat_small_area':
-                allow_empty = True
-            elif args.allow_empty_estat:
-                allow_empty = True
+            comp_key = f"{sk_city_code}:{sk_town}"
+            rec_entry = estat_reconciliations.get(comp_key)
 
-            if not allow_empty:
+            if not rec_entry or rec_entry.get('reconciled_status') != 'no_independent_estat_small_area':
                 sys.exit(
-                    f"FATAL HARD STOP [Cardinality 1:0]: Skeleton town '{sk_city} {sk_town}' (rowId: {sk_row_id}) "
-                    f"has NO matching e-Stat record! Ambiguous fuzzy matching is strictly forbidden."
+                    f"FATAL HARD STOP [Cardinality 1:0]: Skeleton town '{sk_city} {sk_town}' (rowId: {sk_row_id}, code: '{sk_city_code}') "
+                    f"has NO matching e-Stat record and no official reconciliation evidence! "
+                    f"Ambiguous fuzzy matching is strictly forbidden. Provide verified entry with key '{comp_key}'."
                 )
+
+            # Strict validation of all 8 mandatory fields
+            for field in ESTAT_EMPTY_REQUIRED_FIELDS:
+                val = rec_entry.get(field)
+                if val is None or not str(val).strip():
+                    sys.exit(
+                        f"FATAL HARD STOP [Rule 4.6 Reconciliation]: Missing or empty required reconciliation field '{field}' "
+                        f"for empty status entry '{comp_key}'"
+                    )
 
             # Preserve skeleton original coordinates with blank demographic / e_stat attributes
             sp_rec = skeleton_prov_map.get(sk_row_id) or skeleton_prov_map.get((sk_city, sk_town), {})
@@ -1113,7 +1248,7 @@ def run_phase2_universal(args):
                 'e_stat_code': "",
                 'coordinate_source': "skeleton_reference_point",
                 'coordinate_validation': "skeleton_provenance_verified",
-                'matching_evidence': "no_independent_estat_small_area"
+                'matching_evidence': f"no_independent_estat_small_area: {rec_entry['source_document_title']}"
             })
             continue
 
