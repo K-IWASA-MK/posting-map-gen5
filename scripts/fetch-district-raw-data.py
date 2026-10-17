@@ -21,6 +21,7 @@ import hashlib
 import re
 import shutil
 import tempfile
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 def parse_args():
@@ -30,7 +31,7 @@ def parse_args():
     parser.add_argument('--estat-dir', default=None, help='Directory to cache e-Stat data (optional)')
     parser.add_argument('--abr-file', action='append', help='Path to Digital Agency ABR town master CSV (Required for Phase 1 verification)')
     parser.add_argument('--abr-dir', default=None, help='Directory containing Digital Agency ABR town master CSV files')
-    parser.add_argument('--data-kind', default='1', choices=['0', '1'], help='0: 街区レベル, 1: 大字・町丁目レベル (default: 1)')
+    parser.add_argument('--data-kind', default='1', choices=['1'], help='1: 大字・町丁目レベル (data_kind=1 only; block level is strictly prohibited)')
     return parser.parse_args()
 
 def compute_sha256(filepath):
@@ -100,9 +101,44 @@ def extract_creation_date_from_metadata(content):
     """
     Extract explicit source creation date and key from metadata files (XML, README, text).
     Strictly distinguishes creation date from update/release dates.
+    For JMP 2.0 / ISO 19115 XML:
+      Analyzes <MD_DataIdentification> (or <dataIdInfo>) -> <citation> -> <date>
+      where <dateType> (or <CI_DateTypeCode>) is 001 (creation).
+      Strictly ignores specification dates (<specification>) and non-creation dates (002, 003).
     Returns (matched_key, matched_date) or (None, None).
     """
-    # 1. XML tag pattern: <作成年月日>...</作成年月日>, <createDate>...</createDate>
+    # 1. JMP 2.0 / ISO 19115 XML citation structure analysis
+    try:
+        clean_xml = re.sub(r'<\?xml[^>]+encoding=[\'"][^\'"]+[\'"][^>]*\?>', '<?xml version="1.0"?>', content)
+        root = ET.fromstring(clean_xml)
+
+        def local_tag(elem):
+            return elem.tag.split('}')[-1]
+
+        for node in root.iter():
+            if local_tag(node) in ('MD_DataIdentification', 'dataIdInfo'):
+                for cit in node.iter():
+                    if local_tag(cit) == 'citation':
+                        for d_elem in cit.iter():
+                            if local_tag(d_elem) in ('CI_Date', 'date'):
+                                date_vals = [c.text.strip() for c in d_elem.iter() if local_tag(c) == 'date' and c.text and c.text.strip()]
+                                type_vals = [c.text.strip() for c in d_elem.iter() if local_tag(c) in ('dateType', 'CI_DateTypeCode') and c.text and c.text.strip()]
+                                for c in d_elem.iter():
+                                    if local_tag(c) == 'CI_DateTypeCode' and c.get('codeListValue'):
+                                        type_vals.append(c.get('codeListValue').strip())
+
+                                # 001 = creation (作成日), 002 = publication (出版/公開), 003 = revision (改訂/更新)
+                                is_creation = any(tv in ('001', 'creation', '作成', '作成日', '作成年月日') for tv in type_vals)
+                                is_other = any(tv in ('002', '003', 'publication', 'revision', '公開', '更新', '改訂') for tv in type_vals)
+                                if is_creation and not is_other:
+                                    for dv in date_vals:
+                                        m_d = DATE_VALUE_REGEX.search(dv)
+                                        if m_d:
+                                            return ('citation/date[dateType=001:creation]', m_d.group(1))
+    except Exception:
+        pass
+
+    # 2. XML tag pattern: <作成年月日>...</作成年月日>, <createDate>...</createDate>
     for key in CREATION_DATE_KEYS:
         tag_match = re.search(rf'<{key}[^>]*>\s*([^<]+)\s*</{key}>', content, re.IGNORECASE)
         if tag_match:
@@ -111,7 +147,7 @@ def extract_creation_date_from_metadata(content):
             if m_date:
                 return (key, m_date.group(1))
 
-    # 2. Text label pattern: 作成年月日: 2024-03-29
+    # 3. Text label pattern: 作成年月日: 2024-03-29
     for key in CREATION_DATE_KEYS:
         txt_match = re.search(rf'(?i)(?:^|[\r\n\s]){key}\s*[:：=]\s*([^\r\n]+)', content)
         if txt_match:
@@ -125,8 +161,11 @@ def extract_creation_date_from_metadata(content):
 def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports=None):
     """
     Fetch MLIT location reference data ZIP autonomously.
-    data_kind: '1' for 大字・町丁目レベル (SSOT default), '0' for 街区レベル
+    data_kind: '1' for 大字・町丁目レベル (SSOT default and ONLY allowed kind)
     """
+    if str(data_kind) != '1':
+        sys.exit(f"FATAL HARD STOP [DISTRICT_DATA_ACQUISITION_RULE.md §3.1]: data_kind must be '1' (大字・町丁目レベル). Block level data_kind={data_kind} is strictly prohibited.")
+
     pref_code = city_code[:2]
     out_dir = os.path.join(ref_dir, city_code)
     normalized_csv = os.path.join(out_dir, 'reference_points.csv')
@@ -142,7 +181,7 @@ def fetch_mlit_location_reference(city_code, ref_dir, data_kind='1', abr_reports
         if existing_zips:
             sys.exit(f"FATAL HARD STOP: Destination archive ZIP already exists in {out_dir} (overwrite strictly prohibited): {existing_zips}")
 
-    kind_label = "大字・町丁目" if data_kind == '1' else "街区"
+    kind_label = "大字・町丁目"
     print(f"[MLIT Fetcher] Target Municipality Code: {city_code} (Pref: {pref_code}), Kind: {kind_label} (data_kind={data_kind})")
 
     cj = http.cookiejar.CookieJar()

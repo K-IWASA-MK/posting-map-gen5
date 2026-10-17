@@ -25,6 +25,7 @@ import tempfile
 import shutil
 
 import json
+from collections import defaultdict
 
 CHOME_NUM_MAP = {
     "一丁目": "01", "二丁目": "02", "三丁目": "03", "四丁目": "04", "五丁目": "05",
@@ -47,6 +48,23 @@ def load_reading_reconciliations(json_path):
     Load external official reading reconciliation JSON (Rule 4.4).
     Key: "<city_code>:<town_code>"
     """
+RECONCILIATION_REQUIRED_FIELDS = [
+    'raw_town_name',
+    'reconciled_reading',
+    'reconciled_target_official_name',
+    'source_provider',
+    'source_document_title',
+    'source_url',
+    'source_section_or_page',
+    'verified_date'
+]
+
+def load_reading_reconciliations(json_path):
+    """
+    Load external official reading reconciliation JSON (Rule 4.4).
+    Key: "<city_code>:<town_code>"
+    Strictly validates all 8 mandatory fields defined in Rule 4.4.
+    """
     if not json_path:
         return {}
     if not os.path.exists(json_path):
@@ -62,8 +80,15 @@ def load_reading_reconciliations(json_path):
         sys.exit(f"FATAL HARD STOP: Reading reconciliation JSON must be an object keyed by '<city_code>:<town_code>': {json_path}")
 
     for k, v in data.items():
-        if not isinstance(v, dict) or not v.get('reconciled_reading'):
-            sys.exit(f"FATAL HARD STOP: Missing 'reconciled_reading' for reconciliation key '{k}' in {json_path}")
+        if not isinstance(v, dict):
+            sys.exit(f"FATAL HARD STOP: Reading reconciliation entry '{k}' must be an object in {json_path}")
+        for field in RECONCILIATION_REQUIRED_FIELDS:
+            val = v.get(field)
+            if val is None or not str(val).strip():
+                sys.exit(
+                    f"FATAL HARD STOP [Rule 4.4]: Missing or empty required field '{field}' "
+                    f"for reconciliation key '{k}' in {json_path}"
+                )
 
     return data
 
@@ -94,9 +119,11 @@ def load_provenance_data(provenance_path):
 def load_abr_readings(abr_paths):
     """
     Load official readings from Digital Agency ABR town master CSV files adhering strictly to official hierarchy.
+    Separates exact raw name match from normalized candidates to prevent cross-town overwrite.
     """
     city_readings = {}
-    town_readings = {}
+    exact_town_readings = defaultdict(list)
+    normalized_candidates = defaultdict(list)
 
     for path in abr_paths:
         if not os.path.exists(path):
@@ -127,12 +154,12 @@ def load_abr_readings(abr_paths):
                 if full_city_name and full_city_kana:
                     city_readings[full_city_name] = full_city_kana
 
-                if m_type == "2":  # 丁目
+                if m_type == "2" or (not m_type and chome_name):  # 丁目
                     full_town = f"{oaza_cho}{chome_name}".strip()
                     base_town = oaza_cho
                     base_kana = oaza_cho_kana
                     num = chome_number
-                elif m_type == "3":  # 小字
+                elif m_type == "3" or (not m_type and koaza):  # 小字
                     if oaza_cho:
                         full_town = f"{oaza_cho}{koaza}".strip()
                         base_town = full_town
@@ -161,18 +188,18 @@ def load_abr_readings(abr_paths):
                     "base_town": base_town
                 }
 
-                town_readings[(full_city_name, full_town)] = entry
-                town_readings[(full_city_name, clean_full)] = entry
-                town_readings[(full_city_name, f"大字{clean_full}")] = entry
+                # 1. Exact raw name registration (collect without overwriting)
+                exact_town_readings[(full_city_name, full_town)].append(entry)
+
+                # 2. Normalized candidates collection (collect without overwriting)
+                normalized_candidates[(full_city_name, clean_full)].append(entry)
                 if base_town != full_town:
-                    town_readings[(full_city_name, base_town)] = entry
-                    town_readings[(full_city_name, clean_base)] = entry
-                    town_readings[(full_city_name, f"大字{clean_base}")] = entry
+                    normalized_candidates[(full_city_name, clean_base)].append(entry)
 
-    print(f"[ABR Loader] Loaded readings: {len(city_readings)} cities/wards, {len(town_readings)} town entries.")
-    return city_readings, town_readings
+    print(f"[ABR Loader] Loaded readings: {len(city_readings)} cities/wards, {len(exact_town_readings)} exact towns, and {len(normalized_candidates)} normalized keys.")
+    return city_readings, exact_town_readings, normalized_candidates
 
-def resolve_sort_key_universal(row, city_readings, town_readings, provenance_map, reconciliations):
+def resolve_sort_key_universal(row, city_readings, exact_town_readings, normalized_candidates, provenance_map, reconciliations):
     """
     Derive deterministic sort key adhering to DISTRICT_DATA_ACQUISITION_RULE.md §4.4.
     Keys:
@@ -199,6 +226,7 @@ def resolve_sort_key_universal(row, city_readings, town_readings, provenance_map
 
     # 2. Check external reconciliation via provenance official code if available
     prov_rec = provenance_map.get(row_id)
+    raw_town = prov_rec.get('raw_town_name', town_name) if prov_rec else town_name
     if prov_rec:
         city_code = prov_rec.get('city_code', '')
         town_code = prov_rec.get('town_code', '')
@@ -211,27 +239,50 @@ def resolve_sort_key_universal(row, city_readings, town_readings, provenance_map
             chome_num = CHOME_NUM_MAP.get(chome_match.group(1), "00") if chome_match else "00"
             return (city_kana, town_kana, chome_num, town_name, row_id)
 
-    # 3. Lookup in ABR readings (preserving raw and clean town names)
-    clean_town = re.sub(r"^大字", "", town_name)
-    town_entry = town_readings.get((city_name, town_name)) or town_readings.get((city_name, clean_town))
+    # 3. Lookup in exact raw ABR readings (prioritize exact raw match)
+    town_entry = None
+    exact_cands = [c for c in exact_town_readings.get((city_name, raw_town), []) if c.get("base_kana")]
+    if not exact_cands and raw_town != town_name:
+        exact_cands = [c for c in exact_town_readings.get((city_name, town_name), []) if c.get("base_kana")]
 
+    if exact_cands:
+        distinct_kanas = set(c["base_kana"] for c in exact_cands)
+        if len(distinct_kanas) == 1:
+            town_entry = exact_cands[0]
+        elif len(distinct_kanas) > 1:
+            raise ValueError(
+                f"FATAL: Ambiguous ABR reading collision for town '{city_name}' '{town_name}'. "
+                f"Multiple distinct readings for exact town name: {distinct_kanas}"
+            )
+
+    # 4. If no exact raw match, check normalized fallback ONLY if unambiguous (distinct readings == 1)
+    if not town_entry:
+        clean_town = re.sub(r"^大字", "", town_name)
+        cands = [c for c in normalized_candidates.get((city_name, clean_town), []) if c.get("base_kana")]
+        distinct_kanas = set(c["base_kana"] for c in cands)
+        if len(distinct_kanas) == 1:
+            town_entry = cands[0]
+        elif len(distinct_kanas) > 1:
+            raise ValueError(f"FATAL: Ambiguous ABR reading collision for town '{city_name}' '{town_name}'. Multiple distinct readings match '{clean_town}': {distinct_kanas}")
+
+    # 5. Check base_name for chome towns
     chome_part = ""
     chome_match = re.search(r"([一二三四五六七八九十]+丁目)$", town_name)
-    base_name = town_name
-    if chome_match:
+    if not town_entry and chome_match:
         chome_part = chome_match.group(1)
         base_name = town_name[:-len(chome_part)]
-
-    if not town_entry:
-        base_clean = re.sub(r"^大字", "", base_name)
-        town_entry = town_readings.get((city_name, base_name)) or town_readings.get((city_name, base_clean)) or town_readings.get((city_name, f"大字{base_clean}"))
+        clean_base = re.sub(r"^大字", "", base_name)
+        cands = [c for c in normalized_candidates.get((city_name, clean_base), []) if c.get("base_kana")]
+        distinct_kanas = set(c["base_kana"] for c in cands)
+        if len(distinct_kanas) == 1:
+            town_entry = cands[0]
+        elif len(distinct_kanas) > 1:
+            raise ValueError(f"FATAL: Ambiguous ABR reading collision for base town '{city_name}' '{base_name}'. Multiple distinct readings match '{clean_base}': {distinct_kanas}")
 
     if not town_entry or not town_entry.get("base_kana"):
-        raise ValueError(f"FATAL: Unresolved town reading in official ABR data for city='{city_name}', town='{town_name}' (clean='{clean_town}')")
+        raise ValueError(f"FATAL: Unresolved ABR reading for town_name='{town_name}' in city_name='{city_name}'")
 
     base_kana = town_entry["base_kana"]
-
-    # 4. Chome numerical sorting (Rule 4.4)
     chome_num = CHOME_NUM_MAP.get(chome_part, "00")
     if chome_num == "00" and town_entry.get("chome_number"):
         try:
@@ -255,7 +306,7 @@ def main():
     if os.path.exists(args.output):
         sys.exit(f"FATAL HARD STOP: Output file already exists (overwrite strictly prohibited): {args.output}")
 
-    city_readings, town_readings = load_abr_readings(args.abr_file)
+    city_readings, exact_town_readings, normalized_candidates = load_abr_readings(args.abr_file)
     provenance_map = load_provenance_data(args.provenance)
     reconciliations = load_reading_reconciliations(args.reading_reconciliation)
 
@@ -270,14 +321,14 @@ def main():
     # Test and resolve sort keys for all rows (HARD STOP on any failure)
     for idx, r in enumerate(original_rows):
         try:
-            resolve_sort_key_universal(r, city_readings, town_readings, provenance_map, reconciliations)
+            resolve_sort_key_universal(r, city_readings, exact_town_readings, normalized_candidates, provenance_map, reconciliations)
         except Exception as err:
             sys.exit(f"FAIL [Universal Reading Check] at row {idx+1} (rowId={r.get('rowId')}): {err}")
 
     print("PASS [Universal Reading Check]: All records successfully resolved sort keys via official ABR data.")
 
     # Sort execution
-    sorted_rows = sorted(original_rows, key=lambda r: resolve_sort_key_universal(r, city_readings, town_readings, provenance_map, reconciliations))
+    sorted_rows = sorted(original_rows, key=lambda r: resolve_sort_key_universal(r, city_readings, exact_town_readings, normalized_candidates, provenance_map, reconciliations))
 
     # Verification: row count preservation and rowId sequence
     assert len(sorted_rows) == original_count, "Record count mismatch after sort"

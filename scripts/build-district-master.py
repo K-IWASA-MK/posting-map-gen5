@@ -71,11 +71,22 @@ def clean_oaza_prefix(name):
         return clean_name[2:]
     return clean_name
 
+RECONCILIATION_REQUIRED_FIELDS = [
+    'raw_town_name',
+    'reconciled_reading',
+    'reconciled_target_official_name',
+    'source_provider',
+    'source_document_title',
+    'source_url',
+    'source_section_or_page',
+    'verified_date'
+]
+
 def load_reading_reconciliations(json_path):
     """
     Load external official reading reconciliation JSON (Rule 4.4).
     Key: "<city_code>:<town_code>"
-    Required fields per entry: reconciled_reading
+    Strictly validates all 8 mandatory fields defined in Rule 4.4.
     """
     if not json_path:
         return {}
@@ -92,25 +103,38 @@ def load_reading_reconciliations(json_path):
         sys.exit(f"FATAL HARD STOP: Reading reconciliation JSON must be an object keyed by '<city_code>:<town_code>': {json_path}")
 
     for k, v in data.items():
-        if not isinstance(v, dict) or not v.get('reconciled_reading'):
-            sys.exit(f"FATAL HARD STOP: Missing 'reconciled_reading' for reconciliation key '{k}' in {json_path}")
+        if not isinstance(v, dict):
+            sys.exit(f"FATAL HARD STOP: Reading reconciliation entry '{k}' must be an object in {json_path}")
+        for field in RECONCILIATION_REQUIRED_FIELDS:
+            val = v.get(field)
+            if val is None or not str(val).strip():
+                sys.exit(
+                    f"FATAL HARD STOP [Rule 4.4]: Missing or empty required field '{field}' "
+                    f"for reconciliation key '{k}' in {json_path}"
+                )
 
     print(f"[Phase 1 Reconciliations] Loaded {len(data)} reconciliation entries.")
     return data
 
 def load_abr_readings_phase1(abr_paths):
     """
-    Load official readings from Digital Agency ABR CSVs for Phase 1 sorting adhering to official ABR hierarchy.
+    Load official readings from Digital Agency ABR CSVs adhering to official ABR hierarchy.
+    Separates exact raw name match from normalized candidates to prevent cross-town overwrite.
     machiaza_type:
       1 (大字): oaza_cho + oaza_cho_kana
       2 (丁目): oaza_cho + chome / oaza_cho_kana + chome_number
       3 (小字): oaza_cho + koaza (or koaza if oaza_cho empty) / oaza_cho_kana + koaza_kana
+    Returns:
+      city_readings: dict (city_name -> city_kana)
+      exact_town_readings: dict ((city_name, raw_town) -> entry)
+      normalized_candidates: defaultdict(list) ((city_name, clean_town) -> list[entry])
     """
     if not abr_paths:
         sys.exit("FATAL: --abr-file is strictly required for Phase 1 Area Skeleton generation.")
 
     city_readings = {}
-    town_readings = {}
+    exact_town_readings = defaultdict(list)
+    normalized_candidates = defaultdict(list)
 
     for path in abr_paths:
         if not os.path.exists(path):
@@ -142,12 +166,12 @@ def load_abr_readings_phase1(abr_paths):
                     city_readings[full_city_name] = full_city_kana
 
                 # Construct town name and reading according to official Digital Agency ABR specification
-                if m_type == "2":  # 丁目
+                if m_type == "2" or (not m_type and chome_name):  # 丁目
                     full_town = f"{oaza_cho}{chome_name}".strip()
                     base_town = oaza_cho
                     base_kana = oaza_cho_kana
                     num = chome_number
-                elif m_type == "3":  # 小字
+                elif m_type == "3" or (not m_type and koaza):  # 小字
                     if oaza_cho:
                         full_town = f"{oaza_cho}{koaza}".strip()
                         base_town = full_town
@@ -176,17 +200,16 @@ def load_abr_readings_phase1(abr_paths):
                     "base_town": base_town
                 }
 
-                # Register mappings preserving raw, clean, and explicit prefixes
-                town_readings[(full_city_name, full_town)] = entry
-                town_readings[(full_city_name, clean_full)] = entry
-                town_readings[(full_city_name, f"大字{clean_full}")] = entry
-                if base_town != full_town:
-                    town_readings[(full_city_name, base_town)] = entry
-                    town_readings[(full_city_name, clean_base)] = entry
-                    town_readings[(full_city_name, f"大字{clean_base}")] = entry
+                # 1. Exact raw name registration (collect without overwriting)
+                exact_town_readings[(full_city_name, full_town)].append(entry)
 
-    print(f"[Phase 1 ABR] Loaded {len(city_readings)} cities and {len(town_readings)} town reading keys.")
-    return city_readings, town_readings
+                # 2. Normalized candidates collection (collect without overwriting)
+                normalized_candidates[(full_city_name, clean_full)].append(entry)
+                if base_town != full_town:
+                    normalized_candidates[(full_city_name, clean_base)].append(entry)
+
+    print(f"[Phase 1 ABR] Loaded {len(city_readings)} cities, {len(exact_town_readings)} exact towns, and {len(normalized_candidates)} normalized keys.")
+    return city_readings, exact_town_readings, normalized_candidates
 
 def load_electoral_mapping(mapping_path, target_district):
     """
@@ -208,7 +231,7 @@ def load_electoral_mapping(mapping_path, target_district):
         reader = csv.DictReader(f)
         for idx, r in enumerate(reader):
             c = normalize_city_name(r.get('city_name', ''))
-            t = clean_oaza_prefix(r.get('town_name', ''))
+            t = r.get('town_name', '').strip()
             dist = r.get('electoral_district', '').strip()
             if not c or not t or not dist:
                 sys.exit(f"FATAL: Invalid record at electoral mapping line {idx+2}: city='{c}', town='{t}', district='{dist}'")
@@ -234,6 +257,10 @@ def run_phase1_skeleton(args):
 
     if os.path.exists(args.out_csv):
         sys.exit(f"FATAL HARD STOP: Output file already exists (overwrite strictly prohibited): {args.out_csv}")
+
+    prov_out_path = args.provenance_out or os.path.join(os.path.dirname(os.path.abspath(args.out_csv)), "skeleton_provenance.json")
+    if os.path.exists(prov_out_path):
+        sys.exit(f"FATAL HARD STOP: Destination skeleton provenance JSON already exists (overwrite strictly prohibited): {prov_out_path}")
 
     # 1. Load MLIT reference mother set
     print(f"[Phase 1 Step 1] Loading MLIT mother set from {args.ref_csv}...")
@@ -388,7 +415,7 @@ def run_phase1_skeleton(args):
 
     # 3. Load ABR readings and external reconciliations (Rule 4.4)
     print("[Phase 1 Step 3] Resolving official readings via Digital Agency ABR and external reconciliations...")
-    city_readings, town_readings = load_abr_readings_phase1(args.abr_file)
+    city_readings, exact_town_readings, normalized_candidates = load_abr_readings_phase1(args.abr_file)
     reconciliations = load_reading_reconciliations(args.reading_reconciliation)
 
     def resolve_sort_key(rec):
@@ -417,19 +444,54 @@ def run_phase1_skeleton(args):
             chome_num = CHOME_NUM_MAP.get(chome_match.group(1), "00") if chome_match else "00"
             return (city_kana, town_kana, chome_num, tname, town_kana)
 
-        # 2. Check ABR readings by exact clean_town or raw_town
-        town_entry = town_readings.get((cname, tname)) or town_readings.get((cname, raw_name))
+        # 2. Check exact raw match in ABR (prioritize exact raw match without normalization ambiguity)
+        town_entry = None
+        exact_cands = [c for c in exact_town_readings.get((cname, raw_name), []) if c.get("base_kana")]
+        if not exact_cands and raw_name != tname:
+            exact_cands = [c for c in exact_town_readings.get((cname, tname), []) if c.get("base_kana")]
 
+        if exact_cands:
+            distinct_kanas = set(c["base_kana"] for c in exact_cands)
+            if len(distinct_kanas) == 1:
+                town_entry = exact_cands[0]
+            elif len(distinct_kanas) > 1:
+                sys.exit(
+                    f"FATAL HARD STOP [Rule 4.4]: Ambiguous ABR reading collision for town '{cname}' '{tname}' (code: '{town_code}'). "
+                    f"Multiple distinct ABR readings ({distinct_kanas}) for exact town name. "
+                    f"Provide external official reconciliation JSON via --reading-reconciliation with key '{comp_key}'."
+                )
+
+        # 3. If no exact raw match, check normalized fallback ONLY if unambiguous (distinct readings == 1)
+        if not town_entry:
+            clean_name = re.sub(r"^大字", "", tname)
+            cands = [c for c in normalized_candidates.get((cname, clean_name), []) if c.get("base_kana")]
+            distinct_kanas = set(c["base_kana"] for c in cands)
+            if len(distinct_kanas) == 1:
+                town_entry = cands[0]
+            elif len(distinct_kanas) > 1:
+                sys.exit(
+                    f"FATAL HARD STOP [Rule 4.4]: Ambiguous ABR reading collision for town '{cname}' '{tname}' (code: '{town_code}'). "
+                    f"Multiple distinct ABR readings ({distinct_kanas}) match normalized name '{clean_name}'. "
+                    f"Provide external official reconciliation JSON via --reading-reconciliation with key '{comp_key}'."
+                )
+
+        # 4. Check base_name for chome towns
         chome_part = ""
         chome_match = re.search(r"([一二三四五六七八九十]+丁目)$", tname)
-        base_name = tname
-        if chome_match:
+        if not town_entry and chome_match:
             chome_part = chome_match.group(1)
             base_name = tname[:-len(chome_part)]
-
-        if not town_entry:
-            base_clean = re.sub(r"^大字", "", base_name)
-            town_entry = town_readings.get((cname, base_name)) or town_readings.get((cname, base_clean)) or town_readings.get((cname, f"大字{base_clean}"))
+            clean_base = re.sub(r"^大字", "", base_name)
+            cands = [c for c in normalized_candidates.get((cname, clean_base), []) if c.get("base_kana")]
+            distinct_kanas = set(c["base_kana"] for c in cands)
+            if len(distinct_kanas) == 1:
+                town_entry = cands[0]
+            elif len(distinct_kanas) > 1:
+                sys.exit(
+                    f"FATAL HARD STOP [Rule 4.4]: Ambiguous ABR reading collision for base town '{cname}' '{base_name}' (code: '{town_code}'). "
+                    f"Multiple distinct ABR readings ({distinct_kanas}) match normalized name '{clean_base}'. "
+                    f"Provide external official reconciliation JSON via --reading-reconciliation with key '{comp_key}'."
+                )
 
         if not town_entry or not town_entry.get("base_kana"):
             sys.exit(

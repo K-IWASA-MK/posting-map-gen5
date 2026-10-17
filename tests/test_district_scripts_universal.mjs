@@ -933,6 +933,165 @@ print("MLIT_FORM_AND_YEAR_PARSING_VERIFIED")
       }
     }
   });
+
+  it('Official Metadata XML JMP 2.0 / ISO 19115: citation dateType=001 extraction vs specification date exclusion', () => {
+    const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
+    const testPy = `
+from importlib.machinery import SourceFileLoader
+fetch_mod = SourceFileLoader('fetch_raw', '${fetchScript}').load_module()
+
+# 1. JMP 2.0 XML with MD_DataIdentification citation creation date (001) and specification date
+xml_jmp = '''<?xml version="1.0" encoding="utf-8"?>
+<MD_Metadata>
+  <dataIdInfo>
+    <MD_DataIdentification>
+      <citation>
+        <CI_Citation>
+          <date>
+            <CI_Date>
+              <date>2026-03-19</date>
+              <dateType>001</dateType>
+            </CI_Date>
+          </date>
+        </CI_Citation>
+      </citation>
+      <dataLineage>
+        <specification>
+          <date>2019-03-15</date>
+        </specification>
+      </dataLineage>
+    </MD_DataIdentification>
+  </dataIdInfo>
+</MD_Metadata>'''
+
+k, d = fetch_mod.extract_creation_date_from_metadata(xml_jmp)
+assert k == 'citation/date[dateType=001:creation]', f"Unexpected key: {k}"
+assert d == '2026-03-19', f"Unexpected date: {d}"
+
+# 2. XML with dateType 002 (publication) only -> must NOT be treated as creation
+xml_pub = '''<?xml version="1.0" encoding="utf-8"?>
+<MD_Metadata>
+  <citation>
+    <date>
+      <date>2026-04-01</date>
+      <dateType>002</dateType>
+    </date>
+  </citation>
+</MD_Metadata>'''
+k2, d2 = fetch_mod.extract_creation_date_from_metadata(xml_pub)
+assert k2 is None and d2 is None, f"Publication date must not be extracted: {k2}, {d2}"
+
+print("XML_CITATION_CREATION_DATE_VERIFIED")
+`;
+    const res = runPython(['-c', testPy], { encoding: 'utf-8' });
+    assert.ok(res.includes('XML_CITATION_CREATION_DATE_VERIFIED'));
+  });
+
+  it('External Reconciliation 8-field Validation: Missing required field triggers HARD STOP', () => {
+    const dir = path.join(TEST_TMP_DIR, 'recon_validation_test');
+    fs.mkdirSync(dir, { recursive: true });
+
+    const buildScript = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
+    const mlitCsv = path.join(dir, 'mlit.csv');
+    const abrCsv = path.join(dir, 'abr.csv');
+    const badReconJson = path.join(dir, 'bad_recon.json');
+    const outCsv = path.join(dir, 'out.csv');
+
+    fs.writeFileSync(mlitCsv, '都道府県コード,市区町村コード,市区町村名,大字町丁目コード,大字町丁目名\n99,99999,架空市,99999000100,テスト町\n');
+    fs.writeFileSync(abrCsv, 'lg_code,city,oaza_cho,oaza_cho_kana\n999991,架空市,テスト町,テストマチ\n');
+
+    // Missing 'source_url' and 'verified_date'
+    const incompleteRecon = {
+      "99999:99999000100": {
+        "raw_town_name": "テスト町",
+        "reconciled_reading": "テストマチ",
+        "reconciled_target_official_name": "テスト町",
+        "source_provider": "自治体HP",
+        "source_document_title": "町名一覧",
+        "source_section_or_page": "p.1"
+      }
+    };
+    fs.writeFileSync(badReconJson, JSON.stringify(incompleteRecon, null, 2));
+
+    assert.throws(() => {
+      runPython([
+        buildScript,
+        '--phase1-only',
+        '--ref-csv', mlitCsv,
+        '--abr-file', abrCsv,
+        '--reading-reconciliation', badReconJson,
+        '--out-csv', outCsv
+      ], { stdio: 'pipe' });
+    }, /Missing or empty required field 'source_url'/);
+  });
+
+  it('ABR Ambiguous Collision: Multiple distinct readings for normalized name triggers HARD STOP', () => {
+    const dir = path.join(TEST_TMP_DIR, 'abr_ambiguous_collision_test');
+    fs.mkdirSync(dir, { recursive: true });
+
+    const buildScript = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
+    const mlitCsv = path.join(dir, 'mlit.csv');
+    const abrCsv = path.join(dir, 'abr.csv');
+    const outCsv = path.join(dir, 'out.csv');
+
+    // MLIT has "大字曖昧町" (clean: 曖昧町)
+    fs.writeFileSync(mlitCsv, '都道府県コード,市区町村コード,市区町村名,大字町丁目コード,大字町丁目名\n99,99999,架空市,99999000100,大字曖昧町\n');
+    // ABR has multiple distinct readings for clean name "曖昧町" without exact "大字曖昧町"
+    const abrRows = [
+      ['lg_code', 'city', 'city_kana', 'oaza_cho', 'oaza_cho_kana'],
+      ['999991', '架空市', 'カクウシ', '曖昧町', 'アイマイチョウ'],
+      ['999991', '架空市', 'カクウシ', '曖昧町', 'アイマイマチ']
+    ];
+    fs.writeFileSync(abrCsv, abrRows.map(r => r.join(',')).join('\n') + '\n');
+
+    assert.throws(() => {
+      runPython([
+        buildScript,
+        '--phase1-only',
+        '--ref-csv', mlitCsv,
+        '--abr-file', abrCsv,
+        '--out-csv', outCsv
+      ], { stdio: 'pipe' });
+    }, /Ambiguous ABR reading collision/);
+  });
+
+  it('Provenance Overwrite Prevention: Existing --provenance-out triggers HARD STOP', () => {
+    const dir = path.join(TEST_TMP_DIR, 'prov_overwrite_test');
+    fs.mkdirSync(dir, { recursive: true });
+
+    const buildScript = path.join(REPO_ROOT, 'scripts', 'build-district-master.py');
+    const mlitCsv = path.join(dir, 'mlit.csv');
+    const abrCsv = path.join(dir, 'abr.csv');
+    const outCsv = path.join(dir, 'out.csv');
+    const existingProv = path.join(dir, 'existing_prov.json');
+
+    fs.writeFileSync(mlitCsv, '都道府県コード,市区町村コード,市区町村名,大字町丁目コード,大字町丁目名\n99,99999,架空市,99999000100,テスト町\n');
+    fs.writeFileSync(abrCsv, 'lg_code,city,oaza_cho,oaza_cho_kana\n999991,架空市,テスト町,テストマチ\n');
+    fs.writeFileSync(existingProv, '{"existing": true}');
+
+    assert.throws(() => {
+      runPython([
+        buildScript,
+        '--phase1-only',
+        '--ref-csv', mlitCsv,
+        '--abr-file', abrCsv,
+        '--out-csv', outCsv,
+        '--provenance-out', existingProv
+      ], { stdio: 'pipe' });
+    }, /Destination skeleton provenance JSON already exists/);
+  });
+
+  it('fetch-district-raw-data data_kind=1 enforcement: data_kind=0 is strictly rejected', () => {
+    const fetchScript = path.join(REPO_ROOT, 'scripts', 'fetch-district-raw-data.py');
+    assert.throws(() => {
+      runPython([
+        fetchScript,
+        '--city-code', '99999',
+        '--data-kind', '0',
+        '--output-dir', path.join(TEST_TMP_DIR, 'dummy')
+      ], { stdio: 'pipe' });
+    }, /invalid choice|FATAL HARD STOP/);
+  });
 });
 
 
