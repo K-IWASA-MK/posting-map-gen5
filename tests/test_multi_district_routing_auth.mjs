@@ -1,12 +1,12 @@
 /**
  * test_multi_district_routing_auth.mjs
- * 親Standalone GAS 1本化・動的地区ルーティング & 認可境界 厳格検証テストスイート
+ * 当該Spreadsheetに付属する1地区専用GAS・単一地区DB解決 & 認可境界 厳格検証テストスイート
  *
  * MASTER確定仕様:
  * 1. currentDistrictId のSingleton状態保持を排除（リクエストスコープ伝播）。
- * 2. districtId なしの本番マルチ地区APIはデフォルトSpreadsheetへ無条件fallbackさせない (MISSING_DISTRICT_ID)。
+ * 2. districtId なしの業務APIはデフォルトSpreadsheetへ無条件fallbackさせない (MISSING_DISTRICT_ID)。
  * 3. SYSTEM_INFO の機械的照合値は「地区コード（B2）」とし、不一致時は DISTRICT_MISMATCH で遮断。
- * 4. DISTRICT_REGISTRY は「地区DB接続情報」のSSOT。
+ * 4. SpreadsheetResolver (TARGET_SPREADSHEET_ID → SPREADSHEET_ID → getActiveSpreadsheet()) は単一地区DB接続解決のSSOT。
  * 5. SYSTEM_INFO は接続先DB自身の地区情報・契約状態等のSSOT。
  * 6. 5大認可シナリオ（正当、越境、未登録、無効トークン、未知地区ID）の全数実証。
  */
@@ -842,9 +842,9 @@ runTest("Scenario 9: 配布ランキングの地区別分離", () => {
 });
 
 // -----------------------------------------------------------------------------
-// TEST 10: 1地区専用GAS getActiveSpreadsheet() 優先解決および TARGET_SPREADSHEET_ID フォールバック
+// TEST 10: 1地区専用GAS TARGET_SPREADSHEET_ID 優先解決および getActiveSpreadsheet() フォールバック互換
 // -----------------------------------------------------------------------------
-runTest("Scenario 10: 1地区専用GAS getActiveSpreadsheet() 優先解決および TARGET_SPREADSHEET_ID フォールバック", () => {
+runTest("Scenario 10: 1地区専用GAS TARGET_SPREADSHEET_ID 優先解決および getActiveSpreadsheet() フォールバック互換", () => {
   const resolver = SpreadsheetResolver.getInstance();
   resolver.clearCache();
 
@@ -853,7 +853,7 @@ runTest("Scenario 10: 1地区専用GAS getActiveSpreadsheet() 優先解決およ
   const resolvedId = resolver.getSpreadsheetId("KUWANA");
   assert.equal(resolvedId, "ss-kuwana-id");
 
-  // getActiveSpreadsheet() が有効な場合は最優先で解決されること
+  // TARGET_SPREADSHEET_ID 設定時に getActiveSpreadsheet() 併存下でも TARGET_SPREADSHEET_ID が優先解決されること
   const origGetActive = global.SpreadsheetApp.getActiveSpreadsheet;
   global.SpreadsheetApp.getActiveSpreadsheet = () => kuwanaSS;
   resolver.clearCache();

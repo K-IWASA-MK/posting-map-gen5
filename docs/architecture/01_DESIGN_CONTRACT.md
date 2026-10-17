@@ -1441,7 +1441,7 @@ Universal Engine の完成状態を固定し、無秩序な改変を防ぐため
 - **Universal Engine Core (`active/**`)**: フロントエンド、バックエンドGAS、共通ライブラリ
 - **API Contract (`docs/api/API_CONTRACT.md`)**: 公開・管理アクションおよび通信プロトコル
 - **Data Schema (`docs/data/DATA_DICTIONARY.md`)**: 13シート標準構造（初期プロビジョニング時 11 Core Sheets 複製 ➔ 現場2シートオンデマンド生成）およびカラム定義
-- **Identity / Tenant Boundary**: LINE User ID からの正規導出、`SpreadsheetApp.getActiveSpreadsheet()` / `TARGET_SPREADSHEET_ID` 解決、`SYSTEM_INFO` Integrity Guard
+- **Identity / Tenant Boundary**: LINE User ID からの正規導出、`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()` 解決、`SYSTEM_INFO` Integrity Guard
 - **Offline / Idempotency Model**: Durable Queue、requestId による重複遮断
 - **Universal Invariants**: INV-001 〜 INV-009
 

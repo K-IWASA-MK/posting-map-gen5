@@ -61,7 +61,7 @@ Execution AI（Chief Orchestrator）からの内部ディスパッチ（`invoke_
    - 公式データ自律取得。
    - `address-master-generation` および `official-data-audit` プロトコル執行（住所マスター・境界GeoJSON・自治体マスター生成）。
 3. **Phase 3: District Database & Dedicated GAS Binding**:
-   - 当該Spreadsheetに付属する1地区専用GASおよび Script Properties（`TARGET_SPREADSHEET_ID`, `STORAGE_FOLDER_ID` 等）と `SYSTEM_INFO`（`DISTRICT_ID` 等）を地区専用にバインド。
+   - 当該Spreadsheetに付属する1地区専用GASおよび Script Properties（`TARGET_SPREADSHEET_ID`, `STORAGE_FOLDER_ID` 等）と `SYSTEM_INFO`（`地区コード` 等）を地区専用にバインド。
 4. **Phase 4: Acceptance Gate 機械的検証**:
    - 受入ゲート（単一地区解決、`SYSTEM_INFO` 整合、DB分離、フォールバック不発生、MapsKey、Drive物理階層契約・Human Navigation等）の全件 PASS を確認（`node tests/test_registry_provisioning_gate.mjs`）。
 5. **Phase 5: GitHub Pages & Production Verification**:

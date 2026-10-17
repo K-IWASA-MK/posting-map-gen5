@@ -42,7 +42,7 @@
 │   ┌────────────────────────────────────────────────────────────────┐   │
 │   │                 Tenant Isolation & Data Layer                  │   │
 │   │                                                                │   │
-│   │  [SEC-003: DB Resolution]    getActiveSpreadsheet / TARGET_SS  │   │
+│   │  [SEC-003: DB Resolution]    TARGET_SS / getActiveSpreadsheet  │   │
 │   │  [SEC-003: Integrity Guard]  SYSTEM_INFO districtId 照合       │   │
 │   │  [SEC-002: Injection Guard]  Formula / CSV Injection 無害化   │   │
 │   │  [SEC-004: XSS Guard]        escapeHtml サニタイズ             │   │
@@ -102,7 +102,7 @@
    - クライアントが自己申告する `staffId` や `staffName` を認証・認可の根拠として信用しない。
    - サーバー側で LINE プラットフォームにより検証された `lineUserId` から `staffId` を逆引きし、クライアント送信値を強制上書きする。
 2. **1地区専用スプレッドシート解決 (`SpreadsheetResolver`)**:
-   - 当該Spreadsheetに付属する1地区専用GASは、`SpreadsheetApp.getActiveSpreadsheet()` 優先および `TARGET_SPREADSHEET_ID` フォールバックにより、自地区専用のスプレッドシート（DB）を1対1で解決する。
+   - 当該Spreadsheetに付属する1地区専用GASは、`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()` の優先順により、自地区専用のスプレッドシート（DB）を1対1で解決する。
    - 複数地区共用親GASによる越境ルーティングは行わない。
 3. **SYSTEM_INFO Integrity Guard**:
    - 接続先スプレッドシートを開いた直後、`SYSTEM_INFO` シートの `地区コード` を読み出し、リクエストの `districtId` と一致することを検証する。

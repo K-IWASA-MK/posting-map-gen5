@@ -70,7 +70,7 @@
       "canonicalSources": [
         {
           "path": "docs/architecture/01_DESIGN_CONTRACT.md",
-          "sha256": "0bc70b1a05d73e95eb30e2c19dcd68919132879d20efa4b37a7c9d064f67842f"
+          "sha256": "a4a7602d54cc665c8935c6e649474cf87bd246858520aca2c775dd091b50c44b"
         },
         {
           "path": "docs/architecture/03_CURRENT_H_APP_INVENTORY.md",
@@ -87,7 +87,7 @@
       "canonicalSources": [
         {
           "path": "docs/architecture/01_DESIGN_CONTRACT.md",
-          "sha256": "0bc70b1a05d73e95eb30e2c19dcd68919132879d20efa4b37a7c9d064f67842f"
+          "sha256": "a4a7602d54cc665c8935c6e649474cf87bd246858520aca2c775dd091b50c44b"
         }
       ],
       "evidenceSources": [
@@ -100,7 +100,7 @@
       "canonicalSources": [
         {
           "path": "docs/api/API_CONTRACT.md",
-          "sha256": "095f345f19eb8da37fe293c9620c9a79f24bfc042159a6ee33441e55f1af1001"
+          "sha256": "471030d45447b93053dd9328a9eedcee0838c175c5911251329833e8d87a433d"
         },
         {
           "path": "active/api/v2_api.js",
@@ -134,7 +134,7 @@
       "canonicalSources": [
         {
           "path": "docs/architecture/01_DESIGN_CONTRACT.md",
-          "sha256": "0bc70b1a05d73e95eb30e2c19dcd68919132879d20efa4b37a7c9d064f67842f"
+          "sha256": "a4a7602d54cc665c8935c6e649474cf87bd246858520aca2c775dd091b50c44b"
         }
       ],
       "evidenceSources": [
@@ -147,11 +147,11 @@
       "canonicalSources": [
         {
           "path": "docs/api/API_CONTRACT.md",
-          "sha256": "095f345f19eb8da37fe293c9620c9a79f24bfc042159a6ee33441e55f1af1001"
+          "sha256": "471030d45447b93053dd9328a9eedcee0838c175c5911251329833e8d87a433d"
         },
         {
           "path": "docs/security/SECURITY_BASELINE.md",
-          "sha256": "840b1b5a44b8cab84a4b22f19f95f2334dc116f4cd8e177367b1ec04eca3f5ac"
+          "sha256": "d654fc2968a9a8de6a627e4bb3ac8272bbd75ddb58d4dd19d6c0a11bfc1d1624"
         }
       ],
       "evidenceSources": [
@@ -198,7 +198,7 @@
         },
         {
           "path": "AGENTS.md",
-          "sha256": "835262de01b454eec41aed7f575746f0e754b269b12e8e80d34e72e97ce4c09a"
+          "sha256": "1244956684bc1bd2bf9fc2cca87f30bca418808bafe5e0e0459af3776d2a10b1"
         }
       ],
       "evidenceSources": [

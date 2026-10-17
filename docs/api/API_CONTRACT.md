@@ -214,7 +214,7 @@ Backend: ペイロード強制上書き (クライアント送信値を破棄)
   * Backend側で必ず `cleanDistrictId = String(districtId || '').trim().toUpperCase()` を実施。大文字小文字の差異を吸収。
 * **解決フロー (Resolution Chain)**:
   1. `Session Binding`: `dashboardSessionToken` が渡された場合、`verifyDashboardSession(token, cleanDistrictId)` を実行。セッション所属地区と要求地区が不一致の場合は `UNAUTHORIZED` を返却（他地区Key搾取防止）。
-  2. `Integrity Guard`: `SpreadsheetResolver`（`SpreadsheetApp.getActiveSpreadsheet()` 優先 + `TARGET_SPREADSHEET_ID` フォールバック）照合時、当該スプレッドシート `SYSTEM_INFO` の地区コード（`DISTRICT_ID` / `地区コード`）と不一致時は `DISTRICT_MISMATCH` を返却。
+  2. `Integrity Guard`: `SpreadsheetResolver`（`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()`）照合時、当該スプレッドシート `SYSTEM_INFO` の `地区コード` と不一致時は `DISTRICT_MISMATCH` を返却。
   3. `Contract Gate`: 対象地区が契約終了状態 (`CONTRACT_EXPIRED`) の場合は即時遮断。
   4. 地区別Key探索: `GOOGLE_MAPS_API_KEY_<DISTRICT_ID>` が存在すれば該当Keyを返却 (`isFallback: false`)。
   5. Phase 1 Legacy Fallback: 地区別Keyが未設定かつ共通Key `GOOGLE_MAPS_API_KEY` が存在する場合のみ当該Keyを返却 (`isFallback: true`)。
@@ -247,8 +247,8 @@ Request 受信
     ↓
 districtId 取得 (地区整合性検証パラメータ)
     ↓
-SpreadsheetApp.getActiveSpreadsheet() (または TARGET_SPREADSHEET_ID) による自地区DBの解決
-＋ SYSTEM_INFO (DISTRICT_ID) との整合性検証 (verifyIntegrityGuard: 不一致時は DISTRICT_MISMATCH 遮断)
+SpreadsheetResolver (TARGET_SPREADSHEET_ID → SPREADSHEET_ID → SpreadsheetApp.getActiveSpreadsheet()) による自地区DBの解決
+＋ SYSTEM_INFO (地区コード) との整合性検証 (verifyIntegrityGuard: 不一致時は DISTRICT_MISMATCH 遮断)
     ↓
 LINE Access Token 検証 ➔ 認証済み lineUserId 取得 (Identity Proof: 本人性証明)
     ↓
@@ -911,7 +911,7 @@ Gate 3 で策定した設計契約と、現行コードベース（`active/`）�
      - 応答: HTTP 200 正常チラシ在庫サマリー返却
 3. **セキュリティ & 整合性ガード (Integrity & Safety Guard)**:
    - **整合性ガード・地区コード不一致 (`SYSTEM_INFO district-code mismatch`)**:
-     - 条件: リクエストの `districtId` が当該スプレッドシート `SYSTEM_INFO` の地区コード（`DISTRICT_ID` / `地区コード`）と不一致、またはセッション所属地区と不一致
+     - 条件: リクエストの `districtId` が当該スプレッドシート `SYSTEM_INFO` の `地区コード` と不一致、またはセッション所属地区と不一致
      - リクエスト例: `POST /exec { "action": "getDashboardSnapshot", "districtId": "UNKNOWN" }`
      - 応答: HTTP 200 `{ success: false, code: "DISTRICT_MISMATCH", message: "..." }`
    - **契約満了地区 (`expired district`)**:

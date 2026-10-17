@@ -57,7 +57,7 @@ Universal Engine v1.0 における各コンポーネントのベースライン�
    - 13シート標準構造（初期11 Core複製+現場2オンデマンド生成、DATA_DICTIONARY.md準拠）のカラム配列
 4. **Identity & Tenant Boundary**:
    - `LINE User ID → Staff Identity → Branch → Target Area` 導出チェーン
-   - `SpreadsheetApp.getActiveSpreadsheet()` / `TARGET_SPREADSHEET_ID` 単一地区解決および `SYSTEM_INFO` Integrity Guard
+   - `TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()` 単一地区解決および `SYSTEM_INFO` Integrity Guard
 5. **Universal Invariants (INV-001 〜 INV-009)**:
    - 1地区1アプリ/1リポジトリ/1ドメイン/1DB/付属1地区専用GAS原則、共通Runtime（`active/`）改変禁止原則、地域差=データ層吸収原則
 

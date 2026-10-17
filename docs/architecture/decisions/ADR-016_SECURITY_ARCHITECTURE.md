@@ -24,7 +24,7 @@ POSTING MAP は配布員・管理者・支部が日常的に利用するフィ�
 - 名簿未登録のユーザーからの業務操作は `NOT_REGISTERED` で厳格に遮断する。
 
 #### ③ Tenant Isolation (地区・テナント間の物理・論理分離)
-- 当該Spreadsheetに付属する1地区専用GASによる1地区1DBの物理分離を採用し、`SpreadsheetApp.getActiveSpreadsheet()` 優先（および `TARGET_SPREADSHEET_ID` フォールバック）により自地区専用のスプレッドシート（DB）を解決する。
+- 当該Spreadsheetに付属する1地区専用GASによる1地区1DBの物理分離を採用し、`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()` の優先順により自地区専用のスプレッドシート（DB）を解決する。
 - 接続先スプレッドシート内の `SYSTEM_INFO` シートに記録された `地区コード` と要求された `districtId` を照合する `verifyIntegrityGuard`（`DISTRICT_MISMATCH`）を義務付け、越境アクセス・クロステナント汚染を物理的・論理的に完全遮断する。
 - 管理者セッション（`sessionToken`）にも発行時の `districtId` を拘束し、異地区リクエストへの流用を即時拒絶する。
 

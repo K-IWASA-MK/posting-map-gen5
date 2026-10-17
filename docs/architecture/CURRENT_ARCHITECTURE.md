@@ -50,7 +50,7 @@
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │    当該Spreadsheetに付属する1地区専用GAS (APIサーバー)     │  │
 │  │  active/api/ , active/business/                             │  │
-│  │  ※ getActiveSpreadsheet() 優先 + TARGET_SPREADSHEET_ID     │  │
+│  │  ※ TARGET_SPREADSHEET_ID → SPREADSHEET_ID → getActiveSpreadsheet() │  │
 │  └───────────────────────────┬────────────────────────────────┘  │
 │                              │ Sheets API                        │
 │                              ▼                                   │
@@ -122,7 +122,7 @@
   - 現場系2シート（`掲示板`, `掲示板連絡履歴`）は現場での初回利用時にオンデマンド自動生成され、定常運用時の 13シート標準構造へ収束する。
 
 ### 5. GAS = 当該Spreadsheetに付属する1地区専用GAS
-- Google Apps Script は各地区の Spreadsheet に1対1で付属する **「当該Spreadsheetに付属する1地区専用GAS」** として配備し、`SpreadsheetApp.getActiveSpreadsheet()` を第1優先で解決する（非コンテナ実行時やテスト等のフォールバックとして `PropertiesService.getScriptProperties()` の `TARGET_SPREADSHEET_ID` を使用）。
+- Google Apps Script は各地区の Spreadsheet に1対1で付属する **「当該Spreadsheetに付属する1地区専用GAS」** として配備し、`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()` の優先順で解決する。
 - 複数地区を1本の共有親GAS（`DISTRICT_REGISTRY`）で束ねる構造は採用せず、地区ごとに物理的に自己完結させる。
 
 ### 6. 旧式非管理スクリプト・共有親GASの廃止

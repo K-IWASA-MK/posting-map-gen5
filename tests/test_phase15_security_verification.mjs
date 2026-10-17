@@ -50,7 +50,7 @@ test('3. Tenant Isolation: 1地区専用Spreadsheet解決、SYSTEM_INFO地区コ
   const adapterPath = path.join(rootDir, 'active/infrastructure/spreadsheet/spreadsheet_adapter.js');
   const adapter = fs.readFileSync(adapterPath, 'utf8');
 
-  // 1地区専用 GAS スプレッドシート解決 (getActiveSpreadsheet / TARGET_SPREADSHEET_ID)
+  // 1地区専用 GAS スプレッドシート解決 (TARGET_SPREADSHEET_ID / SPREADSHEET_ID / getActiveSpreadsheet)
   assert.ok(adapter.includes('SpreadsheetApp.getActiveSpreadsheet()') || adapter.includes('TARGET_SPREADSHEET_ID'), 'spreadsheet_adapter.js must resolve single-district spreadsheet');
   assert.ok(!adapter.includes('props.getProperty("DISTRICT_REGISTRY")'), 'spreadsheet_adapter.js must not depend on parent-GAS DISTRICT_REGISTRY');
 

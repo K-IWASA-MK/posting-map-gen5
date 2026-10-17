@@ -20,7 +20,7 @@
    - プロビジョニング中に `active/` 変更が必要と判明した場合は、直ちに **HARD STOP（プロビジョニング失敗）** とする。
 2. **1地区自己完結型バックエンド（当該Spreadsheetに付属する1地区専用GAS）**:
    - `1地区 = 1完成アプリ = 1単独フォルダー = 1単独リポジトリ = 1単独ドメイン = 1単独スプレッドシート（DB） = 当該Spreadsheetに付属する1地区専用GAS = 地区専用外部設定` の最高位物理境界を厳守する。
-   - 各地区は当該Spreadsheetに付属する1地区専用GASプロジェクトを持ち、`SpreadsheetApp.getActiveSpreadsheet()` 優先および `TARGET_SPREADSHEET_ID` フォールバックによって自地区のスプレッドシート（DB）と1対1で結合する（複数地区共用親GASの廃止）。
+   - 各地区は当該Spreadsheetに付属する1地区専用GASプロジェクトを持ち、`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()` の優先順によって自地区のスプレッドシート（DB）と1対1で結合する（複数地区共用親GASの廃止）。
 3. **再現性・自律性の担保**:
    - 各ステップには明確な 入力・アクション・検証・エビデンス・ロールバック・HARD STOP条件 を規定し、属人的判断を排除する。
 
@@ -179,9 +179,9 @@
   2. 当該1地区専用GASの Script Properties に以下を設定：
      - `TARGET_SPREADSHEET_ID`: `<CANONICAL_SPREADSHEET_ID>`
      - `BRANCH_ROOT_FOLDER_ID`: `<03_BRANCH_FOLDER_ID>`
-  3. 1地区専用GASを Web App としてデプロイし、専用 `GAS_EXEC_URL` を取得。
+  3. 1地区専用GASを Web App としてデプロイし、専用 GAS Web App URL（`api.gasWebAppUrl`）を取得。
 - **Validation**:
-  - `SpreadsheetResolver.resolve(districtId)` が `SpreadsheetApp.getActiveSpreadsheet()` または `TARGET_SPREADSHEET_ID` から対象DBを解決し、`verifyIntegrityGuard`（`SYSTEM_INFO` の `地区コード` 一致）を通過すること。
+  - `SpreadsheetResolver.getInstance().getSpreadsheet(districtId)` が `TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()` の優先順で対象DBを解決し、`verifyIntegrityGuard`（`SYSTEM_INFO` の `地区コード` 一致）を通過すること。
   - 既存の他地区のGAS・DB・設定に一切接触していないこと（完全な1地区自律閉塞）。
 - **Evidence**:
   - 1地区専用GAS デプロイ完了ログおよび Script Properties キー設定確認ログ
@@ -248,7 +248,7 @@
   3. **地区契約情報設定**:
      - 地区の `SYSTEM_INFO` シートに `契約終了日` を設定。
   4. **クライアント設定バインド**:
-     - クライアント配信設定ファイル（`data/config.js`）に `DISTRICT_ID`, `LIFF_ID`, `GAS_EXEC_URL` を設定。
+     - クライアント配信設定ファイル（`data/config.js`）に `districtId`, `line.liffId`, `api.gasWebAppUrl` を設定。
 - **Validation**:
   - LINE ログインから LIFF アプリが正常に全画面起動すること。
   - LIFF 初期化時に `liffToken` が正しく取得できること。
@@ -323,7 +323,7 @@
 | No | 検査項目 | 検証内容 | 合否基準 |
 |:---:|:---|:---|:---:|
 | 1 | **districtId 正規化** | 英大文字・数字・ハイフンのみ、他地区と重複なし | PASS / FAIL |
-| 2 | **1地区専用GAS DB解決整合** | 当該Spreadsheetに付属する1地区専用GAS（`getActiveSpreadsheet` / `TARGET_SPREADSHEET_ID`）で対象DBと1対1結合 | PASS / FAIL |
+| 2 | **1地区専用GAS DB解決整合** | 当該Spreadsheetに付属する1地区専用GAS（`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `getActiveSpreadsheet`）で対象DBと1対1結合 | PASS / FAIL |
 | 3 | **SYSTEM_INFO Integrity Guard** | DB側 `地区コード` とリクエスト `districtId` が一致（不一致時 `DISTRICT_MISMATCH`） | PASS / FAIL |
 | 4 | **シート面 Pure DB 完全性** | シート内にカスタム関数や `onEdit` トリガーが存在しない | PASS / FAIL |
 | 5 | **シート構造整合** | `DATA_DICTIONARY.md` / ADR-024 準拠（`SYSTEM_INFO` + 実運用5種シート構造）のヘッダー完全一致 | PASS / FAIL |

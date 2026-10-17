@@ -31,7 +31,7 @@ POSTING MAP Universal Engine は、「1地区 = 1完成アプリ = 1単独フォ
    - 地区名、市区町村名、自治体コード、総エリア件数、地理座標系、地図表示範囲（bounds）、境界ポリゴン（GeoJSON）、月次シート名、スタッフ名簿、配布進捗、個人ランキングのすべては、投入された `data/` および接続先スプレッドシートから 100% 動的に解決される。
    - 桑名市の 337 件や自治体コード 24205 は「1 つの地区データ」であり、エンジンの上限や固定値ではない。
 3. **Strict Tenant Isolation（厳格なテナント分離・認可境界原則）**:
-   - 地区間でのデータ混線、集計混入、他地区データへの不正横断アクセスは、当該Spreadsheetに付属する1地区専用GAS（`SpreadsheetApp.getActiveSpreadsheet()` / `TARGET_SPREADSHEET_ID`）による物理分離と、各スプレッドシートの `SYSTEM_INFO`（地区コード）による機械的照合ガード（`DISTRICT_MISMATCH`）によって物理的・論理的に完全に遮断される。
+   - 地区間でのデータ混線、集計混入、他地区データへの不正横断アクセスは、当該Spreadsheetに付属する1地区専用GAS（`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()`）による物理分離と、各スプレッドシートの `SYSTEM_INFO`（地区コード）による機械的照合ガード（`DISTRICT_MISMATCH`）によって物理的・論理的に完全に遮断される。
 4. **Functional Independence（10大検証対象の完全独立性）**:
    - 支部、対象地域、党員、活動ログ、MAP、Dashboard、個人ランキング、API、認証、データ境界の 10 領域すべてが、地区ごとに完全に独立して整合性を維持する。
 5. **Zero-Code District Provisioning（コード変更ゼロの新地区プロビジョニング）**:
@@ -50,7 +50,7 @@ POSTING MAP Universal Engine は、「1地区 = 1完成アプリ = 1単独フォ
 | **5** | **MAP** | `render.js` / `google.maps` / Leaflet | 投入されたピン群の座標から動的に `fitBounds` 算出 | A地区の地図にB地区のピンが表示されない |
 | **6** | **Dashboard** | `app.js` / `manager.js` | 該当地区の完了数とCSV総エリア数から進捗率を算出 | 総エリア数・進捗率が正しく個別算出される |
 | **7** | **個人ランキング** | `DistributionRepository.fetchRankingData` | 該当地区の `配布実績YYYY-MM` のみを走査・集計 | ランキングに他地区スタッフが集計されない |
-| **8** | **API** | `v2_api.js` / `SpreadsheetResolver` | 1地区専用GASが `getActiveSpreadsheet()` / `TARGET_SPREADSHEET_ID` で自地区DBを解決 | 各地区が完全に独立した専用GAS・専用DBで完結 |
+| **8** | **API** | `v2_api.js` / `SpreadsheetResolver` | 1地区専用GASが `TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `getActiveSpreadsheet()` で自地区DBを解決 | 各地区が完全に独立した専用GAS・専用DBで完結 |
 | **9** | **認証** | `auth.js` / `staff_identity_boundary` | LINE User ID と該当地区名簿の突合 | A地区のLINEユーザーがB地区で未認可となる |
 | **10** | **データ境界** | `verifyIntegrityGuard` (`DISTRICT_MISMATCH`) | スプレッドシート `SYSTEM_INFO` の地区コードと照合 | 越境アクセス試行時は即座に例外スロー・拒否 |
 
@@ -66,7 +66,7 @@ POSTING MAP Universal Engine は、「1地区 = 1完成アプリ = 1単独フォ
 | **自治体名** | 桑名市 (コード: 24205) | 倉敷市 (コード: 33202) | 市区町村名・コードが動的に取得されること |
 | **総エリア件数** | **337 件** | **120 件** | エリア総数が 337 固定でなく動的に 120 となること |
 | **地理座標系** | 三重県桑名市 (Lat ~35.06, Lng ~136.68) | 岡山県倉敷市 (Lat ~34.58, Lng ~133.77) | 地図バウンディングボックスが各座標群へ自動適合すること |
-| **Spreadsheet ID**| `ss-kuwana-id` | `ss-kurashiki-id` | 各地区専用GAS (`getActiveSpreadsheet` / `TARGET_SPREADSHEET_ID`) で独立DBへ到達すること |
+| **Spreadsheet ID**| `ss-kuwana-id` | `ss-kurashiki-id` | 各地区専用GAS (`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `getActiveSpreadsheet`) で独立DBへ到達すること |
 | **所属スタッフ** | K001 (桑名 太郎), K002 (桑名 花子) | B001 (倉敷 三郎), B002 (倉敷 四郎) | スタッフ一覧・名簿が完全に独立して取得されること |
 | **配布実績** | K001: 100枚 | B001: 250枚 | ランキング1位がそれぞれの地区で正しく独立算出されること |
 | **越境アクセス** | KUWANA ➔ KURASHIKI 要求 | KURASHIKI ➔ KUWANA 要求 | いずれも `DISTRICT_MISMATCH` で即座に遮断されること |
@@ -91,7 +91,7 @@ Universal POSTING MAP において、新しい地区を立ち上げる手順は�
   Script Properties に TARGET_SPREADSHEET_ID 等を設定して Web App としてデプロイ。
 
 [Step 4: 独立完成アプリ成立]
-  当該地区の data/config.js に専用 GAS_EXEC_URL / LIFF_ID / DISTRICT_ID を設定し、
+  当該地区の data/config.js に専用 api.gasWebAppUrl / line.liffId / districtId を設定し、
   コード変更 0 行で完全に独立した新地区アプリケーションとして稼働。
 ```
 

@@ -325,7 +325,7 @@ RankingSummary (個人ランキング)
        ↓
 ⑤ 当該Spreadsheetに付属する1地区専用GAS配備 (TARGET_SPREADSHEET_ID 設定)
        ↓
-⑥ 接続確認 (1地区専用GASからの getActiveSpreadsheet / openById 疎通)
+⑥ 接続確認 (1地区専用GASからの openById(TARGET_SPREADSHEET_ID) / getActiveSpreadsheet 疎通)
        ↓
 ⑦ API 疎通確認 (Web App エンドポイント経由の getSystemSummary 応答)
        ↓
@@ -345,9 +345,9 @@ RankingSummary (個人ランキング)
 | **③** | SYSTEM_INFO初期化 | 管理者 / スクリプト | 第1シート `SYSTEM_INFO` に地区コード、地区名、契約終了日、管理パスワード等の初期値を書き込む。 | 地区コードが `districtId` と完全一致 |
 | **④** | 地区データ投入 | 管理者 / ツール | 当該地区の `address_master.csv` を基に実運用5種シートへ町丁目行データを投入する。 | 実運用シート行数とCSV町丁目数が完全一致 |
 | **⑤** | 1地区専用GAS配備 | 管理者 (clasp / Script Properties) | 当該Spreadsheetに付属する1地区専用GASへ Universal Runtime を配備し、`TARGET_SPREADSHEET_ID` 等を設定する。 | Web App デプロイ完了およびプロパティ永続化 |
-| **⑥** | 接続確認 | 管理者 / 診断スクリプト | 1地区専用GAS環境から `getActiveSpreadsheet()`（または `openById(TARGET_SPREADSHEET_ID)`）で対象DBが開けることを確認。 | 例外なしでスプレッドシートオブジェクト取得 |
+| **⑥** | 接続確認 | 管理者 / 診断スクリプト | 1地区専用GAS環境から `TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()` で対象DBが開けることを確認。 | 例外なしでスプレッドシートオブジェクト取得 |
 | **⑦** | API疎通確認 | 管理者 / curl / テスト | 当該地区の Web App URL に対して `{ action: "getSystemSummary", districtId: "..." }` を投げ、200 OK を確認。 | 正常な JSON サマリ応答 |
-| **⑧** | クライアント設定確認 | 管理者 / フロントエンド | 当該地区の `data/config.js` の `DISTRICT_ID` / `GAS_EXEC_URL` / `LIFF_ID` が 1 文字の狂いもなく一致することを確認。 | 設定値の完全一致 |
+| **⑧** | クライアント設定確認 | 管理者 / フロントエンド | 当該地区の `data/config.js` の `districtId` / `api.gasWebAppUrl` / `line.liffId` が 1 文字の狂いもなく一致することを確認。 | 設定値の完全一致 |
 | **⑨** | 実機確認 | 管理者 / 検品者 | ブラウザ / LINE 実機で Hアプリ・Dashboard を開き、ピン表示および動作を確認。 | 検品チェックリスト全項目 PASS |
 
 ### (2) 二段階SSOT境界（1地区専用GAS 解決と SYSTEM_INFO）
@@ -357,8 +357,9 @@ RankingSummary (個人ランキング)
 ```text
 【第1段階: 1地区専用DB解決】
   当該Spreadsheetに付属する1地区専用GAS (SpreadsheetResolver)
-      ├─ 第1優先: SpreadsheetApp.getActiveSpreadsheet()
-      └─ 第2優先: Script Properties TARGET_SPREADSHEET_ID ➔ openById
+      ├─ 第1優先: Script Properties TARGET_SPREADSHEET_ID ➔ openById
+      ├─ 第2優先: Script Properties SPREADSHEET_ID ➔ openById
+      └─ 第3優先: SpreadsheetApp.getActiveSpreadsheet()
            │
            ▼
 【第2段階: 実体状態SSOT (verifyIntegrityGuard)】

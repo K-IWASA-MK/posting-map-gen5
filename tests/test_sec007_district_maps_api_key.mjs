@@ -13,7 +13,7 @@
  * Test-08: 地区別Keyなし + legacy Keyなし → MAPS_KEY_NOT_CONFIGURED
  * Test-09: 地区別Keyが存在しない新地区のProvisioning → Provisioning Gate FAIL
  * Test-10: 旧Keyへの意図しない別地区フォールバックが発生しないこと
- * Test-11: DISTRICT_REGISTRYとSYSTEM_INFO地区コード不一致 → DISTRICT_MISMATCH
+ * Test-11: TARGET_SPREADSHEET_IDとSYSTEM_INFO地区コード不一致 → DISTRICT_MISMATCH
  * Test-12: Public GET → 契約通り動作
  * Test-13: Public POST → 契約通り動作
  * Test-14: Dashboard Session正常 → 自地区Key取得成功

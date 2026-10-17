@@ -1,15 +1,15 @@
 /**
  * test_registry_provisioning_gate.mjs
- * Generation 2 Registry Provisioning Acceptance Gate 機械検証スイート
+ * Single-District DB Resolution & Provisioning Acceptance Gate 機械検証スイート
  *
  * 必須検証項目:
- * 1. Registry exists             PASS
- * 2. New district entry exists   PASS
- * 3. spreadsheetId matches       PASS
- * 4. enabled                     PASS
- * 5. Known district routing      PASS
- * 6. Unknown district rejection  PASS
- * 7. Legacy fallback not used    PASS
+ * 1. TARGET_SPREADSHEET_ID configured & DISTRICT_REGISTRY retired from Runtime  PASS
+ * 2. SYSTEM_INFO sheet exists and B2 matches districtId                         PASS
+ * 3. handleGetMapsApiKey resolves GOOGLE_MAPS_API_KEY                           PASS
+ * 4. handleGetMapsApiKey fails closed when GOOGLE_MAPS_API_KEY is missing       PASS
+ * 5. Known district resolution                                                  PASS
+ * 6. Unknown / Mismatched district rejection (DISTRICT_MISMATCH)                PASS
+ * 7. Cross-district leakage prevented                                           PASS
  */
 
 import assert from 'node:assert/strict';

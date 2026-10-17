@@ -19,7 +19,7 @@
   4. Master Data Tier (Git `data/`: address_master.csv, boundaries.geojson, municipality_master.csv, config.js, area_mapping.json)
 - `active/` = universal engine. Never modify active/ for regional specialization.
 - `data/` = master data and client configuration.
-- Backend GAS = 当該Spreadsheetに付属する1地区専用GAS（`SpreadsheetApp.getActiveSpreadsheet()` 優先 / `TARGET_SPREADSHEET_ID` フォールバック + `SYSTEM_INFO` `verifyIntegrityGuard`）。複数地区を単一親GASや `DISTRICT_REGISTRY` で共有・ルーティングする方式は廃止。
+- Backend GAS = 当該Spreadsheetに付属する1地区専用GAS（`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()` + `SYSTEM_INFO` `verifyIntegrityGuard`）。複数地区を単一親GASや `DISTRICT_REGISTRY` で共有・ルーティングする方式は廃止。
 
 ## 2. Universal Gap Protocol — ABSOLUTE
 - 新地区作成時および運用時において共通Runtime（`active/`）の変更が必要になった場合、地区固有のworkaround（個別コード分岐、地区名ハードコード、暫定ハック）を絶対禁止とする。

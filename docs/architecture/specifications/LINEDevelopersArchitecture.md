@@ -72,7 +72,7 @@ Civic Tech Inc. (Provider)
 2. **LINE Login / LIFF 構造**: 1地区完結の認証・起動導線として構成
 
 ### 5.2. 地区別設定・ドメイン連携項目 (District Configuration)
-1. **Endpoint URL**: 当該地区の独自ドメイン `https://<district-domain>/`（`CNAME` 準拠）へ設定し、`data/config.js` の `LIFF_ID` とバインド
+1. **Endpoint URL**: 当該地区の独自ドメイン `https://<district-domain>/`（`CNAME` 準拠）へ設定し、`data/config.js` の `line.liffId` とバインド
 2. **Callback URL**: `https://<district-domain>/` へ設定
 3. **チャネルアクセストークン (長期)**: 当該地区専用のトークンを、当該Spreadsheetに付属する1地区専用GASの `PropertiesService`（`LINE_CHANNEL_ACCESS_TOKEN`）へ設定
 4. **リッチメニュー (Rich Menu)**: 当該地区の LIFF URL（`PRODUCTION_LIFF_URL`）を組み込んだリッチメニューの適用 (`createRichMenuForHApp()`)

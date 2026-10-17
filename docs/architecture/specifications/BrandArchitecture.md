@@ -129,6 +129,6 @@ backdrop-filter: blur(20px);
 
 - **District Custom Domain**: `https://<district-domain>/`（各地区のリポジトリ `CNAME` で定義される地区専用独自ドメイン）
 - **App URL**: `https://<district-domain>/active/h-app/index.html`（またはルート `https://<district-domain>/` 経由）
-- **Dashboard URL**: `https://<district-domain>/active/manager/dashboard.html`
-- **Backend API Endpoint**: 当該地区のSpreadsheetに付属する1地区専用GAS Web App URL（`data/config.js` の `GAS_EXEC_URL` に設定）
+- **Dashboard URL**: `https://<district-domain>/active/manager/index.html`
+- **Backend API Endpoint**: 当該地区のSpreadsheetに付属する1地区専用GAS Web App URL（`data/config.js` の `api.gasWebAppUrl` に設定）
 - **LIFF Endpoint URL**: `https://<district-domain>/`（当該地区専用の LIFF ID と 1対1 でバインド）

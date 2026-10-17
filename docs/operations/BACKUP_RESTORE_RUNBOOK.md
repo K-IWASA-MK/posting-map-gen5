@@ -56,7 +56,7 @@
 
 ### 自動バックアップ（標準運用）
 1. スケジュール実行スクリプト（当該地区専用GAS タイムトリガーまたは管理バッチ）が起動。
-2. 当該地区のスプレッドシート（`getActiveSpreadsheet()` または `TARGET_SPREADSHEET_ID`）を取得。
+2. 当該地区のスプレッドシート（`TARGET_SPREADSHEET_ID` → `SPREADSHEET_ID` → `SpreadsheetApp.getActiveSpreadsheet()`）を取得。
 3. 当該スプレッドシートを、指定のバックアップ専用 Drive フォルダ（一般配布員・外部権限完全遮断）へ複製コピー。
 4. ファイル名規則: `BACKUP_<districtId>_YYYYMMDD_HHmmss`
 5. コピー完了後、正式合意された保持期間ポリシー（TBD / Decision Required）に基づき古いバックアップファイルをパージ。
