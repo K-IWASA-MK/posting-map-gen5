@@ -193,11 +193,30 @@ test('7. ランキング集計条件: completedAt + groupKey + count > 0 の確�
 // 8. Universal 原則遵守 & 厳格な Scope Lock
 // ----------------------------------------------------------------------------
 test('8. Universal 原則遵守: active/ 配下に地区固有ハードコードがなく、マスターデータが保護されていること', () => {
+  // data/** SSOT から動的取得 (Universal Invariant)
+  const configContent = fs.readFileSync(path.join(rootDir, 'data/config.js'), 'utf8');
+  const districtIdMatch = configContent.match(/districtId:\s*["']([^"']+)["']/);
+  const districtId = districtIdMatch ? districtIdMatch[1].trim() : null;
+
+  const electionContent = fs.readFileSync(path.join(rootDir, 'data/election_history.json'), 'utf8');
+  const electionData = JSON.parse(electionContent);
+  const districtName = electionData.districtName ? electionData.districtName.trim() : null;
+
+  const muniCsvContent = fs.readFileSync(path.join(rootDir, 'data/municipality_master.csv'), 'utf8');
+  const muniNames = muniCsvContent.trim().split('\n').slice(1).map(l => l.split(',')[0].trim()).filter(Boolean);
+
   const activeFiles = [appJsPath, renderJsPath, dbJsPath];
   for (const f of activeFiles) {
     const content = fs.readFileSync(f, 'utf8');
-    assert.ok(!content.includes('KUWANA-'), '地区IDが active/ にハードコードされていないこと');
-    assert.ok(!content.includes('OKAYAMA-'), '地区IDが active/ にハードコードされていないこと');
+    if (districtId) {
+      assert.ok(!content.includes(districtId), `地区ID (${districtId}) が active/ にハードコードされていないこと`);
+    }
+    if (districtName) {
+      assert.ok(!content.includes(districtName), `地区名 (${districtName}) が active/ にハードコードされていないこと`);
+    }
+    for (const city of muniNames) {
+      assert.ok(!content.includes(city), `自治体名 (${city}) が active/ にハードコードされていないこと`);
+    }
   }
 
   // address_master.csv と municipality_master.csv の動的整合性検証 (Universal Invariant)
@@ -335,10 +354,10 @@ test('9. P1 #3: isDone=false 取消経路の完全閉鎖（Fail-Closed & Mutatio
     //      [7]H gpsStatus, [8]I photoStatus, [9]J lat, [10]K lng, [11]L gpsTime,
     //      [12]M fileId, [13]N photoUrl, [14]O photoTime, [15]P lineUserId, [16]Q requestId
     const initialSheetData = [
-      ["1", "桑名市", "町丁1", "2026/10/01 10:00:00", 100, "S001", "配布員A", "OK", "OK", 35.0, 136.6, "2026/10/01 10:00:00", "fid1", "url1", "2026/10/01 10:00:00", "U_USER_A", "req_A_001"],
-      ["2", "桑名市", "町丁2", "2026/10/01 10:30:00", 200, "S002", "配布員B", "OK", "OK", 35.1, 136.7, "2026/10/01 10:30:00", "fid2", "url2", "2026/10/01 10:30:00", "U_USER_B", "req_B_001"],
-      ["3", "桑名市", "町丁3", "2026/10/01 11:00:00", 150, "S003", "配布員C", "OK", "OK", 35.2, 136.8, "2026/10/01 11:00:00", "fid3", "url3", "2026/10/01 11:00:00", "",         "req_C_001"], // Legacy P空欄
-      ["4", "桑名市", "町丁4", "",                     0,   "",     "",        "",   "",   "",   "",    "",                    "",     "",     "",                    "",         ""         ]  // 未完了行
+      ["1", "テスト市", "町丁1", "2026/10/01 10:00:00", 100, "S001", "配布員A", "OK", "OK", 35.0, 136.6, "2026/10/01 10:00:00", "fid1", "url1", "2026/10/01 10:00:00", "U_USER_A", "req_A_001"],
+      ["2", "テスト市", "町丁2", "2026/10/01 10:30:00", 200, "S002", "配布員B", "OK", "OK", 35.1, 136.7, "2026/10/01 10:30:00", "fid2", "url2", "2026/10/01 10:30:00", "U_USER_B", "req_B_001"],
+      ["3", "テスト市", "町丁3", "2026/10/01 11:00:00", 150, "S003", "配布員C", "OK", "OK", 35.2, 136.8, "2026/10/01 11:00:00", "fid3", "url3", "2026/10/01 11:00:00", "",         "req_C_001"], // Legacy P空欄
+      ["4", "テスト市", "町丁4", "",                     0,   "",     "",        "",   "",   "",   "",    "",                    "",     "",     "",                    "",         ""         ]  // 未完了行
     ];
 
     const mockSheet = new MockSheet("配布実績2026-10", initialSheetData);
@@ -507,7 +526,7 @@ test('9. P1 #3: isDone=false 取消経路の完全閉鎖（Fail-Closed & Mutatio
 
     // 許容ケース (0, 100, 10000, "100")
     // rowId 5 を追加して検証
-    mockSheet.data.push(["5", "桑名市", "町丁5", "", 0, "", "", "", "", "", "", "", "", "", "", "", ""]);
+    mockSheet.data.push(["5", "テスト市", "町丁5", "", 0, "", "", "", "", "", "", "", "", "", "", "", ""]);
     const resCount0 = service.updateRecordWithGPSPhoto({
       rowId: 5,
       isDone: true,
@@ -523,7 +542,7 @@ test('9. P1 #3: isDone=false 取消経路の完全閉鎖（Fail-Closed & Mutatio
     assert.equal(resCount0.count, 0);
     assert.equal(mockSheet.data[4][4], 0, 'E列に 0 が記録されること');
 
-    mockSheet.data.push(["6", "桑名市", "町丁6", "", 0, "", "", "", "", "", "", "", "", "", "", "", ""]);
+    mockSheet.data.push(["6", "テスト市", "町丁6", "", 0, "", "", "", "", "", "", "", "", "", "", "", ""]);
     const resCount10000 = service.updateRecordWithGPSPhoto({
       rowId: 6,
       isDone: true,
@@ -539,7 +558,7 @@ test('9. P1 #3: isDone=false 取消経路の完全閉鎖（Fail-Closed & Mutatio
     assert.equal(resCount10000.count, 10000);
     assert.equal(mockSheet.data[5][4], 10000, 'E列に 10000 が記録されること');
 
-    mockSheet.data.push(["7", "桑名市", "町丁7", "", 0, "", "", "", "", "", "", "", "", "", "", "", ""]);
+    mockSheet.data.push(["7", "テスト市", "町丁7", "", 0, "", "", "", "", "", "", "", "", "", "", "", ""]);
     const resCountStr = service.updateRecordWithGPSPhoto({
       rowId: 7,
       isDone: true,
@@ -558,13 +577,13 @@ test('9. P1 #3: isDone=false 取消経路の完全閉鎖（Fail-Closed & Mutatio
     // --- 必須確認 9: GPS 空間境界検証 (日本国内測地系 20.0-46.0 / 122.0-154.0) ---
     // 正常 OK ケース
     const validGpsCases = [
-      { lat: 35.0, lng: 136.6, desc: "桑名市中心" },
+      { lat: 35.0, lng: 136.6, desc: "テスト市中心" },
       { lat: 20.0, lng: 122.0, desc: "南西端境界" },
       { lat: 46.0, lng: 154.0, desc: "北東端境界" }
     ];
     let nextRow = 8;
     for (const g of validGpsCases) {
-      mockSheet.data.push([String(nextRow), "桑名市", `町丁${nextRow}`, "", 0, "", "", "", "", "", "", "", "", "", "", "", ""]);
+      mockSheet.data.push([String(nextRow), "テスト市", `町丁${nextRow}`, "", 0, "", "", "", "", "", "", "", "", "", "", "", ""]);
       const resG = service.updateRecordWithGPSPhoto({
         rowId: nextRow,
         isDone: true,
@@ -597,7 +616,7 @@ test('9. P1 #3: isDone=false 取消経路の完全閉鎖（Fail-Closed & Mutatio
       { lat: NaN, lng: Infinity, desc: "NaN/Infinity" }
     ];
     for (const g of invalidGpsCases) {
-      mockSheet.data.push([String(nextRow), "桑名市", `町丁${nextRow}`, "", 0, "", "", "", "", "", "", "", "", "", "", "", ""]);
+      mockSheet.data.push([String(nextRow), "テスト市", `町丁${nextRow}`, "", 0, "", "", "", "", "", "", "", "", "", "", "", ""]);
       const resG = service.updateRecordWithGPSPhoto({
         rowId: nextRow,
         isDone: true,
@@ -765,17 +784,17 @@ test('10. P1: PinStatus remove Single-Fire Verification (Case 1〜11 & キャン
   // Case 1: 正常即時成功 → remove API 論理発火 = 1
   {
     const h = createTestHarness();
-    const item = { id: 1, rowId: 101, areaName: "桑名市中央" };
+    const item = { id: 1, rowId: 101, areaName: "テスト市中央" };
     const res = { success: true, accepted: true };
-    await h.simulateDbPostAcceptance(item, res, "桑名市中央");
+    await h.simulateDbPostAcceptance(item, res, "テスト市中央");
     assert.equal(h.getRemoveCount(), 1, 'Case 1: 正常即時成功で remove 発火が厳格に 1 回であること');
   }
 
   // Case 2: triggerUISyncRefresh を成功後に複数回実行 → additional remove = 0
   {
     const h = createTestHarness();
-    const item = { id: 1, rowId: 101, areaName: "桑名市中央" };
-    await h.simulateDbPostAcceptance(item, { success: true, accepted: true }, "桑名市中央");
+    const item = { id: 1, rowId: 101, areaName: "テスト市中央" };
+    await h.simulateDbPostAcceptance(item, { success: true, accepted: true }, "テスト市中央");
     assert.equal(h.getRemoveCount(), 1);
 
     const pt = { rowId: 101, isDone: true };
@@ -788,8 +807,8 @@ test('10. P1: PinStatus remove Single-Fire Verification (Case 1〜11 & キャン
   // Case 3: submitMissionComplete が成功を検知 → additional remove = 0
   {
     const h = createTestHarness();
-    const item = { id: 1, rowId: 101, areaName: "桑名市中央" };
-    await h.simulateDbPostAcceptance(item, { success: true, accepted: true }, "桑名市中央");
+    const item = { id: 1, rowId: 101, areaName: "テスト市中央" };
+    await h.simulateDbPostAcceptance(item, { success: true, accepted: true }, "テスト市中央");
     assert.equal(h.getRemoveCount(), 1);
 
     const pt = { rowId: 101, isDone: true };
@@ -801,62 +820,62 @@ test('10. P1: PinStatus remove Single-Fire Verification (Case 1〜11 & キャン
   // Case 4: areaName条件に依存せず、Backend受諾時に db.js 正規 remove は発火 = 1
   {
     const h = createTestHarness();
-    const item = { id: 1, rowId: 101, areaName: "桑名市中央" };
-    // 表示中エリアが別エリア（"桑名市東部"）
-    await h.simulateDbPostAcceptance(item, { success: true, accepted: true }, "桑名市東部");
+    const item = { id: 1, rowId: 101, areaName: "テスト市中央" };
+    // 表示中エリアが別エリア（"テスト市東部"）
+    await h.simulateDbPostAcceptance(item, { success: true, accepted: true }, "テスト市東部");
     assert.equal(h.getRemoveCount(), 1, 'Case 4: areaName条件に依存せず正規発火点から remove が 1 回発火すること');
   }
 
   // Case 5: offline Queue 復旧後の成功 → remove = 1
   {
     const h = createTestHarness();
-    const offlineItem = { id: 2, rowId: 102, areaName: "桑名市中央", syncStatus: "PENDING" };
-    await h.simulateDbPostAcceptance(offlineItem, { success: true, accepted: true }, "桑名市中央");
+    const offlineItem = { id: 2, rowId: 102, areaName: "テスト市中央", syncStatus: "PENDING" };
+    await h.simulateDbPostAcceptance(offlineItem, { success: true, accepted: true }, "テスト市中央");
     assert.equal(h.getRemoveCount(), 1, 'Case 5: オフライン復旧後の送信成功で remove が 1 回発火すること');
   }
 
   // Case 6: Backend duplicate:true → accepted success として Queue 終端 → remove = 1
   {
     const h = createTestHarness();
-    const item = { id: 3, rowId: 103, areaName: "桑名市中央" };
+    const item = { id: 3, rowId: 103, areaName: "テスト市中央" };
     const res = { success: true, accepted: true, duplicate: true };
-    await h.simulateDbPostAcceptance(item, res, "桑名市中央");
+    await h.simulateDbPostAcceptance(item, res, "テスト市中央");
     assert.equal(h.getRemoveCount(), 1, 'Case 6: duplicate:true 受諾時に remove が 1 回発火すること');
   }
 
   // Case 7: alreadyCompleted:true → accepted success として Queue 終端 → remove = 1
   {
     const h = createTestHarness();
-    const item = { id: 4, rowId: 104, areaName: "桑名市中央" };
+    const item = { id: 4, rowId: 104, areaName: "テスト市中央" };
     const res = { success: true, accepted: true, alreadyCompleted: true };
-    await h.simulateDbPostAcceptance(item, res, "桑名市中央");
+    await h.simulateDbPostAcceptance(item, res, "テスト市中央");
     assert.equal(h.getRemoveCount(), 1, 'Case 7: alreadyCompleted:true 受諾時に remove が 1 回発火すること');
   }
 
   // Case 8: STALE_MONTH accepted:false → remove = 0
   {
     const h = createTestHarness();
-    const item = { id: 5, rowId: 105, areaName: "桑名市中央" };
+    const item = { id: 5, rowId: 105, areaName: "テスト市中央" };
     const res = { success: true, accepted: false, code: "STALE_MONTH" };
-    await h.simulateDbPostAcceptance(item, res, "桑名市中央");
+    await h.simulateDbPostAcceptance(item, res, "テスト市中央");
     assert.equal(h.getRemoveCount(), 0, 'Case 8: STALE_MONTH 非受諾終端では remove が 0 であること');
   }
 
   // Case 9: Backend failure / RETRY → remove = 0
   {
     const h = createTestHarness();
-    const item = { id: 6, rowId: 106, areaName: "桑名市中央" };
+    const item = { id: 6, rowId: 106, areaName: "テスト市中央" };
     const res = { success: false, message: "Server temporary error" };
-    await h.simulateDbPostAcceptance(item, res, "桑名市中央");
+    await h.simulateDbPostAcceptance(item, res, "テスト市中央");
     assert.equal(h.getRemoveCount(), 0, 'Case 9: Backend failure では remove が 0 であること');
   }
 
   // Case 10: FAILED_PERMANENT → remove = 0
   {
     const h = createTestHarness();
-    const item = { id: 7, rowId: 107, areaName: "桑名市中央" };
+    const item = { id: 7, rowId: 107, areaName: "テスト市中央" };
     // 永続エラー時 (res なし / catch 節で scheduleRetry され remove は呼ばれない)
-    await h.simulateDbPostAcceptance(item, null, "桑名市中央");
+    await h.simulateDbPostAcceptance(item, null, "テスト市中央");
     assert.equal(h.getRemoveCount(), 0, 'Case 10: FAILED_PERMANENT では remove が 0 であること');
   }
 

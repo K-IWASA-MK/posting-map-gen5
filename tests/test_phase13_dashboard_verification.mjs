@@ -154,22 +154,41 @@ test('6. Phase 11 同期: completedAt 必須完了判定、月内ロック、未
 // ----------------------------------------------------------------------------
 // 7. Universal 原則 & GAP-13-01 是正確認
 // ----------------------------------------------------------------------------
-test('7. Universal 原則 & GAP-13-01 是正: 地区IDハードコードがなく、初期HTMLに104が存在しないこと', () => {
-  // active/manager 配下に地区IDハードコードがないこと
-  assert.ok(!managerJs.includes('KUWANA-'), 'manager.js に地区コードなし');
-  assert.ok(!managerHtml.includes('KUWANA-'), 'index.html に地区コードなし');
+test('7. Universal 原則 & GAP-13-01 是正: 地区固有値ハードコードがなく、area-selector-count初期値が -- であること', () => {
+  // data/** SSOT から動的取得 (Universal Invariant)
+  const configContent = fs.readFileSync(path.join(rootDir, 'data/config.js'), 'utf8');
+  const districtIdMatch = configContent.match(/districtId:\s*["']([^"']+)["']/);
+  const districtId = districtIdMatch ? districtIdMatch[1].trim() : null;
 
-  // GAP-13-01 是正: 初期HTMLの area-selector-count が -- であること
-  assert.ok(
-    managerHtml.includes('<span id="area-selector-count" class="text-[10px] font-mono font-bold bg-brand/20 text-brand px-1.5 py-0.5 rounded-full">--</span>'),
-    '初期HTMLの件数表示が -- で初期化されていること'
-  );
-  assert.ok(!managerHtml.includes('>104</span>'), '初期HTMLに 104 が存在しないこと');
+  const electionContent = fs.readFileSync(path.join(rootDir, 'data/election_history.json'), 'utf8');
+  const electionData = JSON.parse(electionContent);
+  const districtName = electionData.districtName ? electionData.districtName.trim() : null;
 
-  // address_master.csv と municipality_master.csv の動的整合性検証 (Universal Invariant)
   const muniCsvPath = path.join(rootDir, 'data/municipality_master.csv');
   const muniCsv = fs.readFileSync(muniCsvPath, 'utf8');
   const muniLines = muniCsv.trim().split('\n').filter(Boolean).slice(1);
+  const muniNames = muniLines.map(l => l.split(',')[0].trim()).filter(Boolean);
+
+  // active/manager 配下に地区固有値のハードコードがないこと
+  const managerFiles = [managerJs, managerHtml];
+  for (const content of managerFiles) {
+    if (districtId) {
+      assert.ok(!content.includes(districtId), `地区ID (${districtId}) が manager にハードコードされていないこと`);
+    }
+    if (districtName) {
+      assert.ok(!content.includes(districtName), `地区名 (${districtName}) が manager にハードコードされていないこと`);
+    }
+    for (const city of muniNames) {
+      assert.ok(!content.includes(city), `自治体名 (${city}) が manager にハードコードされていないこと`);
+    }
+  }
+
+  // GAP-13-01 是正: 初期HTMLの area-selector-count 要素の初期表示が -- であること
+  const areaCountMatch = managerHtml.match(/<span[^>]*id=["']area-selector-count["'][^>]*>([\s\S]*?)<\/span>/i);
+  assert.ok(areaCountMatch, 'area-selector-count 要素が初期HTMLに存在すること');
+  assert.equal(areaCountMatch[1].trim(), '--', 'area-selector-count の初期表示テキストが -- であること');
+
+  // address_master.csv と municipality_master.csv の動的整合性検証 (Universal Invariant)
   const expectedTotalTowns = muniLines.reduce((sum, line) => {
     const parts = line.split(',');
     return sum + (parseInt(parts[2], 10) || 0);
