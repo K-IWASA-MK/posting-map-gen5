@@ -1,13 +1,12 @@
 {
-  "mission": "Universal District Provisioning Skill Formalization & Topological Hardening",
+  "mission": "MIE-03 Master Triad Assembly & Atomic Data Cutover",
   "files": [
     ".agents/current-scope.json",
-    "scripts/build-district-master.py",
-    "tests/test_district_phase2_universal.mjs",
-    "docs/architecture/DISTRICT_DATA_ACQUISITION_RULE.md",
-    ".agents/skills/address-master-generation/SKILL.md",
-    ".agents/skills/district-data-provisioning/SKILL.md",
-    ".agents/os-registry.json",
-    ".agents/agents/deployer/agent.md"
+    "data/address_master.csv",
+    "data/boundaries.geojson",
+    "data/municipality_master.csv",
+    "data/election_history.json",
+    "tests/test_phase11_activity_state_machine.mjs",
+    "tests/test_phase13_dashboard_verification.mjs"
   ]
 }
